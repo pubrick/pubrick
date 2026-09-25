@@ -249,10 +249,48 @@ export class MediaRepository {
       .limit(1);
     if (attached.length)
       throw conflict("media_in_use", "Remove this media from its post before deleting it");
-    const rows = await db
-      .delete(schema.mediaAssets)
-      .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
-      .returning({ id: schema.mediaAssets.id });
+    const [inline, feed] = await Promise.all([
+      db
+        .select({ id: schema.contentImageSlots.id })
+        .from(schema.contentImageSlots)
+        .where(
+          and(eq(schema.contentImageSlots.orgId, orgId), eq(schema.contentImageSlots.mediaId, id)),
+        )
+        .limit(1),
+      db
+        .select({ id: schema.feedEntryImages.id })
+        .from(schema.feedEntryImages)
+        .where(and(eq(schema.feedEntryImages.orgId, orgId), eq(schema.feedEntryImages.mediaId, id)))
+        .limit(1),
+    ]);
+    if (inline.length || feed.length) {
+      throw conflict(
+        "media_in_use",
+        "Remove this image from every post and feed before deleting it",
+      );
+    }
+    let rows: { id: string }[];
+    try {
+      rows = await db
+        .delete(schema.mediaAssets)
+        .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
+        .returning({ id: schema.mediaAssets.id });
+    } catch (error) {
+      // A concurrent attachment may land after the prechecks; the foreign key
+      // is the final authority and must remain an actionable 409.
+      type PgLike = { code?: unknown; cause?: unknown };
+      if (
+        [error, (error as PgLike | undefined)?.cause].some(
+          (candidate) => (candidate as PgLike | undefined)?.code === "23503",
+        )
+      ) {
+        throw conflict(
+          "media_in_use",
+          "Remove this media from its post or feed before deleting it",
+        );
+      }
+      throw error;
+    }
     if (!rows.length) throw notFound("media_not_found", "Image not found");
     await unlink(mediaPath(id, asset.kind)).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") {
@@ -278,6 +316,9 @@ export class MediaRepository {
         .limit(1);
       const item = items[0];
       if (!item) throw notFound("content_not_found", "Post not found");
+      if (item.status === "archived") {
+        throw conflict("content_archived", "Restore this archived post before changing its cover");
+      }
       if (!["draft", "rejected", "failed"].includes(item.status)) {
         throw conflict(
           "media_cover_pinned",
@@ -359,6 +400,9 @@ export class MediaRepository {
         .for("update")
         .limit(1);
       if (!item) throw notFound("content_not_found", "Post not found");
+      if (item.status === "archived") {
+        throw conflict("content_archived", "Restore this archived post before changing its video");
+      }
       if (!["draft", "rejected", "failed"].includes(item.status)) {
         throw conflict(
           "media_video_pinned",

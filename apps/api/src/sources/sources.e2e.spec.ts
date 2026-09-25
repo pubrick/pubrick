@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { encryptJson, privateTelegramSourceCreateSchema } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
@@ -16,7 +18,10 @@ describe.skipIf(!url)("watched sources e2e", () => {
   let app: INestApplication;
   const analysisRun = vi.fn();
 
-  beforeEach(() => vi.mocked(resolveJoinedPrivateChannel).mockReset());
+  beforeEach(() => {
+    vi.mocked(resolveJoinedPrivateChannel).mockReset();
+    analysisRun.mockReset();
+  });
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url;
@@ -56,6 +61,64 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id };
   }
+
+  it("keeps automatic collection off by default and scopes opt-in to an authorized brand", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Collection" }).expect(201);
+    const route = `/api/sources/comment-collection?brandId=${brand.body.id}`;
+    expect((await agent.get(route).expect(200)).body).toEqual({ enabled: false, updatedAt: null });
+    await agent.put(route).send({ enabled: true, unexpected: true }).expect(400);
+    expect((await agent.put(route).send({ enabled: true }).expect(200)).body.enabled).toBe(true);
+    const db = (await import("../db")).db;
+    const [first] = await db
+      .select({ revision: schema.newsCommentCollectionConfigs.revision })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    expect(first?.revision).toBe(1);
+    const scannedAt = new Date("2026-09-25T01:00:00.000Z");
+    await db
+      .update(schema.newsCommentCollectionConfigs)
+      .set({ lastScannedAt: scannedAt })
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    await agent.put(route).send({ enabled: false }).expect(200);
+    await agent.put(route).send({ enabled: true }).expect(200);
+    const [last] = await db
+      .select({
+        revision: schema.newsCommentCollectionConfigs.revision,
+        lastScannedAt: schema.newsCommentCollectionConfigs.lastScannedAt,
+      })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    expect(last?.revision).toBe(3);
+    expect(last?.lastScannedAt).toEqual(scannedAt);
+    const other = await orgAgent();
+    await other.agent.get(route).expect(404);
+    await other.agent.put(route).send({ enabled: true }).expect(404);
+    const unconfigured = await agent
+      .post("/api/brands")
+      .send({ name: "Another collection" })
+      .expect(201);
+    await expect(
+      db
+        .insert(schema.newsCommentCollectionConfigs)
+        .values({ orgId: other.orgId, brandId: unconfigured.body.id, enabled: true }),
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+    const [membership] = await db
+      .select({ id: schema.member.id })
+      .from(schema.member)
+      .where(eq(schema.member.organizationId, orgId));
+    if (!membership) throw new Error("member fixture");
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.organizationId, orgId));
+    await agent.get(route).expect(404);
+    await db
+      .insert(schema.brandAccess)
+      .values({ orgId, brandId: brand.body.id, memberId: membership.id });
+    expect((await agent.get(route).expect(200)).body.enabled).toBe(true);
+    expect((await agent.put(route).send({ enabled: false }).expect(200)).body.enabled).toBe(false);
+  });
 
   it("adds only joined private broadcasts, rate limits atomically, and returns no invite or peer", async () => {
     const { agent, orgId } = await orgAgent();
@@ -328,6 +391,26 @@ describe.skipIf(!url)("watched sources e2e", () => {
     expect((await owner.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
       connected: true,
     });
+    const member = request.agent(app.getHttpServer());
+    const memberEmail = `connection-${randomUUID()}@example.com`;
+    await member
+      .post("/api/auth/sign-up/email")
+      .send({ email: memberEmail, password: "password1234", name: "Member" })
+      .expect(200);
+    const memberSession = await member.get("/api/auth/get-session").expect(200);
+    await db.insert(schema.member).values({
+      id: randomUUID(),
+      organizationId: ownerOrgId,
+      userId: memberSession.body.user.id,
+      role: "member",
+    });
+    await member
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: ownerOrgId })
+      .expect(200);
+    expect((await member.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
+      connected: true,
+    });
     expect((await other.get("/api/sources/telegram-connection").expect(200)).body).toEqual({
       connected: false,
     });
@@ -530,6 +613,155 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/items/${pending.id}/score?brandId=${brand.body.id}`).expect(201);
   });
 
+  it("reranks scored news in bounded pages from local feedback without model usage", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Rerank" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other brand" }).expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({ brandId: brand.body.id, name: "Rerank feed", url: "https://example.com/rerank.xml" })
+      .expect(201);
+    const { db } = await import("../db");
+    const now = Date.now();
+    const score = {
+      relevanceStatus: "scored" as const,
+      relevanceScore: 0.7,
+      relevanceReason: "Original model verdict",
+      relevanceUrgency: "timely" as const,
+      relevanceScoredAt: new Date(now - 60_000),
+      relevanceAttempts: 2,
+    };
+    const rows = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Battery recycling rules for European manufacturers",
+          summary: "Factories collect batteries under new recycling rules.",
+          url: "https://example.com/rerank-signal",
+          editorSignal: "relevant" as const,
+          relevanceFeedbackDelta: 0.2,
+          createdAt: new Date(now - 1_000),
+        },
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "European manufacturers face battery recycling rules",
+          summary: "Factories collect batteries under new recycling rules.",
+          url: "https://example.com/rerank-nearby",
+          createdAt: new Date(now - 2_000),
+        },
+        ...Array.from({ length: 51 }, (_, index) => ({
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: `Coffee price report ${index}`,
+          summary: "A separate story about cafe equipment.",
+          url: `https://example.com/rerank-unrelated-${index}`,
+          createdAt: new Date(now - 3_000 - index * 1_000),
+        })),
+      ])
+      .returning({ id: schema.newsItems.id, title: schema.newsItems.title });
+    const signal = rows[0];
+    const nearby = rows[1];
+    if (!signal || !nearby) throw new Error("Rerank seed failed");
+    const [old, pending] = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          ...score,
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Old scored article",
+          url: "https://example.com/rerank-old",
+          relevanceFeedbackDelta: -0.2,
+          createdAt: new Date(now - 31 * 24 * 60 * 60_000),
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "Pending article",
+          url: "https://example.com/rerank-pending",
+          relevanceFeedbackDelta: 0.2,
+        },
+      ])
+      .returning({ id: schema.newsItems.id });
+    if (!old || !pending) throw new Error("Rerank exclusion seed failed");
+    const route = `/api/sources/items/rerank?brandId=${brand.body.id}`;
+    await owner.post(route).send({ days: 31 }).expect(400);
+    await owner.post(route).send({ days: 30, extra: true }).expect(400);
+    await owner
+      .post(route)
+      .send({ cursor: { createdAt: "invalid", id: signal.id } })
+      .expect(400);
+    await other.post(route).send({}).expect(404);
+    await owner
+      .post(`/api/sources/items/rerank?brandId=${otherBrand.body.id}`)
+      .send({})
+      .expect(201);
+
+    const usageBefore = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId));
+    const first = await owner.post(route).send({ days: 30 }).expect(201);
+    expect(first.body).toMatchObject({ processed: 50, changed: 2 });
+    expect(first.body.nextCursor).toEqual({
+      createdAt: expect.any(String),
+      id: expect.any(String),
+    });
+    const second = await owner
+      .post(route)
+      .send({ days: 30, cursor: first.body.nextCursor })
+      .expect(201);
+    expect(second.body).toEqual({ processed: 3, changed: 0, nextCursor: null });
+    const repeat = await owner.post(route).send({ days: 30 }).expect(201);
+    expect(repeat.body).toMatchObject({ processed: 50, changed: 0 });
+
+    const saved = await db
+      .select({
+        id: schema.newsItems.id,
+        feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
+        relevanceScore: schema.newsItems.relevanceScore,
+        relevanceReason: schema.newsItems.relevanceReason,
+        relevanceAttempts: schema.newsItems.relevanceAttempts,
+        editorSignal: schema.newsItems.editorSignal,
+      })
+      .from(schema.newsItems)
+      .where(and(eq(schema.newsItems.orgId, orgId), eq(schema.newsItems.brandId, brand.body.id)));
+    expect(saved.find((item) => item.id === signal.id)).toMatchObject({
+      feedbackDelta: 0,
+      editorSignal: "relevant",
+    });
+    expect(saved.find((item) => item.id === nearby.id)).toMatchObject({
+      feedbackDelta: expect.any(Number),
+      relevanceScore: 0.7,
+      relevanceReason: "Original model verdict",
+      relevanceAttempts: 2,
+    });
+    expect(saved.find((item) => item.id === nearby.id)?.feedbackDelta).toBeGreaterThan(0);
+    expect(
+      saved.filter((item) => rows.some((row) => row.id === item.id) && item.feedbackDelta !== 0),
+    ).toHaveLength(1);
+    expect(saved.find((item) => item.id === old.id)?.feedbackDelta).toBe(-0.2);
+    expect(saved.find((item) => item.id === pending.id)?.feedbackDelta).toBe(0.2);
+    const usageAfter = await db
+      .select({ id: schema.usageLedger.id })
+      .from(schema.usageLedger)
+      .where(eq(schema.usageLedger.orgId, orgId));
+    expect(usageAfter).toEqual(usageBefore);
+    expect(analysisRun).not.toHaveBeenCalled();
+  });
+
   it("analyzes an organization-scoped saved sample, records spend, and marks later samples stale", async () => {
     const { agent, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();
@@ -586,16 +818,9 @@ describe.skipIf(!url)("watched sources e2e", () => {
       })
       .expect(200);
     expect((await agent.get(route).expect(200)).body).toEqual({ status: "not_analyzed" });
-    analysisRun.mockResolvedValueOnce({
-      ok: true,
-      result: {
-        summary: "Readers want clearer prices for small teams.",
-        sentiment: { positive: 0, neutral: 1, negative: 0 },
-        themes: [{ label: "Pricing", mentions: 1 }],
-        feedback: ["Clarify the small-team pricing."],
-      },
-      usage: [
-        {
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        await args.onUsage({
           provider: "google",
           modelId: "gemini-test",
           attempt: 1,
@@ -608,9 +833,19 @@ describe.skipIf(!url)("watched sources e2e", () => {
           responseMs: 20,
           status: "ok",
           outcome: "completed",
-        },
-      ],
-    });
+        });
+        return {
+          ok: true,
+          result: {
+            summary: "Readers want clearer prices for small teams.",
+            sentiment: { positive: 0, neutral: 1, negative: 0 },
+            themes: [{ label: "Pricing", mentions: 1 }],
+            feedback: ["Clarify the small-team pricing."],
+          },
+          usage: [],
+        };
+      },
+    );
     const analyzed = (await agent.post(route).expect(201)).body;
     expect(analyzed).toMatchObject({
       status: "ready",
@@ -639,5 +874,260 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
       .where(eq(schema.newsItems.id, item.id));
     expect((await agent.get(route).expect(200)).body).toEqual({ status: "stale" });
+  });
+
+  it("admits one concurrent analysis per sample and counts source and publication requests together", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Metered brand" }).expect(201);
+    const source = await agent
+      .post("/api/sources")
+      .send({
+        brandId: brand.body.id,
+        name: "Channel",
+        kind: "telegram",
+        url: "https://t.me/metered",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const [item] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.body.id,
+        title: "Post",
+        url: "https://t.me/metered/7",
+        commentsStatus: "available",
+        commentsCheckedAt: checkedAt,
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("story fixture missing");
+    await db.insert(schema.newsComments).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      telegramMessageId: 10,
+      body: "What is the price?",
+      publishedAt: checkedAt,
+    });
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-never-used" })
+      .expect(200);
+    const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    analysisRun.mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return {
+        ok: true,
+        result: {
+          summary: "Pricing question.",
+          sentiment: { positive: 0, neutral: 1, negative: 0 },
+          themes: [{ label: "Price", mentions: 1 }],
+          feedback: [],
+        },
+        usage: [],
+      };
+    });
+    const first = agent.post(route).then((response) => response);
+    await entered;
+    expect((await agent.post(route).expect(201)).body).toEqual({ status: "in_progress" });
+    expect(analysisRun).toHaveBeenCalledTimes(1);
+    release();
+    expect((await first).body.status).toBe("ready");
+
+    await db
+      .update(schema.newsItems)
+      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .where(eq(schema.newsItems.id, item.id));
+    const { admitAnalysis, recordAnalysisUsage } = await import("../analysis-admission");
+    const extra = await Promise.all(
+      Array.from({ length: 9 }, (_, index) =>
+        admitAnalysis({
+          orgId,
+          targetKind: index % 2 === 0 ? "publication_comment" : "source_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: checkedAt,
+        }),
+      ),
+    );
+    expect(extra.every((admission) => admission.status === "admitted")).toBe(true);
+    expect((await agent.post(route).expect(201)).body).toEqual({ status: "limit_reached" });
+    expect(analysisRun).toHaveBeenCalledTimes(1);
+
+    const lossMarker = extra[0];
+    if (lossMarker?.status !== "admitted") throw new Error("expected admission fixture");
+    await expect(
+      recordAnalysisUsage({
+        admissionId: lossMarker.id,
+        orgId,
+        targetKind: "publication_comment",
+        record: {
+          provider: "invalid-provider" as UsageRecord["provider"],
+          modelId: "gemini-test",
+          attempt: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0.00001,
+          costSource: "price_table",
+          responseMs: 20,
+          status: "ok",
+          outcome: "completed",
+        },
+      }),
+    ).rejects.toThrow();
+    const [marked] = await db
+      .select({ unrecordedCalls: schema.analysisAdmissions.unrecordedCalls })
+      .from(schema.analysisAdmissions)
+      .where(eq(schema.analysisAdmissions.id, lossMarker.id));
+    expect(marked?.unrecordedCalls).toBe(1);
+  });
+
+  it("keeps pre-admission ledger calls inside the rolling allowance during upgrade", async () => {
+    const { orgId } = await orgAgent();
+    const { db } = await import("../db");
+    const { admitAnalysis } = await import("../analysis-admission");
+    await db.insert(schema.usageLedger).values(
+      Array.from({ length: 9 }, () => ({
+        orgId,
+        step: "comment_analysis",
+        provider: "google" as const,
+        modelId: "gemini-test",
+        costSource: "unknown" as const,
+        status: "ok" as const,
+      })),
+    );
+    expect(
+      (
+        await admitAnalysis({
+          orgId,
+          targetKind: "source_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: new Date(),
+        })
+      ).status,
+    ).toBe("admitted");
+    expect(
+      (
+        await admitAnalysis({
+          orgId,
+          targetKind: "publication_comment",
+          targetId: randomUUID(),
+          sampleCheckedAt: new Date(),
+        })
+      ).status,
+    ).toBe("limit_reached");
+  });
+
+  it("does not save a paid analysis after its source comment sample changes", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Moving discussion" }).expect(201);
+    const source = await agent
+      .post("/api/sources")
+      .send({
+        brandId: brand.body.id,
+        name: "Channel",
+        kind: "telegram",
+        url: "https://t.me/moving_discussion",
+      })
+      .expect(201);
+    const { db } = await import("../db");
+    const checkedAt = new Date("2026-09-23T10:00:00Z");
+    const [item] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.body.id,
+        title: "Original post",
+        url: "https://t.me/moving_discussion/7",
+        commentsStatus: "available",
+        commentsCheckedAt: checkedAt,
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("story fixture missing");
+    await db.insert(schema.newsComments).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      telegramMessageId: 10,
+      body: "Old question",
+      publishedAt: checkedAt,
+    });
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-never-used" })
+      .expect(200);
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        started();
+        await gate;
+        await args.onUsage({
+          provider: "google",
+          modelId: "gemini-test",
+          attempt: 1,
+          inputTokens: 20,
+          outputTokens: 10,
+          cachedInputTokens: 0,
+          reasoningTokens: 0,
+          costUsd: 0.00001,
+          costSource: "price_table",
+          responseMs: 20,
+          status: "ok",
+          outcome: "completed",
+        });
+        return {
+          ok: true,
+          result: {
+            summary: "Old question.",
+            sentiment: { positive: 0, neutral: 1, negative: 0 },
+            themes: [{ label: "Old", mentions: 1 }],
+            feedback: [],
+          },
+          usage: [],
+        };
+      },
+    );
+    const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
+    const pending = agent.post(route).then((response) => response);
+    await entered;
+    await db
+      .update(schema.newsItems)
+      .set({ commentsCheckedAt: new Date("2026-09-23T11:00:00Z") })
+      .where(eq(schema.newsItems.id, item.id));
+    release();
+    expect((await pending).body).toEqual({ status: "stale" });
+    const saved = await db
+      .select({ itemId: schema.newsCommentAnalyses.itemId })
+      .from(schema.newsCommentAnalyses)
+      .where(eq(schema.newsCommentAnalyses.itemId, item.id));
+    expect(saved).toHaveLength(0);
+    const ledger = await db
+      .select({ analysisAdmissionId: schema.usageLedger.analysisAdmissionId })
+      .from(schema.usageLedger)
+      .where(
+        and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.step, "comment_analysis")),
+      );
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]?.analysisAdmissionId).toBeTruthy();
   });
 });

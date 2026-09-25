@@ -2,11 +2,18 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
-import { analyticsDtoSchema, publicationMetricsDtoSchema } from "@pubrick/shared";
+import {
+  analyticsDtoSchema,
+  commentAnalysisDtoSchema,
+  publicationCommentsDtoSchema,
+  publicationMetricsDtoSchema,
+} from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -15,6 +22,7 @@ describe.skipIf(!url)("publication analytics e2e", () => {
   let db: typeof import("../db")["db"];
   let vkServer: Server;
   let calls = 0;
+  const analysisRun = vi.fn();
 
   beforeAll(async () => {
     vkServer = createServer(async (req, res) => {
@@ -57,7 +65,10 @@ describe.skipIf(!url)("publication analytics e2e", () => {
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     db = (await import("../db")).db;
     const { AppModule } = await import("../app.module");
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+      .overrideProvider(CommentAnalysisCaller)
+      .useValue({ run: analysisRun })
+      .compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
@@ -86,6 +97,312 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("keeps publication auto-collection off until an authorized brand opts in and increments the fence on every change", async () => {
+    const owner = await orgAgent();
+    const stranger = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Reply consent" }).expect(201);
+    const path = `/api/analytics/brands/${brand.body.id}/comment-collection`;
+    expect((await owner.agent.get(path).expect(200)).body).toEqual({
+      enabled: false,
+      updatedAt: null,
+    });
+    await stranger.agent.get(path).expect(404);
+    await stranger.agent.put(path).send({ enabled: true }).expect(404);
+    await owner.agent.put(path).send({ enabled: "yes" }).expect(400);
+    const enabled = await owner.agent.put(path).send({ enabled: true }).expect(200);
+    expect(enabled.body).toMatchObject({ enabled: true });
+    const disabled = await owner.agent.put(path).send({ enabled: false }).expect(200);
+    expect(disabled.body).toMatchObject({ enabled: false });
+    await owner.agent.put(path).send({ enabled: true }).expect(200);
+    const [row] = await db
+      .select({ revision: schema.publicationCommentCollectionConfigs.revision })
+      .from(schema.publicationCommentCollectionConfigs)
+      .where(eq(schema.publicationCommentCollectionConfigs.brandId, brand.body.id));
+    expect(row?.revision).toBe(3);
+  });
+
+  it("collects only an owned public Telegram publication and recovers an abandoned request", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Discussion" }).expect(201);
+    const unrelatedBrand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Unrelated" })
+      .expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Public Telegram",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        title: "Discussion post",
+        body: "Body",
+        status: "published",
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!item) throw new Error("No item");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.body.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("No adaptation");
+    const [publication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId: owner.orgId,
+        adaptationId: adaptation.id,
+        channelId: channel.body.id,
+        status: "published",
+        externalId: "42",
+        externalUrl: "https://t.me/pubrick_public/42",
+      })
+      .returning({ id: schema.publications.id });
+    if (!publication) throw new Error("No publication");
+    const path = `/api/analytics/brands/${brand.body.id}/publications/${publication.id}/comments`;
+    expect(
+      publicationCommentsDtoSchema.parse((await owner.agent.get(path).expect(200)).body),
+    ).toMatchObject({ status: "not_collected", requestedAt: null, canCollect: true, comments: [] });
+    await other.agent.get(path).expect(404);
+    await other.agent.post(`${path}/refresh`).expect(404);
+    const unrelatedPath = `/api/analytics/brands/${unrelatedBrand.body.id}/publications/${publication.id}/comments`;
+    await owner.agent.get(unrelatedPath).expect(404);
+    await owner.agent.post(`${unrelatedPath}/refresh`).expect(404);
+    expect((await owner.agent.post(`${path}/refresh`).expect(200)).body).toEqual({ queued: true });
+    const pending = publicationCommentsDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(pending).toMatchObject({ status: "pending", canCollect: true, comments: [] });
+    expect(pending.requestedAt).toBeTruthy();
+    expect((await owner.agent.post(`${path}/refresh`).expect(409)).body.code).toBe(
+      "publication_comments_refresh_cooldown",
+    );
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ requestedAt: new Date(Date.now() - 16 * 60 * 1000) })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    const abandoned = publicationCommentsDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(abandoned).toMatchObject({
+      status: "error",
+      errorCode: "telegram_collection_failed",
+      canCollect: true,
+    });
+    const [privateAdaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.body.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!privateAdaptation) throw new Error("No private adaptation");
+    const [privatePublication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId: owner.orgId,
+        adaptationId: privateAdaptation.id,
+        channelId: channel.body.id,
+        status: "published",
+        externalId: "43",
+        externalUrl: "https://t.me/c/123456/43",
+      })
+      .returning({ id: schema.publications.id });
+    if (!privatePublication) throw new Error("No private publication");
+    const privatePath = `/api/analytics/brands/${brand.body.id}/publications/${privatePublication.id}/comments`;
+    expect(
+      publicationCommentsDtoSchema.parse((await owner.agent.get(privatePath).expect(200)).body),
+    ).toMatchObject({ status: "unavailable", canCollect: false, comments: [] });
+    expect((await owner.agent.post(`${privatePath}/refresh`).expect(409)).body.code).toBe(
+      "publication_comments_unavailable",
+    );
+    await db.delete(schema.adaptations).where(eq(schema.adaptations.id, adaptation.id));
+    await owner.agent.get(path).expect(404);
+  });
+
+  it("analyzes only an owned saved reply sample and fences a recollection in flight", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Reader feedback" })
+      .expect(201);
+    const unrelatedBrand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Other brand" })
+      .expect(201);
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Public channel",
+        credentials: { botToken: "123:abc", chatId: "@pubrick" },
+      })
+      .expect(201);
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        title: "Pricing update",
+        body: "Body",
+        status: "published",
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!item) throw new Error("No item");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: item.id,
+        channelId: channel.body.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("No adaptation");
+    const [publication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId: owner.orgId,
+        adaptationId: adaptation.id,
+        channelId: channel.body.id,
+        status: "published",
+        externalId: "84",
+        externalUrl: "https://t.me/pubrick_public/84",
+      })
+      .returning({ id: schema.publications.id });
+    if (!publication) throw new Error("No publication");
+    const path = `/api/analytics/brands/${brand.body.id}/publications/${publication.id}/comment-analysis`;
+    const checkedAt = new Date("2026-09-24T10:00:00Z");
+    await db.insert(schema.publicationCommentSamples).values({
+      orgId: owner.orgId,
+      brandId: brand.body.id,
+      publicationId: publication.id,
+      status: "available",
+      checkedAt,
+    });
+    await db.insert(schema.publicationComments).values({
+      orgId: owner.orgId,
+      brandId: brand.body.id,
+      publicationId: publication.id,
+      telegramMessageId: 85,
+      body: "How does the small team price work?",
+      publishedAt: new Date("2026-09-24T10:01:00Z"),
+    });
+    await owner.agent
+      .get(path)
+      .expect(200)
+      .then(({ body }) => {
+        expect(body).toEqual({ status: "no_key" });
+      });
+    await other.agent.get(path).expect(404);
+    await other.agent.post(path).expect(404);
+    const wrongBrandPath = `/api/analytics/brands/${unrelatedBrand.body.id}/publications/${publication.id}/comment-analysis`;
+    await owner.agent.get(wrongBrandPath).expect(404);
+    await owner.agent.post(wrongBrandPath).expect(404);
+    await owner.agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "publication-test-key-never-used" })
+      .expect(200);
+    expect((await owner.agent.get(path).expect(200)).body).toEqual({ status: "not_analyzed" });
+    const result = {
+      summary: "Readers need a clearer price explanation.",
+      sentiment: { positive: 0, neutral: 1, negative: 0 },
+      themes: [{ label: "Pricing", mentions: 1 }],
+      feedback: ["Explain the small team plan."],
+    };
+    const usage: UsageRecord = {
+      provider: "google",
+      modelId: "gemini-test",
+      attempt: 1,
+      inputTokens: 20,
+      outputTokens: 10,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      costUsd: 0.00001,
+      costSource: "price_table",
+      responseMs: 20,
+      status: "ok",
+      outcome: "completed",
+    };
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        await args.onUsage(usage);
+        return { ok: true, result, usage: [] };
+      },
+    );
+    const ready = commentAnalysisDtoSchema.parse((await owner.agent.post(path).expect(200)).body);
+    expect(ready).toMatchObject({ status: "ready", sampleSize: 1, result });
+    expect(JSON.stringify(ready)).not.toContain("publication-test-key-never-used");
+    expect(analysisRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        comments: ["How does the small team price work?"],
+        title: "Pricing update",
+        credential: expect.objectContaining({ provider: "google" }),
+      }),
+    );
+    const ledger = await db
+      .select({ step: schema.usageLedger.step, keyOwnership: schema.usageLedger.keyOwnership })
+      .from(schema.usageLedger)
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, owner.orgId),
+          eq(schema.usageLedger.step, "publication_comment_analysis"),
+        ),
+      );
+    expect(ledger).toEqual([{ step: "publication_comment_analysis", keyOwnership: "byok" }]);
+    expect((await owner.agent.post(path).expect(200)).body.status).toBe("ready");
+    expect(analysisRun).toHaveBeenCalledTimes(1);
+
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ checkedAt: new Date("2026-09-24T11:00:00Z") })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    expect((await owner.agent.get(path).expect(200)).body).toEqual({ status: "stale" });
+    let releaseCall: () => void = () => {};
+    let callStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      callStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseCall = resolve;
+    });
+    analysisRun.mockImplementationOnce(
+      async (args: { onUsage: (record: UsageRecord) => Promise<void> }) => {
+        callStarted();
+        await release;
+        await args.onUsage(usage);
+        return { ok: true, result, usage: [] };
+      },
+    );
+    const first = owner.agent.post(path).then(({ body, status }) => ({ body, status }));
+    await started;
+    expect((await owner.agent.post(path).expect(200)).body).toEqual({ status: "in_progress" });
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ requestedAt: new Date("2026-09-24T11:05:00Z") })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    releaseCall();
+    expect(await first).toMatchObject({ status: 200, body: { status: "stale" } });
+    expect((await owner.agent.get(path).expect(200)).body).toEqual({ status: "stale" });
+    expect(analysisRun).toHaveBeenCalledTimes(2);
+  });
 
   it("isolates brands and orgs, preserves unknown values, reads VK once and honors cooldown", async () => {
     const owner = await orgAgent();

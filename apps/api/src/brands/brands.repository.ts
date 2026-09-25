@@ -1,14 +1,16 @@
+import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type BrandCreate,
+  type BrandImportApply,
   type BrandUpdate,
   isLiveRunStatus,
   isOutstandingAdaptation,
 } from "@pubrick/shared";
 import { and, eq, inArray, or } from "drizzle-orm";
-import { notFound } from "../api-error";
+import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { mediaPath } from "../media/media.repository";
 import { QueueService } from "../queue/queue.service";
@@ -26,6 +28,25 @@ const PUBLIC_COLUMNS = {
   createdAt: schema.brands.createdAt,
   updatedAt: schema.brands.updatedAt,
 };
+
+type ImportProfile = Pick<
+  typeof schema.brands.$inferSelect,
+  "name" | "description" | "voice" | "audience" | "contentLanguage"
+>;
+
+export function brandImportProfileHash(profile: ImportProfile): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        profile.name,
+        profile.description,
+        profile.voice,
+        profile.audience,
+        profile.contentLanguage,
+      ]),
+    )
+    .digest("hex");
+}
 
 /**
  * `isOutstandingAdaptation` (`@pubrick/shared`) is applied in memory, not as a
@@ -46,8 +67,16 @@ export class BrandsRepository {
   private readonly logger = new Logger(BrandsRepository.name);
   constructor(private readonly queue: QueueService) {}
 
-  list(orgId: string) {
-    return db.select(PUBLIC_COLUMNS).from(schema.brands).where(eq(schema.brands.orgId, orgId));
+  list(orgId: string, visibleBrandIds: string[] | null = null) {
+    return db
+      .select(PUBLIC_COLUMNS)
+      .from(schema.brands)
+      .where(
+        and(
+          eq(schema.brands.orgId, orgId),
+          visibleBrandIds === null ? undefined : inArray(schema.brands.id, visibleBrandIds),
+        ),
+      );
   }
 
   async get(orgId: string, id: string) {
@@ -56,8 +85,9 @@ export class BrandsRepository {
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
       .limit(1);
-    if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
-    return rows[0];
+    const brand = rows[0];
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    return brand;
   }
 
   async create(orgId: string, data: BrandCreate) {
@@ -76,6 +106,49 @@ export class BrandsRepository {
       .returning(PUBLIC_COLUMNS);
     if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
     return rows[0];
+  }
+
+  /** One explicit review action saves the profile and selected ideas together. */
+  async applyImport(orgId: string, id: string, reviewed: BrandImportApply) {
+    return db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          name: schema.brands.name,
+          description: schema.brands.description,
+          voice: schema.brands.voice,
+          audience: schema.brands.audience,
+          contentLanguage: schema.brands.contentLanguage,
+        })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
+        .for("update");
+      if (!current) throw notFound("brand_not_found", "Brand not found");
+      if (brandImportProfileHash(current) !== reviewed.expectedProfileHash) {
+        throw conflict("brand_import_stale", "Brand profile changed; review a new import preview");
+      }
+      const [brand] = await tx
+        .update(schema.brands)
+        .set({
+          name: reviewed.name,
+          description: reviewed.description,
+          voice: reviewed.voice,
+          audience: reviewed.audience,
+          contentLanguage: reviewed.contentLanguage,
+        })
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
+        .returning(PUBLIC_COLUMNS);
+      if (!brand) throw new Error("Brand disappeared during import");
+      for (const title of new Set(reviewed.topics)) {
+        const suggestionKey = createHash("sha256")
+          .update(`brand-profile-import:${title.trim().toLocaleLowerCase("en")}`)
+          .digest("hex");
+        await tx
+          .insert(schema.topics)
+          .values({ orgId, brandId: id, title, suggestionKey, origin: "ai" })
+          .onConflictDoNothing();
+      }
+      return brand;
+    });
   }
 
   /**
@@ -228,6 +301,27 @@ export class BrandsRepository {
         if (!isLiveRunStatus(run.status)) continue;
         await this.queue.cancelGenerate(tx, run.id, orgId);
       }
+
+      // Feed snapshots and inline slots restrict deletion of their media. Hold
+      // every item after the ordered adaptation locks, so a feed publisher's
+      // item FOR SHARE and an editor's item FOR UPDATE cannot add a new slot
+      // after these deletions but before the brand cascade removes the media.
+      await tx
+        .select({ id: schema.contentItems.id })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.brandId, id)))
+        .orderBy(schema.contentItems.id)
+        .for("update");
+      await tx
+        .delete(schema.feedEntryImages)
+        .where(
+          and(eq(schema.feedEntryImages.orgId, orgId), eq(schema.feedEntryImages.brandId, id)),
+        );
+      await tx
+        .delete(schema.contentImageSlots)
+        .where(
+          and(eq(schema.contentImageSlots.orgId, orgId), eq(schema.contentImageSlots.brandId, id)),
+        );
 
       await tx
         .delete(schema.brands)

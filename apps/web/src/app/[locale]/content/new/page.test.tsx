@@ -474,6 +474,77 @@ describe("Generate (Task 10)", () => {
     expect(screen.getByText(en.ContentNew.generateCoverNeedsGoogle)).toBeInTheDocument();
   });
 
+  it("generates up to two article images only after an explicit long-form choice", async () => {
+    const calls: Call[] = [];
+    installHandlers(
+      calls,
+      (path, method) =>
+        method === "POST" && path === "/api/runs" ? { id: "inline-run" } : undefined,
+      googleKey,
+    );
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await pickBrandAndChannel(user);
+    const control = screen.getByRole("checkbox", { name: en.ContentNew.generateInlineImages });
+    expect(control).toBeDisabled();
+    expect(screen.getByText(en.ContentNew.generateInlineImagesUnsupported)).toBeVisible();
+    await user.selectOptions(
+      screen.getByLabelText(en.ContentNew.contentTypeLabel),
+      "expert_article",
+    );
+    expect(control).toBeEnabled();
+    expect(control).toHaveAccessibleDescription(en.ContentNew.generateInlineImagesHint);
+    await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "How to set up a studio");
+    await user.click(control);
+    await user.click(screen.getByRole("button", { name: en.ContentNew.generate }));
+    await waitFor(() =>
+      expect(routerMock.push).toHaveBeenCalledWith("/en/content/runs/inline-run"),
+    );
+    const posted = parsedBody(
+      calls.find((call) => call.path === "/api/runs" && call.method === "POST"),
+    );
+    expect(posted).toEqual({
+      brandId: B1,
+      channelIds: [CH1],
+      brief: "How to set up a studio",
+      contentType: "expert_article",
+      generateInlineImages: true,
+    });
+  });
+
+  it("clears article-image opt-in when switching to a short format", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, googleKey);
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    const type = screen.getByLabelText(en.ContentNew.contentTypeLabel);
+    const control = screen.getByRole("checkbox", { name: en.ContentNew.generateInlineImages });
+    await user.selectOptions(type, "comparison");
+    await user.click(control);
+    expect(control).toBeChecked();
+    await user.selectOptions(type, "social_post");
+    expect(control).not.toBeChecked();
+    expect(control).toBeDisabled();
+  });
+
+  it("requires a Google key for generated article images", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, undefined, [
+      { provider: "openrouter", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+    ]);
+    render(<NewContentPage />);
+    await screen.findByRole("option", { name: "Acme" });
+    await userEvent
+      .setup()
+      .selectOptions(screen.getByLabelText(en.ContentNew.contentTypeLabel), "expert_article");
+    expect(
+      screen.getByRole("checkbox", { name: en.ContentNew.generateInlineImages }),
+    ).toBeDisabled();
+    expect(screen.getByText(en.ContentNew.generateInlineImagesNeedsGoogle)).toBeVisible();
+  });
+
   it.each([
     ["product_update", "Announce our supported update"],
     ["comparison", "Compare the two ways to order supplies"],

@@ -1,7 +1,16 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import type { PromptRevisionCreate, PromptRole } from "@pubrick/shared";
-import { and, asc, desc, eq } from "drizzle-orm";
+import {
+  CONTENT_STATUSES,
+  type ContentStatus,
+  type PromptDecisionHistoryDto,
+  type PromptRevisionCreate,
+  type PromptRevisionUsageDto,
+  type PromptRole,
+  RUN_STATUSES,
+  type RunStatus,
+} from "@pubrick/shared";
+import { and, asc, desc, eq, gte, sql } from "drizzle-orm";
 import { db } from "../db";
 
 const COLUMNS = {
@@ -12,8 +21,165 @@ const COLUMNS = {
   createdAt: schema.promptRevisions.createdAt,
 };
 
+/** Shared by the API and its non-UTC database regression test. */
+export function pinnedRunGroups(
+  database: typeof db,
+  orgId: string,
+  role: PromptRole,
+  revisionId: string,
+  days: 7 | 30 | 90,
+) {
+  return database
+    .select({
+      runStatus: schema.pipelineRuns.status,
+      itemStatus: schema.contentItems.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(schema.pipelineRuns)
+    .leftJoin(
+      schema.contentItems,
+      and(
+        eq(schema.contentItems.id, schema.pipelineRuns.contentItemId),
+        eq(schema.contentItems.orgId, orgId),
+      ),
+    )
+    .where(
+      and(
+        eq(schema.pipelineRuns.orgId, orgId),
+        // Both `created_at` and its DB default are naive timestamps. Keep
+        // the cutoff in the same PostgreSQL session clock, including when
+        // the server is configured outside UTC.
+        sql`${schema.pipelineRuns.createdAt} >= now()::timestamp - (${days} * interval '1 day')`,
+        sql`${schema.pipelineRuns.guidanceSnapshot} -> ${role} ->> 'revisionId' = ${revisionId}`,
+      ),
+    )
+    .groupBy(schema.pipelineRuns.status, schema.contentItems.status);
+}
+
 @Injectable()
 export class PromptsRepository {
+  async decisions(
+    orgId: string,
+    role: PromptRole,
+    revisionId: string,
+    days: 7 | 30 | 90,
+    cursor: string | undefined,
+  ): Promise<PromptDecisionHistoryDto> {
+    const [revision] = await db
+      .select({ id: schema.promptRevisions.id })
+      .from(schema.promptRevisions)
+      .where(
+        and(
+          eq(schema.promptRevisions.orgId, orgId),
+          eq(schema.promptRevisions.role, role),
+          eq(schema.promptRevisions.id, revisionId),
+        ),
+      )
+      .limit(1);
+    if (!revision) throw new NotFoundException("Prompt revision not found");
+
+    const scope = and(
+      eq(schema.promptDecisionRevisions.orgId, orgId),
+      eq(schema.promptDecisionRevisions.role, role),
+      eq(schema.promptDecisionRevisions.revisionId, revisionId),
+      gte(schema.promptDecisionRevisions.decidedAt, sql`now() - (${days} * interval '1 day')`),
+    );
+    const totals = await db
+      .select({ verdict: schema.promptDecisions.verdict, count: sql<number>`count(*)::int` })
+      .from(schema.promptDecisionRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .where(scope)
+      .groupBy(schema.promptDecisions.verdict);
+    const counts = { approved: 0, rejected: 0 };
+    for (const total of totals) counts[total.verdict] = total.count;
+
+    let seek:
+      | { decidedAt: Date; contentItemId: string; ordinal: number; decisionId: string }
+      | undefined;
+    if (cursor) {
+      const [row] = await db
+        .select({
+          decidedAt: schema.promptDecisionRevisions.decidedAt,
+          decisionId: schema.promptDecisionRevisions.decisionId,
+          contentItemId: schema.promptDecisions.contentItemId,
+          ordinal: schema.promptDecisions.ordinal,
+        })
+        .from(schema.promptDecisionRevisions)
+        .innerJoin(
+          schema.promptDecisions,
+          and(
+            eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+            eq(schema.promptDecisions.orgId, orgId),
+          ),
+        )
+        .where(and(scope, eq(schema.promptDecisionRevisions.decisionId, cursor)))
+        .limit(1);
+      if (!row) throw new NotFoundException("Decision cursor not found");
+      seek = row;
+    }
+    const page = await db
+      .select({
+        id: schema.promptDecisions.id,
+        contentItemId: schema.promptDecisions.contentItemId,
+        liveItemId: schema.contentItems.id,
+        verdict: schema.promptDecisions.verdict,
+        decidedAt: schema.promptDecisionRevisions.decidedAt,
+      })
+      .from(schema.promptDecisionRevisions)
+      .innerJoin(
+        schema.promptDecisions,
+        and(
+          eq(schema.promptDecisions.id, schema.promptDecisionRevisions.decisionId),
+          eq(schema.promptDecisions.orgId, orgId),
+        ),
+      )
+      .leftJoin(
+        schema.contentItems,
+        and(
+          eq(schema.contentItems.id, schema.promptDecisions.contentItemId),
+          eq(schema.contentItems.orgId, orgId),
+        ),
+      )
+      .where(
+        and(
+          scope,
+          seek
+            ? sql`(${schema.promptDecisionRevisions.decidedAt}, ${schema.promptDecisions.contentItemId}, ${schema.promptDecisions.ordinal}, ${schema.promptDecisionRevisions.decisionId}) < (${seek.decidedAt}, ${seek.contentItemId}, ${seek.ordinal}, ${seek.decisionId})`
+            : undefined,
+        ),
+      )
+      .orderBy(
+        desc(schema.promptDecisionRevisions.decidedAt),
+        // One clock tick can hold several opposite acts on the same draft.
+        // Its locked ordinal, not the random UUID, gives them causal order.
+        desc(schema.promptDecisions.contentItemId),
+        desc(schema.promptDecisions.ordinal),
+        desc(schema.promptDecisionRevisions.decisionId),
+      )
+      .limit(21);
+    const visible = page.slice(0, 20);
+    return {
+      revisionId,
+      role,
+      days,
+      counts,
+      rows: visible.map((row) => ({
+        id: row.id,
+        contentItemId: row.contentItemId,
+        itemExists: row.liveItemId !== null,
+        verdict: row.verdict,
+        decidedAt: row.decidedAt.toISOString(),
+      })),
+      nextCursor: page.length > 20 ? (visible.at(-1)?.id ?? null) : null,
+    };
+  }
+
   /** Only saved guidance appears here; the built-in roles live in packages/ai. */
   list(orgId: string) {
     return db
@@ -30,6 +196,53 @@ export class PromptsRepository {
       .where(and(eq(schema.promptRevisions.orgId, orgId), eq(schema.promptRevisions.role, role)))
       .orderBy(desc(schema.promptRevisions.version))
       .limit(100);
+  }
+
+  async usage(
+    orgId: string,
+    role: PromptRole,
+    revisionId: string,
+    days: 7 | 30 | 90,
+  ): Promise<PromptRevisionUsageDto> {
+    const revision = await db
+      .select({ id: schema.promptRevisions.id })
+      .from(schema.promptRevisions)
+      .where(
+        and(
+          eq(schema.promptRevisions.orgId, orgId),
+          eq(schema.promptRevisions.role, role),
+          eq(schema.promptRevisions.id, revisionId),
+        ),
+      )
+      .limit(1);
+    if (!revision[0]) throw new NotFoundException("Prompt revision not found");
+
+    const groups = await pinnedRunGroups(db, orgId, role, revisionId, days);
+
+    const runsByStatus = Object.fromEntries(RUN_STATUSES.map((status) => [status, 0])) as Record<
+      RunStatus,
+      number
+    >;
+    const currentItemStatuses = Object.fromEntries(
+      CONTENT_STATUSES.map((status) => [status, 0]),
+    ) as Record<ContentStatus, number>;
+    let runCount = 0;
+    let withoutCurrentItem = 0;
+    for (const group of groups) {
+      runCount += group.count;
+      runsByStatus[group.runStatus] += group.count;
+      if (group.itemStatus) currentItemStatuses[group.itemStatus] += group.count;
+      else withoutCurrentItem += group.count;
+    }
+    return {
+      revisionId,
+      role,
+      days,
+      runCount,
+      runsByStatus,
+      currentItemStatuses,
+      withoutCurrentItem,
+    };
   }
 
   async append(orgId: string, role: PromptRole, data: PromptRevisionCreate) {

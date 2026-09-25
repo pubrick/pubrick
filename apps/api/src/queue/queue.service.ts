@@ -5,10 +5,21 @@ import {
   type OnModuleInit,
 } from "@nestjs/common";
 import {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   type GenerateJob,
+  MANUAL_AUTOPILOT_DLQ,
+  MANUAL_AUTOPILOT_QUEUE,
+  MANUAL_AUTOPILOT_QUEUE_OPTIONS,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualAutopilotJob,
+  type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -28,6 +39,7 @@ import {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
   telegramCommentsJobOptions,
+  telegramPublicationCommentsJobOptions,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
@@ -99,6 +111,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
     // Names/options come from @pubrick/shared so the worker cannot drift from them.
     await boss.createQueue(PUBLISH_DLQ);
+    await boss.createQueue(CLAIM_REVIEW_DLQ);
+    await boss.createQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+    await boss.updateQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
     await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(RELEVANCE_DLQ);
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
@@ -106,6 +121,11 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
     await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+    await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+    await boss.createQueue(MANUAL_AUTOPILOT_DLQ);
+    await boss.createQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+    await boss.updateQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
     await boss.updateQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
     await boss.updateQueue(TELEGRAM_COMMENTS_QUEUE, { ...TELEGRAM_COMMENTS_OPTIONS });
@@ -138,6 +158,17 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     return id !== null;
   }
 
+  /** Queue and review row commit together; a retry would repeat paid calls. */
+  async enqueueClaimReview(tx: Tx, payload: ClaimReviewJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(CLAIM_REVIEW_QUEUE, payload, {
+      id: payload.reviewId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Claim review is already queued");
+  }
+
   async enqueueRelevance(tx: Tx, payload: RelevanceJob): Promise<boolean> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(RELEVANCE_QUEUE, payload, {
@@ -152,7 +183,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   async enqueueTelegramComments(tx: Tx, payload: TelegramCommentsJob): Promise<boolean> {
     if (!this.boss) throw new Error("Queue is not started");
     const id = await this.boss.send(TELEGRAM_COMMENTS_QUEUE, payload, {
-      ...telegramCommentsJobOptions(payload.itemId, payload.orgId),
+      ...(payload.kind === "publication" || payload.kind === "publication_auto"
+        ? telegramPublicationCommentsJobOptions(payload.publicationId, payload.orgId)
+        : telegramCommentsJobOptions(payload.itemId, payload.orgId)),
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
@@ -166,6 +199,26 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     if (id === null) throw new ConflictException("Topic suggestions are already queued");
+  }
+
+  /** Caller holds the brand row lock and enforces the rolling cooldown. */
+  async enqueueManualTopicPlan(tx: Tx, payload: ManualTopicPlanJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(MANUAL_TOPIC_PLAN_QUEUE, payload, {
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Topic planning is already queued");
+  }
+
+  async enqueueManualAutopilot(tx: Tx, payload: ManualAutopilotJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(MANUAL_AUTOPILOT_QUEUE, payload, {
+      id: payload.attemptId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Manual Autopilot request is already queued");
   }
 
   /**

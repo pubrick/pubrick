@@ -79,6 +79,7 @@ describe("brand calendar", () => {
     });
     await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
     const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
     await waitFor(() =>
       expect(screen.getByRole("checkbox", { name: en.ContentNew.generateCover })).toBeEnabled(),
     );
@@ -95,6 +96,54 @@ describe("brand calendar", () => {
       brief: "Launch story",
       channelIds: [channelId],
       generateCover: true,
+      notes: null,
+    });
+    expect(calendarSlotCreateSchema.parse(sent)).toEqual(sent);
+  });
+
+  it("opts into scheduled article images with an explicit format and Google key", async () => {
+    const brandId = "5a21d62a-94ca-4dcb-85c5-865120886415";
+    const channelId = "a887ef22-a936-41d6-a404-4ef90d5f2358";
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("/api/ai-credentials")) return jsonResponse([{ provider: "google" }]);
+      if (url.includes("/api/channels"))
+        return jsonResponse([{ id: channelId, name: "Main", platform: "mastodon" }]);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/slots") && init?.method === "POST")
+        return jsonResponse({ id: "slot-2" });
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: brandId })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.selectOptions(
+      screen.getByLabelText(en.ContentNew.contentTypeLabel),
+      "expert_article",
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", {
+          name: en.ContentNew.generateInlineImages,
+        }),
+      ).toBeEnabled(),
+    );
+    await user.type(screen.getByLabelText(en.Calendar.brief), "An expert article");
+    await user.click(screen.getByRole("checkbox", { name: /^Main$/ }));
+    await user.click(screen.getByRole("checkbox", { name: en.ContentNew.generateInlineImages }));
+    await user.click(screen.getAllByRole("button", { name: en.Calendar.add })[0] as HTMLElement);
+    await waitFor(() => expect(calls.some((call) => call.init?.method === "POST")).toBe(true));
+    const sent = JSON.parse(String(calls.find((call) => call.init?.method === "POST")?.init?.body));
+    expect(sent).toEqual({
+      brandId,
+      scheduledAt: expect.any(String),
+      brief: "An expert article",
+      channelIds: [channelId],
+      contentType: "expert_article",
+      generateInlineImages: true,
       notes: null,
     });
     expect(calendarSlotCreateSchema.parse(sent)).toEqual(sent);

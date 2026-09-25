@@ -6,6 +6,13 @@ export {
   withRunFailure,
 } from "./classify.js";
 export {
+  type FeedbackArticle,
+  type FeedbackSignals,
+  feedbackAdjustment,
+  headlineSimilarity,
+  semanticSimilarity,
+} from "./feedback-adjustment.js";
+export {
   GeminiImageCaller,
   IMAGE_MODEL,
   type ImageCall,

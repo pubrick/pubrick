@@ -20,6 +20,13 @@ usage ledger using the organization's AI key. Repeated titles are skipped.
 The request status shows queued, running, completed, or failed; zero new ideas
 means the results were duplicates, not that the model failed.
 
+An owner or admin can separately enable **Suggest topics daily** in the brand's
+Autopilot settings. After 09:00 in the brand's time zone, it queues at most one
+suggestion request per local day, using at most one physical AI provider call. It
+skips brands without an AI provider key or with at least three AI ideas still waiting
+for review. Daily suggestions follow the same Idea and approval flow as manual
+suggestions; they do not plan a calendar slot, start a draft, or publish.
+
 An editor can edit the title and description, approve the idea, archive it, or
 remove it. Only an approved topic can start a generation run. Select the
 channels explicitly, then **Generate**. Pubrick submits the approved text to

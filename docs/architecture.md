@@ -97,6 +97,50 @@ channel → opened and judged by the publish gate → approved, now or on a sche
 → claimed and sent by the worker → recorded as a publication with its id and
 link, or as a failure, or as an outcome nobody can determine from here.
 
+### Content archive
+
+`POST /api/content/:id/archive` moves a post out of the default Queue. The
+explicit Archived filter still lists it, and `GET /api/content/:id` still shows
+its saved text, versions, adaptations, and publication receipts. Archive refuses
+an item with a manual, scheduled, queued, or publishing delivery; the editor
+must finish or cancel that delivery first. The API takes adaptation locks before
+the item lock, and a stale publish job checks the archived parent before claiming
+a send. `POST /api/content/:id/restore` reinstates the saved prior status and
+clears the archive marker. Restore does not enqueue a publication. Both calls
+are idempotent and scoped to the active organization. Permanent deletion is a
+separate operation: `DELETE /api/content/:id` accepts only archived posts whose
+previous status was Draft or Rejected and whose adaptations have no delivery
+attempts or publication records. Existing posts remain protected because past
+channel deletions may have severed their receipt links; a database marker
+tracks that risk for posts created after the deletion-safety migration. Posts
+with a retained generation run are protected because its checkpoints contain
+draft text. Eligible posts lose their saved versions, notes,
+review links, feed entries, and adaptations with their database cascades. Model
+usage retains its accounting rows with a null post link.
+Published posts stay in the archive because their publication receipts must
+remain attributable; broader deletion needs a durable receipt provenance or
+tombstone design. The UI confirms the irreversible action before calling it.
+
+### Dated topic planning
+
+An editor can give a topic a target date and priority without approving its
+brief. The separate `autoPlanTopics` brand setting is off by default and can be
+enabled without direct autopilot generation. On its hourly scan, the worker
+considers only approved topics dated within the next 14 days, in the brand's
+time zone. It places a snapshot of the reviewed topic and selected channels in
+a 10:00 local calendar slot, highest priority first, while counting both manual
+and automatic slots against the configured daily planning limit. A past 10:00
+instant is skipped. Manual and automatic planners serialize on the brand, then
+the topic, and refuse to place an already linked topic again. An editor must
+remove an unstarted slot before changing that topic's target date or priority;
+removing or unlinking the slot clears the target date so the worker does not
+recreate it. Calendar generation still checks the topic revision and approval
+before spending the organization's key. Drafts remain in human review and are
+never published by this planner. Direct autopilot generation skips dated topics.
+An owner/admin can also enqueue the same planner from Autopilot settings. A
+60-second per-brand admission check prevents accidental repeats; the worker
+rechecks the saved opt-in and channel selection before placing anything.
+
 ### Saved text history
 
 The editor reads whole-body `content_versions` only when its Version history

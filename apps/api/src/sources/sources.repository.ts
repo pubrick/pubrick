@@ -2,25 +2,26 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  Logger,
   NotFoundException,
 } from "@nestjs/common";
-import type { AiCredential } from "@pubrick/ai";
+import { type AiCredential, type FeedbackArticle, feedbackAdjustment } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
 import {
   commentAnalysisResultSchema,
   decryptJson,
   encryptJson,
   type NewsItemListQuery,
+  type NewsRerankRequest,
+  type NewsRerankResponse,
   type NewsSourceCreate,
   type NewsSourceUpdate,
   newsSourceCreateSchema,
   type PrivateTelegramSourceCreate,
-  toLedgerCostUsd,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
+import { admitAnalysis, finishAnalysisAdmission, recordAnalysisUsage } from "../analysis-admission";
 import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
@@ -66,8 +67,6 @@ const ITEM_COLUMNS = {
 
 @Injectable()
 export class SourcesRepository {
-  private readonly logger = new Logger(SourcesRepository.name);
-
   constructor(
     private readonly queue: QueueService,
     private readonly aiCredentials: AiCredentialsRepository,
@@ -90,6 +89,46 @@ export class SourcesRepository {
       .where(eq(schema.telegramSourceAccounts.orgId, orgId))
       .limit(1);
     return { connected: rows.length > 0 };
+  }
+
+  async commentCollection(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .select({
+        enabled: schema.newsCommentCollectionConfigs.enabled,
+        updatedAt: schema.newsCommentCollectionConfigs.updatedAt,
+      })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(
+        and(
+          eq(schema.newsCommentCollectionConfigs.orgId, orgId),
+          eq(schema.newsCommentCollectionConfigs.brandId, brandId),
+        ),
+      )
+      .limit(1);
+    return { enabled: row?.enabled ?? false, updatedAt: row?.updatedAt.toISOString() ?? null };
+  }
+
+  async updateCommentCollection(orgId: string, brandId: string, enabled: boolean) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .insert(schema.newsCommentCollectionConfigs)
+      .values({ orgId, brandId, enabled, revision: 1 })
+      .onConflictDoUpdate({
+        target: schema.newsCommentCollectionConfigs.brandId,
+        set: {
+          enabled,
+          revision: sql`${schema.newsCommentCollectionConfigs.revision} + 1`,
+          updatedAt: new Date(),
+        },
+        setWhere: eq(schema.newsCommentCollectionConfigs.orgId, orgId),
+      })
+      .returning({
+        enabled: schema.newsCommentCollectionConfigs.enabled,
+        updatedAt: schema.newsCommentCollectionConfigs.updatedAt,
+      });
+    if (!row) throw notFound("brand_not_found", "Brand not found");
+    return { enabled: row.enabled, updatedAt: row.updatedAt.toISOString() };
   }
 
   async list(orgId: string, brandId: string) {
@@ -321,6 +360,115 @@ export class SourcesRepository {
       .limit(100);
   }
 
+  /** Recalculate at most one page from local feedback, without invoking a provider. */
+  async rerank(
+    orgId: string,
+    brandId: string,
+    request: NewsRerankRequest,
+  ): Promise<NewsRerankResponse> {
+    const cutoff = new Date(Date.now() - request.days * 24 * 60 * 60_000);
+    return db.transaction(async (tx) => {
+      // Serializes page requests for this brand, including repeated cursors.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("update")
+        .limit(1);
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+
+      const feedbackColumns = {
+        id: schema.newsItems.id,
+        title: schema.newsItems.title,
+        summary: schema.newsItems.summary,
+        embedding: schema.newsItems.embedding,
+        embeddingModel: schema.newsItems.embeddingModel,
+        embeddingDimensions: schema.newsItems.embeddingDimensions,
+      };
+      const fetchFeedback = (signal: "relevant" | "irrelevant") =>
+        tx
+          .select(feedbackColumns)
+          .from(schema.newsItems)
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.editorSignal, signal),
+            ),
+          )
+          .orderBy(desc(schema.newsItems.createdAt), desc(schema.newsItems.id))
+          .limit(51);
+      const [relevant, irrelevant] = await Promise.all([
+        fetchFeedback("relevant"),
+        fetchFeedback("irrelevant"),
+      ]);
+      const candidates = await tx
+        .select({
+          id: schema.newsItems.id,
+          title: schema.newsItems.title,
+          summary: schema.newsItems.summary,
+          embedding: schema.newsItems.embedding,
+          embeddingModel: schema.newsItems.embeddingModel,
+          embeddingDimensions: schema.newsItems.embeddingDimensions,
+          createdAt: schema.newsItems.createdAt,
+          feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
+        })
+        .from(schema.newsItems)
+        .where(
+          and(
+            eq(schema.newsItems.orgId, orgId),
+            eq(schema.newsItems.brandId, brandId),
+            eq(schema.newsItems.relevanceStatus, "scored"),
+            gte(schema.newsItems.createdAt, cutoff),
+            ...(request.cursor
+              ? [
+                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${new Date(request.cursor.createdAt)}, ${request.cursor.id}::uuid)`,
+                ]
+              : []),
+          ),
+        )
+        .orderBy(desc(schema.newsItems.createdAt), desc(schema.newsItems.id))
+        .limit(51);
+
+      const page = candidates.slice(0, 50);
+      let changed = 0;
+      for (const item of page) {
+        // The extra row lets a marked candidate exclude itself and still compare
+        // against 50 other examples in that polarity.
+        const examples = (rows: typeof relevant): FeedbackArticle[] =>
+          rows.filter((row) => row.id !== item.id).slice(0, 50);
+        const delta = feedbackAdjustment(item, {
+          relevant: examples(relevant),
+          irrelevant: examples(irrelevant),
+        });
+        if (delta === item.feedbackDelta) continue;
+        const updated = await tx
+          .update(schema.newsItems)
+          .set({ relevanceFeedbackDelta: delta })
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.id, item.id),
+              eq(schema.newsItems.relevanceStatus, "scored"),
+              eq(schema.newsItems.relevanceFeedbackDelta, item.feedbackDelta),
+            ),
+          )
+          .returning({ id: schema.newsItems.id });
+        changed += updated.length;
+      }
+      const last = page.at(-1);
+      return {
+        processed: page.length,
+        changed,
+        nextCursor:
+          candidates.length > 50 && last
+            ? { createdAt: last.createdAt.toISOString(), id: last.id }
+            : null,
+      };
+    });
+  }
+
   async score(orgId: string, brandId: string, id: string) {
     return db.transaction(async (tx) => {
       const rows = await tx
@@ -363,6 +511,7 @@ export class SourcesRepository {
     const rows = await db
       .select({
         id: schema.newsItems.id,
+        sourceId: schema.newsItems.sourceId,
         title: schema.newsItems.title,
         commentsCheckedAt: schema.newsItems.commentsCheckedAt,
         commentsStatus: schema.newsItems.commentsStatus,
@@ -501,21 +650,10 @@ export class SourcesRepository {
       current.status === "ready"
     )
       return current;
-    const recent = await db
-      .select({ id: schema.usageLedger.id })
-      .from(schema.usageLedger)
-      .where(
-        and(
-          eq(schema.usageLedger.orgId, orgId),
-          eq(schema.usageLedger.step, "comment_analysis"),
-          gt(schema.usageLedger.createdAt, new Date(Date.now() - 60 * 60_000)),
-        ),
-      )
-      .limit(10);
-    if (recent.length >= 10) return { status: "limit_reached" as const };
     const item = await this.requireTelegramItem(orgId, brandId, itemId);
     const sample = await this.analysisSample(orgId, brandId, itemId);
     if (!item.commentsCheckedAt || sample.length === 0) return { status: "no_comments" as const };
+    const checkedAt = item.commentsCheckedAt;
 
     // Only Google's key from this organization is used. No platform fallback.
     let credential: AiCredential;
@@ -526,56 +664,103 @@ export class SourcesRepository {
       if (error instanceof NotFoundException) return { status: "no_key" as const };
       throw error;
     }
-    const outcome = await this.commentAnalysisCaller.run({
-      credential,
-      title: item.title,
-      comments: sample.map((row) => row.body),
+    const admission = await admitAnalysis({
+      orgId,
+      targetKind: "source_comment",
+      targetId: itemId,
+      sampleCheckedAt: checkedAt,
     });
-    if (outcome.usage.length) {
-      try {
-        await db.insert(schema.usageLedger).values(
-          outcome.usage.map((record) => ({
-            orgId,
-            step: "comment_analysis",
-            attempt: record.attempt,
-            provider: record.provider,
-            modelId: record.modelId,
-            inputTokens: record.inputTokens,
-            outputTokens: record.outputTokens,
-            cachedInputTokens: record.cachedInputTokens,
-            reasoningTokens: record.reasoningTokens,
-            costUsd: toLedgerCostUsd(record.costUsd),
-            costSource: record.costSource,
-            status: record.status,
-            outcome: record.outcome,
-            responseMs: record.responseMs,
-            keyOwnership: "byok" as const,
-          })),
-        );
-      } catch {
-        this.logger.error(`Usage recording failed for comment analysis in org ${orgId}`);
+    if (admission.status !== "admitted") return { status: admission.status };
+    try {
+      const afterAdmission = await this.commentAnalysis(orgId, brandId, itemId);
+      if (afterAdmission.status === "ready") return afterAdmission;
+      const latest = await this.requireTelegramItem(orgId, brandId, itemId);
+      if (latest.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
+        return { status: "stale" as const };
       }
-    }
-    if (!outcome.ok) return { status: outcome.failure };
-    await db
-      .insert(schema.newsCommentAnalyses)
-      .values({
-        itemId,
-        orgId,
-        brandId,
-        sampleCheckedAt: item.commentsCheckedAt,
-        sampleSize: sample.length,
-        result: outcome.result,
-      })
-      .onConflictDoUpdate({
-        target: schema.newsCommentAnalyses.itemId,
-        set: {
-          sampleCheckedAt: item.commentsCheckedAt,
-          sampleSize: sample.length,
-          result: outcome.result,
-          createdAt: new Date(),
-        },
+      const outcome = await this.commentAnalysisCaller.run({
+        credential,
+        title: item.title,
+        comments: sample.map((row) => row.body),
+        onUsage: (record) =>
+          recordAnalysisUsage({
+            admissionId: admission.id,
+            orgId,
+            targetKind: "source_comment",
+            record,
+          }),
       });
-    return this.commentAnalysis(orgId, brandId, itemId);
+      if (!outcome.ok) return { status: outcome.failure };
+      const saved = await db.transaction(async (tx) => {
+        const [organization] = await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .limit(1)
+          .for("key share");
+        if (!organization) return false;
+        const [brand] = await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+          .limit(1)
+          .for("key share");
+        if (!brand) return false;
+        const [source] = await tx
+          .select({ id: schema.newsSources.id })
+          .from(schema.newsSources)
+          .where(
+            and(
+              eq(schema.newsSources.orgId, orgId),
+              eq(schema.newsSources.brandId, brandId),
+              eq(schema.newsSources.id, item.sourceId),
+              eq(schema.newsSources.kind, "telegram"),
+            ),
+          )
+          .limit(1)
+          .for("key share");
+        if (!source) return false;
+        const [currentItem] = await tx
+          .select({ commentsCheckedAt: schema.newsItems.commentsCheckedAt })
+          .from(schema.newsItems)
+          .where(
+            and(
+              eq(schema.newsItems.orgId, orgId),
+              eq(schema.newsItems.brandId, brandId),
+              eq(schema.newsItems.sourceId, item.sourceId),
+              eq(schema.newsItems.id, itemId),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (currentItem?.commentsCheckedAt?.getTime() !== checkedAt.getTime()) {
+          return false;
+        }
+        await tx
+          .insert(schema.newsCommentAnalyses)
+          .values({
+            itemId,
+            orgId,
+            brandId,
+            sampleCheckedAt: checkedAt,
+            sampleSize: sample.length,
+            result: outcome.result,
+          })
+          .onConflictDoUpdate({
+            target: schema.newsCommentAnalyses.itemId,
+            set: {
+              sampleCheckedAt: checkedAt,
+              sampleSize: sample.length,
+              result: outcome.result,
+              createdAt: new Date(),
+            },
+          });
+        return true;
+      });
+      if (!saved) return { status: "stale" as const };
+      return this.commentAnalysis(orgId, brandId, itemId);
+    } finally {
+      await finishAnalysisAdmission(admission.id, orgId);
+    }
   }
 }

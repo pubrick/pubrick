@@ -4,10 +4,16 @@ import { CommentAnalysisCaller } from "./comment-analysis.caller";
 import { PrivateSourceOwnerGuard } from "./private-source-owner.guard";
 import { SourcesController } from "./sources.controller";
 import { SourcesRepository } from "./sources.repository";
+import { TelegramLoginRepository } from "./telegram-login.repository";
 
 @Module({
   imports: [AiCredentialsModule],
   controllers: [SourcesController],
-  providers: [SourcesRepository, CommentAnalysisCaller, PrivateSourceOwnerGuard],
+  providers: [
+    SourcesRepository,
+    TelegramLoginRepository,
+    CommentAnalysisCaller,
+    PrivateSourceOwnerGuard,
+  ],
 })
 export class SourcesModule {}

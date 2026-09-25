@@ -5,8 +5,10 @@ import {
   type CalendarSlotsBulkCreate,
   type CalendarSlotUpdate,
   COVER_SUPPORTED_PLATFORMS,
+  contentTypeRequiresMaterial,
+  supportsInlineImages,
 } from "@pubrick/shared";
-import { and, asc, eq, gte, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 
@@ -15,6 +17,7 @@ const SLOT_COLUMNS = {
   brandId: schema.calendarSlots.brandId,
   scheduledAt: schema.calendarSlots.scheduledAt,
   brief: schema.calendarSlots.brief,
+  contentType: schema.calendarSlots.contentType,
   topicId: schema.calendarSlots.topicId,
   topicTitle: schema.calendarSlots.topicTitle,
   topicDescription: schema.calendarSlots.topicDescription,
@@ -23,6 +26,7 @@ const SLOT_COLUMNS = {
   topicRevision: schema.calendarSlots.topicRevision,
   channelIds: schema.calendarSlots.channelIds,
   generateCover: schema.calendarSlots.generateCover,
+  generateInlineImages: schema.calendarSlots.generateInlineImages,
   notes: schema.calendarSlots.notes,
   runId: schema.calendarSlots.runId,
   errorCode: schema.calendarSlots.errorCode,
@@ -47,7 +51,13 @@ export class CalendarRepository {
       .orderBy(asc(schema.calendarSlots.scheduledAt));
   }
 
-  private async requireChannels(orgId: string, brandId: string, ids: string[], cover = false) {
+  private async requireChannels(
+    orgId: string,
+    brandId: string,
+    ids: string[],
+    cover = false,
+    inlineImages = false,
+  ) {
     const brand = await db
       .select({ id: schema.brands.id })
       .from(schema.brands)
@@ -66,8 +76,8 @@ export class CalendarRepository {
       );
     if (owned.length !== ids.length)
       throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
-    if (!cover) return;
     if (
+      cover &&
       owned.some(
         (channel) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
       )
@@ -77,6 +87,7 @@ export class CalendarRepository {
         "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
       );
     }
+    if (!cover && !inlineImages) return;
     const [google] = await db
       .select({ id: schema.aiCredentials.id })
       .from(schema.aiCredentials)
@@ -86,8 +97,8 @@ export class CalendarRepository {
       .limit(1);
     if (!google)
       throw badRequest(
-        "cover_requires_google_key",
-        "Add a Google AI key before requesting a cover",
+        cover ? "cover_requires_google_key" : "inline_images_require_google_key",
+        "Add a Google AI key before requesting generated images",
       );
   }
 
@@ -95,10 +106,22 @@ export class CalendarRepository {
     if (new Date(data.scheduledAt).getTime() <= Date.now()) {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
-    await this.requireChannels(orgId, data.brandId, data.channelIds, data.generateCover);
+    await this.requireChannels(
+      orgId,
+      data.brandId,
+      data.channelIds,
+      data.generateCover,
+      data.generateInlineImages,
+    );
     if (data.topicId && data.brief !== undefined)
       throw badRequest("invalid_request", "A linked topic supplies its own brief");
     return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [topic] = data.topicId
         ? await tx
             .select({
@@ -117,11 +140,26 @@ export class CalendarRepository {
                 eq(schema.topics.id, data.topicId),
               ),
             )
-            .for("share")
+            .for("update")
         : [];
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (data.topicId) {
+        const [planned] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, data.brandId),
+              eq(schema.calendarSlots.topicId, data.topicId),
+            ),
+          )
+          .limit(1);
+        if (planned)
+          throw conflict("calendar_topic_already_planned", "This topic is already planned");
+      }
       const brief = topic ? `${topic.title}\n\n${topic.description}`.trim() : data.brief;
       if (!brief) throw badRequest("invalid_request", "A brief is required");
       const [slot] = await tx
@@ -131,6 +169,7 @@ export class CalendarRepository {
           brandId: data.brandId,
           scheduledAt: new Date(data.scheduledAt),
           brief,
+          contentType: data.contentType ?? "social_post",
           topicId: data.topicId ?? null,
           topicTitle: topic?.title ?? null,
           topicDescription: topic?.description ?? null,
@@ -139,6 +178,7 @@ export class CalendarRepository {
           topicRevision: topic?.revision ?? null,
           channelIds: data.channelIds,
           generateCover: data.generateCover ?? false,
+          generateInlineImages: data.generateInlineImages ?? false,
           notes: data.notes ?? null,
         })
         .returning(SLOT_COLUMNS);
@@ -153,6 +193,7 @@ export class CalendarRepository {
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+        .for("no key update")
         .limit(1);
       if (!brand) throw notFound("brand_not_found", "Brand not found");
 
@@ -262,12 +303,20 @@ export class CalendarRepository {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
     return db.transaction(async (tx) => {
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
       const [existing] = await tx
         .select({
           topicId: schema.calendarSlots.topicId,
           runId: schema.calendarSlots.runId,
           channelIds: schema.calendarSlots.channelIds,
           generateCover: schema.calendarSlots.generateCover,
+          generateInlineImages: schema.calendarSlots.generateInlineImages,
+          contentType: schema.calendarSlots.contentType,
         })
         .from(schema.calendarSlots)
         .where(
@@ -281,12 +330,21 @@ export class CalendarRepository {
       if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
       if (existing.runId)
         throw conflict("calendar_slot_started", "Generation has already started for this slot");
-      if (data.channelIds || data.generateCover === true) {
+      const contentType = data.contentType ?? existing.contentType;
+      const generateInlineImages = data.generateInlineImages ?? existing.generateInlineImages;
+      if (
+        contentTypeRequiresMaterial(contentType) ||
+        (generateInlineImages && !supportsInlineImages(contentType))
+      ) {
+        throw badRequest("invalid_request", "This calendar format cannot generate inline images");
+      }
+      if (data.channelIds || data.generateCover === true || data.generateInlineImages === true) {
         await this.requireChannels(
           orgId,
           brandId,
           data.channelIds ?? existing.channelIds,
           data.generateCover ?? existing.generateCover,
+          generateInlineImages,
         );
       }
       if (data.brief !== undefined && existing.topicId && data.topicId === undefined)
@@ -311,11 +369,27 @@ export class CalendarRepository {
                 eq(schema.topics.id, data.topicId),
               ),
             )
-            .for("share")
+            .for("update")
         : [];
       if (data.topicId && !topic) throw notFound("topic_not_found", "Topic not found");
       if (topic && topic.status !== "approved")
         throw conflict("topic_not_approved", "Approve this topic before scheduling");
+      if (data.topicId) {
+        const [planned] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, data.topicId),
+              ne(schema.calendarSlots.id, id),
+            ),
+          )
+          .limit(1);
+        if (planned)
+          throw conflict("calendar_topic_already_planned", "This topic is already planned");
+      }
       const [updated] = await tx
         .update(schema.calendarSlots)
         .set({
@@ -329,41 +403,110 @@ export class CalendarRepository {
           topicRevision: data.topicId === null ? null : topic?.revision,
           channelIds: data.channelIds,
           generateCover: data.generateCover,
+          generateInlineImages: data.generateInlineImages,
+          contentType: data.contentType,
           notes: data.notes,
           errorCode: null,
           retryAfter: null,
         })
         .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, id)))
         .returning(SLOT_COLUMNS);
+      if (existing.topicId && data.topicId !== undefined && data.topicId !== existing.topicId) {
+        const [otherSlot] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, existing.topicId),
+            ),
+          )
+          .limit(1);
+        if (!otherSlot) {
+          await tx
+            .update(schema.topics)
+            .set({
+              plannedDate: null,
+              revision: sql`${schema.topics.revision} + 1`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.id, existing.topicId),
+                sql`${schema.topics.plannedDate} is not null`,
+              ),
+            );
+        }
+      }
       return updated;
     });
   }
 
   async delete(orgId: string, brandId: string, id: string) {
-    const rows = await db
-      .delete(schema.calendarSlots)
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-          isNull(schema.calendarSlots.runId),
-        ),
-      )
-      .returning({ id: schema.calendarSlots.id });
-    if (rows[0]) return { deleted: true };
-    const existing = await db
-      .select({ id: schema.calendarSlots.id })
-      .from(schema.calendarSlots)
-      .where(
-        and(
-          eq(schema.calendarSlots.orgId, orgId),
-          eq(schema.calendarSlots.brandId, brandId),
-          eq(schema.calendarSlots.id, id),
-        ),
-      )
-      .limit(1);
-    if (!existing[0]) throw notFound("calendar_slot_not_found", "Slot not found");
-    throw conflict("calendar_slot_started", "Generation has already started for this slot");
+    return db.transaction(async (tx) => {
+      // Serialize an editor's removal with the per-brand automatic planner.
+      // Clearing the topic's target date below keeps an intentionally removed
+      // slot from being recreated on the next hourly scan.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [existing] = await tx
+        .select({ topicId: schema.calendarSlots.topicId, runId: schema.calendarSlots.runId })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            eq(schema.calendarSlots.id, id),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
+      if (existing.runId)
+        throw conflict("calendar_slot_started", "Generation has already started for this slot");
+      if (existing.topicId) {
+        const [otherSlot] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, existing.topicId),
+              ne(schema.calendarSlots.id, id),
+            ),
+          )
+          .limit(1);
+        if (!otherSlot) {
+          await tx
+            .update(schema.topics)
+            .set({
+              plannedDate: null,
+              revision: sql`${schema.topics.revision} + 1`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, brandId),
+                eq(schema.topics.id, existing.topicId),
+                // Do not perturb revisions of topics that were never dated.
+                sql`${schema.topics.plannedDate} is not null`,
+              ),
+            );
+        }
+      }
+      await tx
+        .delete(schema.calendarSlots)
+        .where(and(eq(schema.calendarSlots.orgId, orgId), eq(schema.calendarSlots.id, id)));
+      return { deleted: true };
+    });
   }
 }

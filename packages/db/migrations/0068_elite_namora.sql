@@ -1,0 +1,3 @@
+ALTER TABLE "usage_ledger" ADD COLUMN "analysis_admission_id" uuid;--> statement-breakpoint
+ALTER TABLE "usage_ledger" ADD CONSTRAINT "usage_ledger_analysis_admission_id_analysis_admissions_id_fk" FOREIGN KEY ("analysis_admission_id") REFERENCES "public"."analysis_admissions"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "usage_ledger_analysis_admission_idx" ON "usage_ledger" USING btree ("analysis_admission_id") WHERE "usage_ledger"."analysis_admission_id" is not null;

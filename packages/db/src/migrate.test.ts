@@ -93,7 +93,7 @@ const QUEUE_ORDER_MIGRATION = "0020_queue_page_order";
  *
  * Twelve of them are the publishing path, converted by 0014. Proposals,
  * publication assertions, public feeds, monitored news, guidance revisions,
- * and calendar slots were born zoned in later migrations. They are deliberately
+ * calendar slots, and manual and scheduled Autopilot decisions were born zoned in later migrations. They are deliberately
  * absent from `UNZONED_TABLES`, whose columns remain naive.
  */
 const ZONED_COLUMNS = [
@@ -101,8 +101,18 @@ const ZONED_COLUMNS = [
   "adaptations.created_at",
   "adaptations.scheduled_at",
   "adaptations.updated_at",
+  "analysis_admissions.completed_at",
+  "analysis_admissions.lease_until",
+  "analysis_admissions.requested_at",
+  "analysis_admissions.sample_checked_at",
+  "autopilot_configs.last_manual_plan_at",
   "autopilot_configs.updated_at",
   "autopilot_dispatches.created_at",
+  "autopilot_manual_attempts.completed_at",
+  "autopilot_manual_attempts.created_at",
+  "autopilot_manual_attempts.started_at",
+  "autopilot_scan_events.finished_at",
+  "autopilot_scan_events.started_at",
   "brand_feeds.created_at",
   "brands.created_at",
   "brands.updated_at",
@@ -113,6 +123,10 @@ const ZONED_COLUMNS = [
   "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
+  "claim_reviews.completed_at",
+  "claim_reviews.created_at",
+  "claim_reviews.lease_expires_at",
+  "claim_reviews.started_at",
   "client_review_links.created_at",
   "client_review_links.expires_at",
   "client_review_links.reviewed_at",
@@ -133,6 +147,8 @@ const ZONED_COLUMNS = [
   "memorable_dates.updated_at",
   "news_comment_analyses.created_at",
   "news_comment_analyses.sample_checked_at",
+  "news_comment_collection_configs.last_scanned_at",
+  "news_comment_collection_configs.updated_at",
   "news_comments.created_at",
   "news_comments.published_at",
   "news_items.comments_checked_at",
@@ -149,11 +165,28 @@ const ZONED_COLUMNS = [
   "notification_settings.updated_at",
   "organization_api_keys.created_at",
   "organization_api_keys.revoked_at",
+  "prompt_decision_revisions.decided_at",
+  "prompt_decisions.created_at",
   "prompt_revisions.created_at",
+  "publication_comment_analyses.created_at",
+  "publication_comment_analyses.sample_checked_at",
+  "publication_comment_collection_configs.last_scanned_at",
+  "publication_comment_collection_configs.updated_at",
+  "publication_comment_samples.checked_at",
+  "publication_comment_samples.requested_at",
+  "publication_comments.published_at",
   "publication_metrics.checked_at",
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "search_credentials.updated_at",
+  "search_requests.completed_at",
+  "search_requests.created_at",
+  "telegram_login_attempts.created_at",
+  "telegram_login_attempts.expires_at",
+  "telegram_login_attempts.last_begin_at",
+  "telegram_login_attempts.next_attempt_at",
+  "telegram_login_attempts.updated_at",
   "telegram_source_accounts.connected_at",
   "telegram_source_accounts.last_private_resolve_at",
   "topic_suggestion_requests.created_at",
@@ -253,6 +286,19 @@ const NON_ENUM_CHECKS = [
   "media_assets_shape_check",
   "media_assets_byte_size_check",
   "content_items_one_media_check",
+  // 0064 stores article image positions and accessibility text outside the
+  // plain-text body. API and public-feed tests exercise valid slot writes.
+  "content_image_slots_paragraph_check",
+  "content_image_slots_alt_check",
+  "content_image_slots_caption_check",
+  "feed_entry_images_paragraph_check",
+  "feed_entry_images_position_check",
+  "feed_entry_images_alt_check",
+  "feed_entry_images_caption_check",
+  // 0059: archive is a reversible state; its previous status must be present
+  // exactly while archived. The dedicated test below proves both directions.
+  "content_items_archived_from_status_check",
+  "content_items_archive_pair_check",
   // Guest approval capabilities are new after the historical seed. Their
   // format and verdict relationship are exercised by client-review e2e tests.
   "client_review_links_token_hash_check",
@@ -273,11 +319,20 @@ const NON_ENUM_CHECKS = [
   // Added with the comment sample after the historical seed; worker persistence e2e
   // proves the database rejects an off-list status on a populated story.
   "news_items_comments_status_check",
+  "news_comment_collection_configs_revision_check",
   // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
   "news_sources_kind_check",
   // A private source always carries an encrypted channel peer, while public
   // sources cannot carry one. Exercised by private source persistence e2e.
   "news_sources_private_peer_check",
+  // A login attempt stores encrypted phone/session material and bounded retries;
+  // the source login API owns allowed transitions and exhaustion.
+  "telegram_login_attempts_stage_check",
+  "telegram_login_attempts_attempts_check",
+  // 0061: scheduling limits and channel admission remain enforced for direct SQL writers.
+  "topics_priority_check",
+  "autopilot_configs_planning_daily_limit_check",
+  "autopilot_configs_auto_plan_channels_check",
   // 0022's: only the manual VC.ru channel may omit encrypted credentials.
   // The API e2e suite proves both accepted and refused channel shapes.
   "channels_credentials_mode_check",
@@ -310,6 +365,7 @@ const NON_ENUM_CHECKS = [
   // schema-invariants.test.ts verifies the schema declaration; this count
   // verifies that the generated migration installed the database guard.
   "calendar_slots_error_code_check",
+  "calendar_slots_content_type_check",
   "calendar_slots_topic_snapshot_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
@@ -327,6 +383,8 @@ const NON_ENUM_CHECKS = [
   "topics_origin_check",
   "topic_suggestion_requests_status_check",
   "topic_suggestion_requests_error_code_check",
+  // 0057 adds an origin pin; historical request rows receive the manual default.
+  "topic_suggestion_requests_origin_check",
   "news_items_editor_signal_check",
   "news_items_relevance_status_check",
   "news_items_relevance_urgency_check",
@@ -341,6 +399,38 @@ const NON_ENUM_CHECKS = [
   // measured zero and missing values; these checks pin the stored shape.
   "publication_metrics_status_check",
   "publication_metrics_counts_check",
+  // 0065: bounded Telegram publication discussion samples, distinct from news.
+  "publication_comment_samples_status_check",
+  "publication_comment_samples_error_check",
+  "publication_comments_message_id_check",
+  "publication_comments_body_check",
+  // 0066–0067: paid analysis admission and bounded publication result.
+  "analysis_admissions_target_kind_check",
+  "analysis_admissions_unrecorded_calls_check",
+  "publication_comment_analyses_sample_size_check",
+  // 0071–0072: search and advisory review records arrive after the historical seed.
+  "search_requests_status_check",
+  "search_requests_result_check",
+  "claim_reviews_status_check",
+  "claim_reviews_body_hash_check",
+  "claim_reviews_error_code_check",
+  "claim_reviews_unrecorded_calls_check",
+  // 0074's operator attempts are created after the historical seed. API and
+  // worker e2e cover active/terminal transitions and an off-list decision.
+  "autopilot_manual_attempts_status_check",
+  "autopilot_manual_attempts_decision_check",
+  "autopilot_manual_attempts_terminal_check",
+  // 0078's scheduled admission events have a closed status/decision pair.
+  "autopilot_scan_events_status_check",
+  "autopilot_scan_events_decision_check",
+  "autopilot_scan_events_terminal_check",
+  // 0079's immutable review events link only verified pinned revisions.
+  "prompt_decisions_verdict_check",
+  "prompt_decisions_ordinal_positive_check",
+  "prompt_decision_revisions_role_check",
+  "prompt_decision_revisions_version_positive_check",
+  // 0076 adds explicit opt-in for publication reply sampling.
+  "publication_comment_collection_configs_revision_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -464,11 +554,22 @@ function expectNoRowRewritten(
       ).toEqual(beforeRow);
       const added = Object.keys(afterRow).filter((key) => !seededKeys.includes(key));
       expect(
-        added.filter((key) =>
-          table === "channels" && key === "metrics_auto_refresh"
-            ? afterRow[key] !== false
-            : afterRow[key] !== null,
-        ),
+        added.filter((key) => {
+          if (table === "channels" && key === "metrics_auto_refresh") {
+            return afterRow[key] !== false;
+          }
+          // 0060 intentionally makes historical items ineligible for deletion:
+          // an orphaned receipt may already have lost its item link.
+          if (table === "content_items" && key === "is_safe_to_delete") {
+            return afterRow[key] !== false;
+          }
+          // 0077 keeps existing channel text byte-for-byte while giving old
+          // adaptations and their versions an explicitly empty tag list.
+          if ((table === "adaptations" || table === "content_versions") && key === "hashtags") {
+            return JSON.stringify(afterRow[key]) !== "[]";
+          }
+          return afterRow[key] !== null;
+        }),
         `${table}: a column added after the seed was backfilled over an existing row`,
       ).toEqual([]);
     });
@@ -1304,6 +1405,70 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("preserves old items and enforces reversible archive state", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const { itemId } = await seedEveryTable(pool, "org_archive");
+        const read = async () =>
+          (
+            await pool.query(
+              "SELECT status, archived_from_status FROM content_items WHERE id = $1",
+              [itemId],
+            )
+          ).rows[0];
+
+        expect(await read()).toEqual({ status: "draft", archived_from_status: null });
+        expect(
+          await refusal(pool, "UPDATE content_items SET status = 'archived' WHERE id = $1", [
+            itemId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET archived_from_status = 'draft' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET status = 'archived', archived_from_status = 'archived' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            pool,
+            "UPDATE content_items SET status = 'archived', archived_from_status = 'draft_typo' WHERE id = $1",
+            [itemId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+
+        await pool.query(
+          "UPDATE content_items SET status = 'archived', archived_from_status = 'draft' WHERE id = $1",
+          [itemId],
+        );
+        expect(await read()).toEqual({ status: "archived", archived_from_status: "draft" });
+        expect(
+          await refusal(pool, "UPDATE content_items SET status = 'draft' WHERE id = $1", [itemId]),
+        ).toBe(CHECK_VIOLATION);
+        await pool.query(
+          "UPDATE content_items SET status = archived_from_status, archived_from_status = NULL WHERE id = $1",
+          [itemId],
+        );
+        expect(await read()).toEqual({ status: "draft", archived_from_status: null });
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
   /**
    * The migration over REAL DATA, which is the only version of "it applies"
    * worth having: a constraint that cannot be added to the rows a running
@@ -1350,6 +1515,7 @@ describe.skipIf(!url)("runMigrations", () => {
       await after.end();
 
       expectNoRowRewritten(rows, seeded);
+      expect(rows.content_items?.[0]?.is_safe_to_delete).toBe(false);
       // Every enum pin PLUS every non-enum check — see `NON_ENUM_CHECKS` for
       // why this is not simply `PINNED_COLUMNS.length` any more.
       expect(constraints.rows).toHaveLength(PINNED_COLUMNS.length + NON_ENUM_CHECKS.length);
@@ -1423,7 +1589,9 @@ describe.skipIf(!url)("runMigrations", () => {
       );
       await after.end();
 
-      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, outcome: null })));
+      expect(rows.rows).toEqual(
+        seeded.map((row) => ({ ...row, outcome: null, analysis_admission_id: null })),
+      );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
         data_type: "text",
@@ -1497,7 +1665,9 @@ describe.skipIf(!url)("runMigrations", () => {
       );
       await after.end();
 
-      expect(rows.rows).toEqual(seeded.map((row) => ({ ...row, failure_reason: null })));
+      expect(rows.rows).toEqual(
+        seeded.map((row) => ({ ...row, failure_reason: null, hashtags: [], cta: null })),
+      );
       expect(column.rows[0]).toMatchObject({
         is_nullable: "YES",
         data_type: "text",
@@ -2341,6 +2511,283 @@ describe.skipIf(!url)("runMigrations", () => {
           "UPDATE news_items SET embedding = $1::vector, embedding_model = 'gemini-embedding-001', embedding_dimensions = 768 WHERE id = $2",
           [vector, itemId],
         );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds opt-in dated topic planning without changing existing plans or configs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0061_dated_topic_planning");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let topicId!: string;
+      let brandId!: string;
+      let channelId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('topic_plan_org', 'Test', 'topic-plan-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('topic_plan_org', 'Brand') RETURNING id",
+        );
+        brandId = brand.rows[0]?.id as string;
+        const channel = await pool.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('topic_plan_org', $1, 'telegram', 'Main', 'blob') RETURNING id",
+          [brandId],
+        );
+        channelId = channel.rows[0]?.id as string;
+        const topic = await pool.query<{ id: string }>(
+          "INSERT INTO topics (org_id, brand_id, title) VALUES ('topic_plan_org', $1, 'Existing idea') RETURNING id",
+          [brandId],
+        );
+        topicId = topic.rows[0]?.id as string;
+        await pool.query(
+          "INSERT INTO autopilot_configs (org_id, brand_id, channel_ids, auto_suggest_topics) VALUES ('topic_plan_org', $1, '[]', true)",
+          [brandId],
+        );
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        expect(
+          (
+            await after.query("SELECT title, planned_date, priority FROM topics WHERE id = $1", [
+              topicId,
+            ])
+          ).rows,
+        ).toEqual([{ title: "Existing idea", planned_date: null, priority: 5 }]);
+        expect(
+          (
+            await after.query(
+              "SELECT auto_suggest_topics, auto_plan_topics, planning_daily_limit FROM autopilot_configs WHERE brand_id = $1",
+              [brandId],
+            )
+          ).rows,
+        ).toEqual([
+          { auto_suggest_topics: true, auto_plan_topics: false, planning_daily_limit: 1 },
+        ]);
+        expect(
+          await refusal(after, "UPDATE topics SET priority = 0 WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, "UPDATE topics SET priority = 11 WHERE id = $1", [topicId]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE autopilot_configs SET planning_daily_limit = 6 WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE autopilot_configs SET auto_plan_topics = true WHERE brand_id = $1",
+            [brandId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await after.query(
+          "UPDATE autopilot_configs SET channel_ids = $1::jsonb, auto_plan_topics = true, planning_daily_limit = 3 WHERE brand_id = $2",
+          [JSON.stringify([channelId]), brandId],
+        );
+        await after.query(
+          "UPDATE topics SET planned_date = '2026-10-11', priority = 1 WHERE id = $1",
+          [topicId],
+        );
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("adds a nullable first-party manual planning clock to existing configs", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0062_manual_topic_plan_cooldown");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      let priorUpdatedAt!: Date;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('manual_plan_org', 'Test', 'manual-plan-test')",
+        );
+        const brand = await pool.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('manual_plan_org', 'Brand') RETURNING id",
+        );
+        brandId = brand.rows[0]?.id as string;
+        const config = await pool.query<{ updated_at: Date }>(
+          "INSERT INTO autopilot_configs (org_id, brand_id, channel_ids, auto_suggest_topics) VALUES ('manual_plan_org', $1, '[]', true) RETURNING updated_at",
+          [brandId],
+        );
+        priorUpdatedAt = config.rows[0]?.updated_at as Date;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const config = await after.query<{
+          auto_suggest_topics: boolean;
+          last_manual_plan_at: Date | null;
+          updated_at: Date;
+        }>(
+          "SELECT auto_suggest_topics, last_manual_plan_at, updated_at FROM autopilot_configs WHERE brand_id = $1",
+          [brandId],
+        );
+        expect(config.rows).toEqual([
+          {
+            auto_suggest_topics: true,
+            last_manual_plan_at: null,
+            updated_at: priorUpdatedAt,
+          },
+        ]);
+        const stamped = await after.query<{ last_manual_plan_at: Date }>(
+          "UPDATE autopilot_configs SET last_manual_plan_at = clock_timestamp() WHERE brand_id = $1 RETURNING last_manual_plan_at",
+          [brandId],
+        );
+        expect(stamped.rows[0]?.last_manual_plan_at).toBeInstanceOf(Date);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("backfills existing member-brand access and rejects cross-organization grants", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0063_brand_access_grants");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let firstBrand!: string;
+      let secondBrand!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('grant_a', 'A', 'grant-a'), ('grant_b', 'B', 'grant-b')",
+        );
+        await pool.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('grant_user_a', 'A', 'a@grant.test'), ('grant_user_b', 'B', 'b@grant.test'), ('grant_manager_a', 'Manager', 'manager@grant.test')",
+        );
+        await pool.query(
+          "INSERT INTO member (id, organization_id, user_id, role) VALUES ('grant_member_a', 'grant_a', 'grant_user_a', 'member'), ('grant_member_b', 'grant_b', 'grant_user_b', 'member'), ('grant_manager_a', 'grant_a', 'grant_manager_a', 'admin')",
+        );
+        firstBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('grant_a', 'A brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        secondBrand = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('grant_b', 'B brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const grants = await after.query<{ org_id: string; brand_id: string; member_id: string }>(
+          "SELECT org_id, brand_id, member_id FROM brand_access ORDER BY org_id",
+        );
+        expect(grants.rows).toEqual([
+          { org_id: "grant_a", brand_id: firstBrand, member_id: "grant_member_a" },
+          { org_id: "grant_b", brand_id: secondBrand, member_id: "grant_member_b" },
+        ]);
+        await after.query("UPDATE member SET role = 'admin' WHERE id = 'grant_member_a'");
+        await after.query("UPDATE member SET role = 'member' WHERE id = 'grant_member_a'");
+        expect(
+          (await after.query("SELECT 1 FROM brand_access WHERE member_id = 'grant_member_a'"))
+            .rowCount,
+        ).toBe(0);
+        await after.query(
+          "INSERT INTO \"user\" (id, name, email) VALUES ('grant_new_user', 'New', 'new@grant.test')",
+        );
+        await after.query(
+          "INSERT INTO member (id, organization_id, user_id) VALUES ('grant_new_member', 'grant_a', 'grant_new_user')",
+        );
+        expect(
+          (await after.query("SELECT 1 FROM brand_access WHERE member_id = 'grant_new_member'"))
+            .rowCount,
+        ).toBe(0);
+        await expect(
+          after.query(
+            "INSERT INTO brand_access (org_id, brand_id, member_id) VALUES ('grant_a', $1, 'grant_member_b')",
+            [firstBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+        await expect(
+          after.query(
+            "INSERT INTO brand_access (org_id, brand_id, member_id) VALUES ('grant_a', $1, 'grant_new_member')",
+            [secondBrand],
+          ),
+        ).rejects.toMatchObject({ code: "23503" });
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("keeps historical image revisions null while defaulting new posts to zero", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0064_amusing_unus");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let brandId!: string;
+      let historicalId!: string;
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('images_legacy', 'Images legacy', 'images-legacy')",
+        );
+        brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('images_legacy', 'Legacy brand') RETURNING id",
+          )
+        ).rows[0]?.id as string;
+        historicalId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, body) VALUES ('images_legacy', $1, 'Historical body') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id as string;
+      } finally {
+        await pool.end();
+      }
+
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const historical = await after.query<{ images_revision: number | null }>(
+          "SELECT images_revision FROM content_items WHERE id = $1",
+          [historicalId],
+        );
+        expect(historical.rows[0]?.images_revision).toBeNull();
+        const inserted = await after.query<{ images_revision: number }>(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('images_legacy', $1, 'New body') RETURNING images_revision",
+          [brandId],
+        );
+        expect(inserted.rows[0]?.images_revision).toBe(0);
       } finally {
         await after.end();
       }

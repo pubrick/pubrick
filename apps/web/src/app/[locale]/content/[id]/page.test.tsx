@@ -34,6 +34,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // Editorial notes exercise their own fetch and paging in editorial-notes.test.
 // Keep these page tests focused on publishing and version actions.
 vi.mock("./editorial-notes", () => ({ EditorialNotes: () => null }));
+vi.mock("./claim-evidence", () => ({ ClaimEvidence: () => null }));
 
 // Imported after the mock so this binding is the mocked export.
 import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
@@ -47,6 +48,8 @@ type Adaptation = {
   contentItemId: string;
   channelId: string;
   body: string | null;
+  hashtags: string[];
+  cta: string | null;
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
@@ -68,6 +71,8 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  archivedFromStatus: ContentStatus | null;
+  isSafeToDelete: boolean;
   origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
@@ -93,6 +98,8 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     contentItemId: "c1",
     channelId: "ch1",
     body: null,
+    hashtags: [],
+    cta: null,
     status: "pending",
     // The api's own rule, in the fixture: the outcome IS the status, except for
     // the one value the column cannot hold. A test that wants `unknown` says so
@@ -125,6 +132,8 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
     title: "Launch post",
     body: "Hello world",
     status: "draft" as ContentStatus,
+    archivedFromStatus: null as ContentStatus | null,
+    isSafeToDelete: true,
     origin: "human" as ContentOrigin,
     createdAt: "2026-08-01T00:00:00.000Z",
     updatedAt: "2026-08-01T00:00:00.000Z",
@@ -215,6 +224,8 @@ function installBaseHandlers(
     }
 
     if (method === "GET" && path === `/api/content/${served.current.id}`) return served.current;
+    if (method === "GET" && path === `/api/content/${served.current.id}/images`)
+      return { images: [], revision: 0 };
     if (method === "GET" && path === `/api/content/${served.current.id}/client-review-link`)
       return { status: "none", expiresAt: null, reviewedAt: null, comment: null };
     if (method === "GET" && path.startsWith("/api/channels")) return channels;
@@ -820,6 +831,158 @@ describe("reject (Step 4)", () => {
   });
 });
 
+describe("archive and restore", () => {
+  it("archives a quiet draft and restores its editing controls", async () => {
+    const served = {
+      current: makeItem({ status: "draft", adaptations: [makeAdaptation()] }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/archive") {
+        served.current = { ...served.current, status: "archived", archivedFromStatus: "draft" };
+        return served.current;
+      }
+      if (method === "POST" && path === "/api/content/c1/restore") {
+        served.current = { ...served.current, status: "draft", archivedFromStatus: null };
+        return served.current;
+      }
+      return undefined;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.draft);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.archive }));
+    await screen.findByText(en.Content.status.archived);
+    expect(screen.queryByRole("button", { name: en.Publish.approveNow })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(en.Publish.bodyLabel)).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.saveBody })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.saveOverride })).toBeDisabled();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.restore }));
+    await screen.findByText(en.Content.status.draft);
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled();
+    expect(
+      calls.filter((call) => call.path.endsWith("/archive") || call.path.endsWith("/restore")),
+    ).toMatchObject([
+      { path: "/api/content/c1/archive", method: "POST" },
+      { path: "/api/content/c1/restore", method: "POST" },
+    ]);
+  });
+
+  it("does not offer archive while a delivery is queued", async () => {
+    const served = {
+      current: makeItem({
+        status: "approved",
+        adaptations: [makeAdaptation({ status: "queued" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("button", { name: en.Publish.archive })).toBeDisabled();
+    screen.getByText(en.Publish.archiveActiveHint);
+    expect(calls.some((call) => call.path.endsWith("/archive"))).toBe(false);
+  });
+
+  it("keeps AI proposals and unknown delivery verdicts read-only in the archive", async () => {
+    const body = "AI wrote this draft.";
+    const proposal: RefineProposal = {
+      id: "99999999-9999-4999-8999-999999999999",
+      verb: "shorten",
+      proposal: "A short draft.",
+      reason: "Shorter copy.",
+      start: 0,
+      end: body.length,
+      selectedText: body,
+    };
+    const item = makeItem({
+      status: "archived",
+      archivedFromStatus: "failed",
+      origin: "ai",
+      body,
+      aiVersionBodies: { item: [body], adaptations: {} },
+      refineProposal: proposal,
+      adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
+    });
+    const calls: Call[] = [];
+    installBaseHandlers({ current: item }, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Publish.archivedHint);
+    expect(screen.getByRole("button", { name: en.Publish.refine })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineAccept })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineRetry })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.refineDiscard })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+    expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before permanently deleting an archived draft", async () => {
+    const item = makeItem({
+      status: "archived",
+      archivedFromStatus: "draft",
+      adaptations: [makeAdaptation()],
+    });
+    installBaseHandlers({ current: item }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.deleteTitle });
+    screen.getByText(en.Publish.deleteBody);
+    expect(
+      mockApiVoid.mock.calls.some(
+        ([path, init]) => path === "/api/content/c1" && init?.method === "DELETE",
+      ),
+    ).toBe(false);
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Publish.delete }));
+
+    await waitFor(() =>
+      expect(mockApiVoid).toHaveBeenCalledWith("/api/content/c1", { method: "DELETE" }),
+    );
+    expect(routerMock.replace).toHaveBeenCalledWith("/en/content");
+  });
+
+  it("keeps deletion confirmation open until the request settles", async () => {
+    const item = makeItem({ status: "archived", archivedFromStatus: "draft" });
+    installBaseHandlers({ current: item }, []);
+    let releaseDelete: (() => void) | undefined;
+    const pendingDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    mockApiVoid.mockImplementation(async (path, init) => {
+      if (path === "/api/content/c1" && init?.method === "DELETE") await pendingDelete;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.deleteTitle });
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Publish.delete }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: en.Publish.delete })).toBeDisabled(),
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: en.Ui.close }));
+    expect(screen.getByRole("dialog", { name: en.Publish.deleteTitle })).toBeInTheDocument();
+    releaseDelete?.();
+    await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/content"));
+  });
+
+  it("hides permanent deletion when delivery provenance is uncertain or a run is retained", async () => {
+    for (const override of [{ isSafeToDelete: false }, { runId: "retained-run" }]) {
+      installBaseHandlers(
+        { current: makeItem({ status: "archived", archivedFromStatus: "draft", ...override }) },
+        [],
+      );
+      const view = await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByText(en.Publish.archivedHint);
+      expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+});
+
 describe("buttons disabled when published (Step 5)", () => {
   it("disables approve/reject and issues no request when clicked", async () => {
     const served = { current: makeItem({ status: "published" }) };
@@ -895,6 +1058,183 @@ describe("restoring saved text", () => {
 });
 
 describe("per-channel override (Step 6)", () => {
+  it("previews the exact hashtag suffix and keeps CTA outside the sent text", async () => {
+    const adaptation = makeAdaptation({ body: "Saved text" });
+    const served = { current: makeItem({ adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) =>
+      method === "PATCH" && path === "/api/content/c1/adaptations/a1" ? adaptation : undefined,
+    );
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.hashtagsLabel }), {
+      target: { value: " #new product, launch" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.ctaLabel }), {
+      target: { value: "Ask a question" },
+    });
+    const preview = screen.getByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    expect(
+      within(preview).getByText(
+        (_, element) =>
+          element?.tagName === "P" && element.textContent === "Saved text\n\n#new_product #launch",
+      ),
+    ).toBeVisible();
+    expect(within(preview).queryByText("Ask a question")).toBeNull();
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const saved = calls.find(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(saved?.body ?? "{}")).toEqual({
+      hashtags: ["new_product", "launch"],
+      expectedHashtags: [],
+      cta: "Ask a question",
+      expectedCta: null,
+    });
+  });
+
+  it("saves only the changed CTA with the editor's original comparison value", async () => {
+    const adaptation = makeAdaptation({
+      body: "Saved text\n\n#news",
+      hashtags: ["news"],
+      cta: null,
+    });
+    const served = { current: makeItem({ adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) =>
+      method === "PATCH" && path === "/api/content/c1/adaptations/a1" ? adaptation : undefined,
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.ctaLabel }), {
+      target: { value: "Ask a question" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const saved = calls.find(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(saved?.body ?? "{}")).toEqual({ cta: "Ask a question", expectedCta: null });
+  });
+
+  it("keeps a newly materialized override in the editor after the master changes", async () => {
+    let adaptation = makeAdaptation();
+    const served = { current: makeItem({ body: "Original master", adaptations: [adaptation] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method, init) => {
+      if (method === "PATCH" && path === "/api/content/c1/adaptations/a1") {
+        const payload = JSON.parse(String(init?.body)) as { body?: string; cta?: string };
+        adaptation = {
+          ...adaptation,
+          body: adaptation.body ?? "Original master\n\n#news",
+          hashtags: ["news"],
+          cta: payload.cta ?? adaptation.cta,
+        };
+        served.current = { ...served.current, adaptations: [adaptation] };
+        return adaptation;
+      }
+      if (method === "PATCH" && path === "/api/content/c1") {
+        served.current = {
+          ...served.current,
+          body: (JSON.parse(String(init?.body)) as { body: string }).body,
+        };
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.hashtagsLabel }), {
+      target: { value: "news" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const override = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    await waitFor(() => expect(override).toHaveValue("Original master"));
+
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.bodyLabel }), {
+      target: { value: "Revised master" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    const preview = screen.getByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    await waitFor(() =>
+      expect(
+        within(preview).getByText(
+          (_, element) =>
+            element?.tagName === "P" && element.textContent === "Original master\n\n#news",
+        ),
+      ).toBeVisible(),
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: en.Publish.ctaLabel }), {
+      target: { value: "Ask a question" },
+    });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const channelPatches = calls.filter(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(channelPatches[1]?.body ?? "{}")).toEqual({
+      cta: "Ask a question",
+      expectedCta: null,
+    });
+  });
+
+  it("keeps edits typed during a channel save and uses the saved response as their baseline", async () => {
+    const original = makeAdaptation({ body: "Saved text" });
+    const persisted = makeAdaptation({
+      body: "Saved text\n\n#news",
+      hashtags: ["news"],
+      cta: "First CTA",
+    });
+    const served = { current: makeItem({ adaptations: [original] }) };
+    const calls: Call[] = [];
+    let finishPatch: ((value: Adaptation) => void) | undefined;
+    const pendingPatch = new Promise<Adaptation>((resolve) => {
+      finishPatch = resolve;
+    });
+    let patchCount = 0;
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method !== "PATCH" || path !== "/api/content/c1/adaptations/a1") return undefined;
+      patchCount += 1;
+      return patchCount === 1 ? pendingPatch : persisted;
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Publish.channelMetadata));
+    const override = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    const tags = screen.getByRole("textbox", { name: en.Publish.hashtagsLabel });
+    const cta = screen.getByRole("textbox", { name: en.Publish.ctaLabel });
+    fireEvent.change(tags, { target: { value: "news" } });
+    fireEvent.change(cta, { target: { value: "First CTA" } });
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    await waitFor(() => expect(patchCount).toBe(1));
+
+    fireEvent.change(override, { target: { value: "Typed while saving" } });
+    fireEvent.change(tags, { target: { value: "later" } });
+    fireEvent.change(cta, { target: { value: "Second CTA" } });
+    served.current = { ...served.current, adaptations: [persisted] };
+    await act(async () => finishPatch?.(persisted));
+    expect(override).toHaveValue("Typed while saving");
+    expect(tags).toHaveValue("later");
+    expect(cta).toHaveValue("Second CTA");
+
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveOverride }));
+    const channelPatches = calls.filter(
+      (call) => call.method === "PATCH" && call.path.endsWith("/adaptations/a1"),
+    );
+    expect(JSON.parse(channelPatches[1]?.body ?? "{}")).toEqual({
+      body: "Typed while saving",
+      hashtags: ["later"],
+      expectedHashtags: ["news"],
+      cta: "Second CTA",
+      expectedCta: "First CTA",
+    });
+  });
+
   it("previews unsaved override text literally, with preserved line breaks and no HTML rendering", async () => {
     const served = { current: makeItem({ adaptations: [makeAdaptation({ body: "Saved text" })] }) };
     installBaseHandlers(served, []);
@@ -3424,6 +3764,42 @@ describe("a post whose channels disagreed", () => {
 });
 
 describe("VC.ru manual publication", () => {
+  it("refuses a package if another editor withdrew manual approval before the click", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
+    const current = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Reviewed VC article." })],
+    });
+    const served = { current };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, undefined, [manualChannel]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const download = await within(resultsList()).findByRole("button", {
+      name: en.Publish.downloadVcPackage,
+    });
+    served.current = makeItem({
+      ...current,
+      status: "rejected",
+      adaptations: [makeAdaptation({ status: "pending", body: "Changed in another tab." })],
+    });
+    const beforeDownload = calls.length;
+
+    await userEvent.setup().click(download);
+
+    expect(await screen.findByText(en.Publish.vcPackageNotReady)).toHaveAttribute("role", "alert");
+    expect(
+      calls
+        .slice(beforeDownload)
+        .filter((call) => ["/api/content/c1/images", "/api/content/c1"].includes(call.path))
+        .map((call) => call.path),
+    ).toEqual(["/api/content/c1/images", "/api/content/c1"]);
+    expect(mockApi).toHaveBeenCalledWith("/api/content/c1", { cache: "no-store" });
+    expect(
+      within(resultsList()).queryByRole("button", { name: en.Publish.downloadVcPackage }),
+    ).toBeNull();
+  });
+
   it("exports the reviewed override and records a user-supplied URL only after approval", async () => {
     const manualChannel: Channel = { id: "ch1", platform: "vc_ru", name: "VC blog" };
     const current = makeItem({

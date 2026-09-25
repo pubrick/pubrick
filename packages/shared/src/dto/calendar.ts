@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { MAX_BRIEF_LENGTH } from "./runs.js";
+import {
+  CONTENT_TYPES,
+  contentTypeRequiresMaterial,
+  MAX_BRIEF_LENGTH,
+  supportsInlineImages,
+} from "./runs.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 export const CALENDAR_SLOT_ERRORS = ["channels_missing", "invalid_input", "topic_changed"] as const;
@@ -7,6 +12,7 @@ export type CalendarSlotError = (typeof CALENDAR_SLOT_ERRORS)[number];
 
 const slotFields = z.object({
   scheduledAt: z.iso.datetime({ offset: true }),
+  contentType: z.enum(CONTENT_TYPES).optional(),
   brief: z
     .string()
     .trim()
@@ -26,6 +32,7 @@ const slotFields = z.object({
     }),
   /** One optional BYOK image call when the planned draft is generated. */
   generateCover: z.boolean().optional(),
+  generateInlineImages: z.boolean().optional(),
   notes: z
     .string()
     .max(2000)
@@ -38,7 +45,15 @@ const slotFields = z.object({
 
 export const calendarSlotCreateSchema = slotFields
   .extend({ brandId: z.uuid() })
-  .refine((v) => v.topicId || v.brief, { message: "Brief or approved topic is required" });
+  .refine((v) => v.topicId || v.brief, { message: "Brief or approved topic is required" })
+  .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
+    message: "this format requires source material",
+    path: ["contentType"],
+  })
+  .refine((v) => !v.generateInlineImages || supportsInlineImages(v.contentType), {
+    message: "inline images require an article format",
+    path: ["generateInlineImages"],
+  });
 export const calendarSlotsBulkCreateSchema = z.object({
   brandId: z.uuid(),
   slots: z

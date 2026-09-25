@@ -167,9 +167,15 @@ export type RunContext = {
 /** What one finished run writes: the master body plus one body per channel. */
 export type TerminalPayload = {
   body: string;
-  adaptations: ReadonlyArray<{ channelId: string; body: string }>;
+  adaptations: ReadonlyArray<{
+    channelId: string;
+    body: string;
+    hashtags?: string[];
+    cta?: string | null;
+  }>;
   linkPolicyWebsite?: string | null;
   coverMediaId?: string | null;
+  inlineImages?: ReadonlyArray<{ mediaId: string; afterParagraph: number; alt: string }>;
 };
 
 /**
@@ -759,8 +765,13 @@ export class GenerateRepository {
     }
   }
 
-  /** Save a generated cover in the same shared media volume the API serves. */
-  async saveGeneratedCover(orgId: string, brandId: string, bytes: Buffer): Promise<string> {
+  /** Save a generated image in the same shared media volume the API serves. */
+  async saveGeneratedImage(
+    orgId: string,
+    brandId: string,
+    bytes: Buffer,
+    placement: "cover" | "inline",
+  ): Promise<string> {
     if (bytes.length === 0 || bytes.length > 10 * 1024 * 1024) {
       throw new Error("Gemini returned an image outside the 10 MB media limit");
     }
@@ -775,7 +786,7 @@ export class GenerateRepository {
       .jpeg({ quality: 85, mozjpeg: true })
       .toBuffer({ resolveWithObject: true });
     if (output.data.length > 10 * 1024 * 1024) {
-      throw new Error("Normalized cover exceeded the 10 MB media limit");
+      throw new Error("Normalized image exceeded the 10 MB media limit");
     }
     const id = randomUUID();
     const directory = process.env.MEDIA_STORAGE_DIR ?? path.resolve(process.cwd(), ".data/media");
@@ -787,7 +798,7 @@ export class GenerateRepository {
         id,
         orgId,
         brandId,
-        name: "Generated draft cover",
+        name: placement === "cover" ? "Generated draft cover" : "Generated inline illustration",
         mimeType: "image/jpeg",
         width: output.info.width,
         height: output.info.height,
@@ -1046,6 +1057,41 @@ export class GenerateRepository {
         const contentItemId = items[0]?.id;
         if (contentItemId === undefined) throw new Error("content item insert returned no row");
 
+        if (payload.inlineImages?.length) {
+          // Media may have been deleted from the library while generation ran.
+          // Pin only still-live assets belonging to this brand, then attach
+          // them in the same transaction as the new draft and its versions.
+          const liveMedia = await tx
+            .select({ id: schema.mediaAssets.id })
+            .from(schema.mediaAssets)
+            .where(
+              and(
+                eq(schema.mediaAssets.orgId, orgId),
+                eq(schema.mediaAssets.brandId, brandId),
+                inArray(
+                  schema.mediaAssets.id,
+                  payload.inlineImages.map((image) => image.mediaId),
+                ),
+              ),
+            )
+            .for("key share");
+          const survivingMedia = new Set(liveMedia.map((media) => media.id));
+          const images = payload.inlineImages.filter((image) => survivingMedia.has(image.mediaId));
+          if (images.length) {
+            await tx.insert(schema.contentImageSlots).values(
+              images.map((image) => ({
+                orgId,
+                brandId,
+                contentItemId,
+                mediaId: image.mediaId,
+                afterParagraph: image.afterParagraph,
+                alt: image.alt,
+                needsReview: true,
+              })),
+            );
+          }
+        }
+
         const inserted = await tx
           .insert(schema.adaptations)
           .values(
@@ -1054,13 +1100,20 @@ export class GenerateRepository {
               contentItemId,
               channelId: adaptation.channelId,
               body: adaptation.body,
+              hashtags: adaptation.hashtags ?? [],
+              cta: adaptation.cta ?? null,
               status: "pending" as const,
               // Set explicitly: the column DEFAULTS to `human`, and the publish
               // gate reads it to decide whether this text needs a human's eyes.
               origin: "ai" as const,
             })),
           )
-          .returning({ id: schema.adaptations.id, body: schema.adaptations.body });
+          .returning({
+            id: schema.adaptations.id,
+            body: schema.adaptations.body,
+            hashtags: schema.adaptations.hashtags,
+            cta: schema.adaptations.cta,
+          });
 
         // The provenance reference, for the item and for every adaptation. All of
         // them share this transaction's `now()`, which is what lets the API's
@@ -1079,6 +1132,8 @@ export class GenerateRepository {
             contentItemId,
             adaptationId: adaptation.id,
             body: adaptation.body ?? payload.body,
+            hashtags: adaptation.hashtags,
+            cta: adaptation.cta,
             origin: "ai" as const,
             runId,
           })),

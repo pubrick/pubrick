@@ -1,10 +1,14 @@
 "use client";
 
 import {
+  CONTENT_STATUSES,
   PROMPT_ROLES,
+  type PromptDecisionHistoryDto,
   type PromptRevisionDto,
+  type PromptRevisionUsageDto,
   type PromptRole,
   promptRevisionCreateSchema,
+  RUN_STATUSES,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
@@ -29,6 +33,15 @@ export default function PromptsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [usageRevisionId, setUsageRevisionId] = useState<string | null>(null);
+  const [usageDays, setUsageDays] = useState<7 | 30 | 90>(30);
+  const [usage, setUsage] = useState<PromptRevisionUsageDto | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [decisionRevisionId, setDecisionRevisionId] = useState<string | null>(null);
+  const [decisions, setDecisions] = useState<PromptDecisionHistoryDto | null>(null);
+  const [decisionsError, setDecisionsError] = useState<string | null>(null);
+  const [moreBusy, setMoreBusy] = useState(false);
+  const decisionRequestSequence = useRef(0);
   const requestSequence = useRef(0);
 
   const load = useCallback(async () => {
@@ -53,6 +66,64 @@ export default function PromptsPage() {
       requestSequence.current += 1;
     };
   }, [load]);
+
+  useEffect(() => {
+    if (!usageRevisionId) return;
+    let current = true;
+    setUsage(null);
+    setUsageError(null);
+    void api<PromptRevisionUsageDto>(
+      `/api/prompts/${role}/revisions/${usageRevisionId}/usage?days=${usageDays}`,
+    )
+      .then((result) => {
+        if (current) setUsage(result);
+      })
+      .catch(() => {
+        if (current) setUsageError(t("usageError"));
+      });
+    return () => {
+      current = false;
+    };
+  }, [role, usageRevisionId, usageDays, t]);
+
+  useEffect(() => {
+    const request = ++decisionRequestSequence.current;
+    setDecisions(null);
+    setDecisionsError(null);
+    setMoreBusy(false);
+    if (!decisionRevisionId) return;
+    void api<PromptDecisionHistoryDto>(
+      `/api/prompts/${role}/revisions/${decisionRevisionId}/decisions?days=${usageDays}`,
+    )
+      .then((result) => {
+        if (request === decisionRequestSequence.current) setDecisions(result);
+      })
+      .catch(() => {
+        if (request === decisionRequestSequence.current) setDecisionsError(t("decisionsError"));
+      });
+    return () => {
+      decisionRequestSequence.current += 1;
+    };
+  }, [role, decisionRevisionId, usageDays, t]);
+
+  async function loadMoreDecisions() {
+    if (!decisions?.nextCursor || !decisionRevisionId || moreBusy) return;
+    const request = decisionRequestSequence.current;
+    setMoreBusy(true);
+    setDecisionsError(null);
+    try {
+      const page = await api<PromptDecisionHistoryDto>(
+        `/api/prompts/${role}/revisions/${decisionRevisionId}/decisions?days=${usageDays}&cursor=${decisions.nextCursor}`,
+      );
+      if (request === decisionRequestSequence.current) {
+        setDecisions({ ...page, rows: [...decisions.rows, ...page.rows] });
+      }
+    } catch {
+      if (request === decisionRequestSequence.current) setDecisionsError(t("decisionsError"));
+    } finally {
+      if (request === decisionRequestSequence.current) setMoreBusy(false);
+    }
+  }
 
   async function save(nextGuidance: string) {
     const parsed = promptRevisionCreateSchema.safeParse({ guidance: nextGuidance });
@@ -116,7 +187,14 @@ export default function PromptsPage() {
             label={t("role")}
             value={role}
             disabled={busy}
-            onChange={(event) => setRole(event.target.value as PromptRole)}
+            onChange={(event) => {
+              setUsageRevisionId(null);
+              setUsage(null);
+              setDecisionRevisionId(null);
+              setDecisions(null);
+              setMoreBusy(false);
+              setRole(event.target.value as PromptRole);
+            }}
           >
             {PROMPT_ROLES.map((value) => (
               <option key={value} value={value}>
@@ -146,7 +224,20 @@ export default function PromptsPage() {
           )}
         </form>
       </Card>
-      <h2 className="mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-fg">{t("history")}</h2>
+        <Select
+          label={t("usageWindow")}
+          value={usageDays}
+          onChange={(event) => setUsageDays(Number(event.target.value) as 7 | 30 | 90)}
+        >
+          {[7, 30, 90].map((days) => (
+            <option key={days} value={days}>
+              {t("days", { days })}
+            </option>
+          ))}
+        </Select>
+      </div>
       <Card padded={false}>
         {history === null ? (
           <div className="p-4">
@@ -161,19 +252,162 @@ export default function PromptsPage() {
               title={t("version", { version: revision.version })}
               meta={new Date(revision.createdAt).toLocaleString(locale)}
               trailing={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={busy || revision.id === history[0]?.id}
-                  onClick={() => void save(revision.guidance)}
-                >
-                  {t("restore")}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setUsageRevisionId(revision.id)}
+                    aria-pressed={usageRevisionId === revision.id}
+                  >
+                    {t("usage")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setDecisionRevisionId(revision.id)}
+                    aria-pressed={decisionRevisionId === revision.id}
+                  >
+                    {t("decisions")}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy || revision.id === history[0]?.id}
+                    onClick={() => void save(revision.guidance)}
+                  >
+                    {t("restore")}
+                  </Button>
+                </div>
               }
             />
           ))
         )}
       </Card>
+      {usageRevisionId && (
+        <Card className="mt-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-fg">
+              {t("usageTitle", {
+                version:
+                  history?.find((revision) => revision.id === usageRevisionId)?.version ?? "?",
+              })}
+            </h2>
+          </div>
+          <p className="text-sm text-fg-secondary">{t("usageCaveat")}</p>
+          {usageError ? (
+            <p role="alert" className="text-sm text-danger">
+              {usageError}
+            </p>
+          ) : usage === null ? (
+            <Skeleton lines={3} />
+          ) : (
+            <div className="space-y-3 text-sm text-fg">
+              <p>{t("runCount", { count: usage.runCount })}</p>
+              {usage.runCount === 0 ? (
+                <p className="text-fg-secondary">{t("noUsage")}</p>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="font-medium">{t("runStatusTitle")}</h3>
+                    <ul className="mt-1 space-y-1 text-fg-secondary">
+                      {RUN_STATUSES.filter((status) => (usage.runsByStatus[status] ?? 0) > 0).map(
+                        (status) => (
+                          <li key={status}>
+                            {t(`runStatuses.${status}`)}: {usage.runsByStatus[status]}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                  <div>
+                    <h3 className="font-medium">{t("itemStatusTitle")}</h3>
+                    <ul className="mt-1 space-y-1 text-fg-secondary">
+                      {CONTENT_STATUSES.filter(
+                        (status) => (usage.currentItemStatuses[status] ?? 0) > 0,
+                      ).map((status) => (
+                        <li key={status}>
+                          {t(`itemStatuses.${status}`)}: {usage.currentItemStatuses[status]}
+                        </li>
+                      ))}
+                      {usage.withoutCurrentItem > 0 && (
+                        <li>
+                          {t("withoutCurrentItem")}: {usage.withoutCurrentItem}
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+      {decisionRevisionId && (
+        <Card className="mt-5 space-y-4">
+          <h2 className="text-lg font-semibold text-fg">
+            {t("decisionsTitle", {
+              version:
+                history?.find((revision) => revision.id === decisionRevisionId)?.version ?? "?",
+            })}
+          </h2>
+          <p className="text-sm text-fg-secondary">{t("decisionsCaveat")}</p>
+          <p className="text-xs text-fg-secondary">{t("decisionsWindow", { days: usageDays })}</p>
+          {decisionsError && (
+            <p role="alert" className="text-sm text-danger">
+              {decisionsError}
+            </p>
+          )}
+          {decisions === null ? (
+            !decisionsError && <Skeleton lines={3} />
+          ) : (
+            <div className="space-y-3 text-sm">
+              <p>
+                {t("decisionCounts", {
+                  approved: decisions.counts.approved,
+                  rejected: decisions.counts.rejected,
+                })}
+              </p>
+              {decisions.rows.length === 0 ? (
+                <p className="text-fg-secondary">{t("noDecisions")}</p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {decisions.rows.map((decision) => (
+                    <li
+                      key={decision.id}
+                      className="flex flex-wrap items-center justify-between gap-2 py-2"
+                    >
+                      <span>
+                        {t(`decisionVerdicts.${decision.verdict}`)} ·{" "}
+                        {new Date(decision.decidedAt).toLocaleString(locale)}
+                      </span>
+                      {decision.itemExists ? (
+                        <Link
+                          href={`/${locale}/content/${decision.contentItemId}`}
+                          className="text-fg-secondary underline"
+                        >
+                          {t("openDecisionDraft")}
+                        </Link>
+                      ) : (
+                        <span className="text-fg-secondary">{t("removedDecisionDraft")}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {decisions.nextCursor && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={moreBusy}
+                  onClick={() => void loadMoreDecisions()}
+                >
+                  {t("loadMoreDecisions")}
+                </Button>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
     </AppShell>
   );
 }

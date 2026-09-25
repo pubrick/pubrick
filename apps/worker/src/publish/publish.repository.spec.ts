@@ -1084,6 +1084,24 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
     expect(await repo.markPublishing("some-other-org", mine, null)).toBeNull();
   });
 
+  it("refuses a stale queued job whose parent has been archived", async () => {
+    const adaptationId = await seedAdaptation("queued");
+    const [adaptation] = await db
+      .select({ contentItemId: schema.adaptations.contentItemId })
+      .from(schema.adaptations)
+      .where(eq(schema.adaptations.id, adaptationId));
+    await db
+      .update(schema.contentItems)
+      .set({ status: "archived", archivedFromStatus: "approved" })
+      .where(eq(schema.contentItems.id, adaptation?.contentItemId as string));
+
+    expect(await repo.markPublishing(orgId, adaptationId, null)).toBeNull();
+    expect(await adaptationRow(adaptationId)).toMatchObject({
+      status: "queued",
+      attemptCount: 0,
+    });
+  });
+
   /**
    * THE `load()` → CLAIM WINDOW, which is the one the future-slot arm cannot
    * close by itself.

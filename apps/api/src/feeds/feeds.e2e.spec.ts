@@ -3,6 +3,7 @@ import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
 import { eq } from "drizzle-orm";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
+import sharp from "sharp";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -58,7 +59,7 @@ describe.skipIf(!url)("public syndication feed", () => {
     await stranger.agent.post(path).expect(404);
 
     const enabled = await owner.agent.post(path).expect(201);
-    expect((await stranger.agent.get(path).expect(200)).body).toEqual(disabled.body);
+    await stranger.agent.get(path).expect(404);
     const feedUrl = new URL(enabled.body.url as string);
     expect(feedUrl.pathname).toMatch(new RegExp(`^/api/feeds/${owner.orgId}/[^/]+/rss$`));
     const publicPath = feedUrl.pathname;
@@ -126,5 +127,77 @@ describe.skipIf(!url)("public syndication feed", () => {
     expect(renewed.body.url).not.toBe(enabled.body.url);
     expect(renewed.body.entries).toEqual([]);
     await db.delete(schema.contentItems).where(eq(schema.contentItems.id, live.id));
+  });
+
+  it("snapshots inline images, serves only included images, and revokes public access", async () => {
+    const owner = await member();
+    const stranger = await member();
+    const feed = await owner.agent.post(`/api/brands/${owner.brandId}/feed`).expect(201);
+    const base = new URL(feed.body.url as string).pathname.replace(/\/rss$/, "");
+    const image = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "#bf5930" },
+    })
+      .png()
+      .toBuffer();
+    const upload = await owner.agent
+      .post(`/api/media?brandId=${owner.brandId}`)
+      .attach("file", image, { filename: "figure.png", contentType: "image/png" })
+      .expect(201);
+    await owner.agent.get(`/api/media/${upload.body.id}/file`).expect(200);
+    const item = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId: owner.orgId,
+        brandId: owner.brandId,
+        status: "published",
+        title: "Illustrated article",
+        body: "First paragraph\n\nSecond paragraph",
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!item[0]) throw new Error("Content fixture was not inserted");
+    const itemId = item[0].id;
+    const slot = await db
+      .insert(schema.contentImageSlots)
+      .values({
+        orgId: owner.orgId,
+        brandId: owner.brandId,
+        contentItemId: itemId,
+        mediaId: upload.body.id as string,
+        afterParagraph: 0,
+        alt: 'A "copper" square',
+        caption: "Caption <script>unsafe</script>",
+      })
+      .returning({ id: schema.contentImageSlots.id });
+
+    await owner.agent.post(`/api/brands/${owner.brandId}/feed/items/${itemId}`).expect(201);
+    const rss = await request(app.getHttpServer()).get(`${base}/rss`).expect(200);
+    expect(XMLValidator.validate(rss.text)).toBe(true);
+    expect(rss.text).toContain("/images/");
+    const entry = new XMLParser({ ignoreAttributes: false }).parse(rss.text).rss.channel.item;
+    const articlePath = new URL(entry.link as string).pathname;
+    const article = await request(app.getHttpServer()).get(articlePath).expect(200);
+    expect(article.text).toContain('alt="A &quot;copper&quot; square"');
+    expect(article.text).toContain("Caption &lt;script&gt;unsafe&lt;/script&gt;");
+    expect(article.text).not.toContain("<script>");
+    expect(article.text.indexOf("First paragraph")).toBeLessThan(article.text.indexOf("<figure>"));
+    expect(article.text.indexOf("<figure>")).toBeLessThan(article.text.indexOf("Second paragraph"));
+    const imagePath = /src="([^"]+\/images\/[^/"]+)"/.exec(article.text)?.[1];
+    if (!imagePath) throw new Error("Public article did not include its image");
+    const publicImagePath = new URL(imagePath).pathname;
+    const binary = await request(app.getHttpServer()).get(publicImagePath).expect(200);
+    expect(binary.headers["content-type"]).toMatch(/^image\/jpeg/);
+    expect(binary.headers["x-content-type-options"]).toBe("nosniff");
+    await request(app.getHttpServer())
+      .get(publicImagePath.replace(owner.orgId, stranger.orgId))
+      .expect(404);
+
+    if (!slot[0]) throw new Error("Image slot fixture was not inserted");
+    await db.delete(schema.contentImageSlots).where(eq(schema.contentImageSlots.id, slot[0].id));
+    const unchanged = await request(app.getHttpServer()).get(articlePath).expect(200);
+    expect(unchanged.text).toContain(publicImagePath);
+    await owner.agent.delete(`/api/media/${upload.body.id}`).expect(409);
+    await owner.agent.delete(`/api/brands/${owner.brandId}/feed/items/${itemId}`).expect(200);
+    await request(app.getHttpServer()).get(publicImagePath).expect(404);
+    await owner.agent.delete(`/api/media/${upload.body.id}`).expect(204);
   });
 });

@@ -25,6 +25,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { analysisAdmissions } from "./analysis-admissions.js";
 import { organization, user } from "./auth.js";
 import { brands, channels } from "./content.js";
 import { adaptations, contentItems } from "./content-items.js";
@@ -188,6 +189,10 @@ export const usageLedger = pgTable(
   "usage_ledger",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Links new comment-analysis calls to their prepaid admission; null on legacy rows. */
+    analysisAdmissionId: uuid("analysis_admission_id").references(() => analysisAdmissions.id, {
+      onDelete: "set null",
+    }),
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
@@ -247,6 +252,9 @@ export const usageLedger = pgTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => [
+    uniqueIndex("usage_ledger_analysis_admission_idx")
+      .on(t.analysisAdmissionId)
+      .where(sql`${t.analysisAdmissionId} is not null`),
     index("usage_ledger_org_id_idx").on(t.orgId),
     /** The finished draft shows a cost summed over one run's rows. */
     index("usage_ledger_run_id_idx").on(t.runId),
@@ -318,6 +326,8 @@ export const contentVersions = pgTable(
     adaptationId: uuid("adaptation_id").references(() => adaptations.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
     title: text("title"),
+    hashtags: text("hashtags").array().notNull().default([]),
+    cta: text("cta"),
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull(),
     /**
      * Whole body or refine fragment. Defaulted so every row written before this

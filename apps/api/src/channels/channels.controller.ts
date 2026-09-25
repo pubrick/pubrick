@@ -18,7 +18,9 @@ import {
   channelUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
+import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ChannelsRepository } from "./channels.repository";
 
@@ -28,14 +30,17 @@ export class ChannelsController {
   constructor(private readonly channels: ChannelsRepository) {}
 
   @Get()
+  @BrandScope({ kind: "org-list" })
   list(
     @OrgId() orgId: string,
+    @VisibleBrandIds() visibleBrandIds: string[] | null,
     @Query("brandId", new ParseUUIDPipe({ optional: true })) brandId?: string,
   ) {
-    return this.channels.list(orgId, brandId);
+    return this.channels.list(orgId, brandId, visibleBrandIds);
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(channelCreateSchema)) body: ChannelCreate,
@@ -53,6 +58,7 @@ export class ChannelsController {
    * part of a response.
    */
   @Patch(":id")
+  @BrandScope({ kind: "resource", resource: "channel" })
   update(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,
@@ -62,11 +68,13 @@ export class ChannelsController {
   }
 
   @Delete(":id")
+  @BrandScope({ kind: "resource", resource: "channel" })
   delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.channels.delete(orgId, id);
   }
 
   @Post(":id/test")
+  @BrandScope({ kind: "resource", resource: "channel" })
   @HttpCode(200)
   test(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.channels.verify(orgId, id);

@@ -1,10 +1,23 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
+  AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE,
+  AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE,
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
   type GenerateJob,
+  MANUAL_AUTOPILOT_DLQ,
+  MANUAL_AUTOPILOT_QUEUE,
+  MANUAL_AUTOPILOT_QUEUE_OPTIONS,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualAutopilotJob,
+  type ManualTopicPlanJob,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -33,6 +46,8 @@ import {
 import type { PgBoss } from "pg-boss";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { TopicPlannerService } from "./calendar/topic-planner.service";
+import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
@@ -42,6 +57,7 @@ import { PublishService } from "./publish/publish.service";
 import { RelevanceService } from "./relevance/relevance.service";
 import { RssService } from "./rss/rss.service";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
@@ -137,6 +153,9 @@ export class QueueService {
     @Optional() private readonly metrics?: MetricsService,
     @Optional() private readonly knowledgeAutoIndex?: KnowledgeAutoIndexService,
     @Optional() private readonly webhooks?: WebhooksService,
+    @Optional() private readonly suggestionsScan?: SuggestionsScanService,
+    @Optional() private readonly topicPlanner?: TopicPlannerService,
+    @Optional() private readonly claimReview?: ClaimReviewService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -154,6 +173,27 @@ export class QueueService {
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
     await this.registerHeartbeat(boss);
+
+    if (this.claimReview && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(CLAIM_REVIEW_DLQ);
+      await boss.createQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+      await boss.updateQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+      await boss.work<ClaimReviewJob>(
+        CLAIM_REVIEW_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.claimReview?.handle(job.data, job.signal);
+        },
+      );
+      await boss.work<ClaimReviewJob>(CLAIM_REVIEW_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.claimReview?.exhausted(job.data);
+      });
+      await boss.createQueue("claim-review-sweep");
+      await boss.schedule("claim-review-sweep", SWEEP_CRON);
+      await boss.work("claim-review-sweep", { batchSize: 1 }, async () => {
+        await this.claimReview?.sweepAbandoned();
+      });
+    }
 
     if (this.notifications && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue("notification-scan");
@@ -245,6 +285,16 @@ export class QueueService {
           if (job) await this.comments?.handle(job.data);
         },
       );
+      await boss.createQueue(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE);
+      await boss.schedule(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE, "0 * * * *");
+      await boss.work(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.comments?.scanAuto(boss);
+      });
+      await boss.createQueue(AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE);
+      await boss.schedule(AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE, "0 * * * *");
+      await boss.work(AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.comments?.scanPublicationsAuto(boss);
+      });
     }
 
     if (this.suggestions && names === DEFAULT_QUEUE_NAMES) {
@@ -265,6 +315,14 @@ export class QueueService {
           if (job) await this.suggestions?.exhausted(job.data);
         },
       );
+    }
+
+    if (this.suggestionsScan && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("topic-suggestions-scan");
+      await boss.schedule("topic-suggestions-scan", "*/15 * * * *");
+      await boss.work("topic-suggestions-scan", { batchSize: 1 }, async () => {
+        await this.suggestionsScan?.scan(boss);
+      });
     }
 
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
@@ -354,11 +412,45 @@ export class QueueService {
         await this.calendar?.scan(boss);
       });
     }
+    if (this.topicPlanner && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue("topic-planning-scan");
+      await boss.schedule("topic-planning-scan", "0 * * * *");
+      await boss.work("topic-planning-scan", { batchSize: 1 }, async () => {
+        await this.topicPlanner?.scan();
+      });
+      await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
+      await boss.work<ManualTopicPlanJob>(
+        MANUAL_TOPIC_PLAN_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.topicPlanner?.planBrand(job.data.orgId, job.data.brandId);
+        },
+      );
+    }
     if (this.autopilot && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(MANUAL_AUTOPILOT_DLQ);
+      await boss.createQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+      await boss.updateQueue(MANUAL_AUTOPILOT_QUEUE, { ...MANUAL_AUTOPILOT_QUEUE_OPTIONS });
+      await boss.work<ManualAutopilotJob>(
+        MANUAL_AUTOPILOT_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.autopilot?.handleManual(boss, job.data);
+        },
+      );
+      await boss.work<ManualAutopilotJob>(MANUAL_AUTOPILOT_DLQ, { batchSize: 1 }, async ([job]) => {
+        if (job) await this.autopilot?.exhausted(job.data);
+      });
+      await boss.createQueue("autopilot-manual-sweep");
+      await boss.schedule("autopilot-manual-sweep", SWEEP_CRON);
+      await boss.work("autopilot-manual-sweep", { batchSize: 1 }, async () => {
+        await this.autopilot?.sweepManual();
+      });
       await boss.createQueue("autopilot-scan");
       await boss.schedule("autopilot-scan", "*/5 * * * *");
-      await boss.work("autopilot-scan", { batchSize: 1 }, async () => {
-        await this.autopilot?.scan(boss);
+      await boss.work("autopilot-scan", { batchSize: 1 }, async ([job]) => {
+        if (job) await this.autopilot?.scan(boss, job.id);
       });
     }
   }

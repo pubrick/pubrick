@@ -10,6 +10,7 @@ import {
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { authClient } from "@/lib/auth-client";
 import { credentialFieldLabel, platformName } from "@/lib/platform";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
@@ -79,6 +80,33 @@ describe("VK automatic metrics setting", () => {
     expect(
       screen.getByRole("button", { name: /Activar métricas automáticas de VK/i }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("brand access navigation", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows team access to workspace managers", async () => {
+    installHandlers([]);
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "admin" }] },
+      isPending: false,
+    } as never);
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(screen.getByRole("link", { name: en.Brands.accessLink })).toHaveAttribute(
+      "href",
+      "/en/brands/b1/access",
+    );
+  });
+
+  it("does not offer access management to ordinary members", async () => {
+    installHandlers([]);
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+      isPending: false,
+    } as never);
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    expect(screen.queryByRole("link", { name: en.Brands.accessLink })).not.toBeInTheDocument();
   });
 });
 

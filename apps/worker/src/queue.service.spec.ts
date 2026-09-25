@@ -1,8 +1,13 @@
 import {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
   PUBLISH_QUEUE_OPTIONS,
@@ -47,6 +52,102 @@ describe("QueueService.registerHeartbeat", () => {
 });
 
 describe("QueueService.registerAll", () => {
+  it("registers advisory reviews only for production queues and passes the expiry signal", async () => {
+    const boss = bossStub();
+    const claimReview = { handle: vi.fn(), exhausted: vi.fn(), sweepAbandoned: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      claimReview as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(CLAIM_REVIEW_DLQ);
+    expect(boss.createQueue).toHaveBeenCalledWith(CLAIM_REVIEW_QUEUE, {
+      ...CLAIM_REVIEW_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(CLAIM_REVIEW_QUEUE, {
+      ...CLAIM_REVIEW_QUEUE_OPTIONS,
+    });
+    const handle = boss.work.mock.calls.find((call) => call[0] === CLAIM_REVIEW_QUEUE)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const exhausted = boss.work.mock.calls.find((call) => call[0] === CLAIM_REVIEW_DLQ)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    const sweep = boss.work.mock.calls.find(
+      (call) => call[0] === "claim-review-sweep",
+    )?.[2] as () => Promise<void>;
+    const signal = new AbortController().signal;
+    const payload = { orgId: "org", reviewId: "review" };
+    await handle([{ data: payload, signal }]);
+    await exhausted([{ data: payload }]);
+    await sweep();
+    expect(claimReview.handle).toHaveBeenCalledWith(payload, signal);
+    expect(claimReview.exhausted).toHaveBeenCalledWith(payload);
+    expect(claimReview.sweepAbandoned).toHaveBeenCalledOnce();
+    boss.work.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.work).not.toHaveBeenCalledWith(
+      CLAIM_REVIEW_QUEUE,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("schedules daily suggestion discovery only for the production queue set", async () => {
+    const boss = bossStub();
+    const scan = { scan: vi.fn() };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scan as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.schedule).toHaveBeenCalledWith("topic-suggestions-scan", "*/15 * * * *");
+    const scanHandler = boss.work.mock.calls.find(
+      (call) => call[0] === "topic-suggestions-scan",
+    )?.[2] as () => Promise<void>;
+    await scanHandler();
+    expect(scan.scan).toHaveBeenCalledWith(boss);
+    boss.schedule.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.schedule).not.toHaveBeenCalledWith("topic-suggestions-scan", expect.any(String));
+  });
+
   it("registers bounded topic suggestions and their exhausted-job handler", async () => {
     const boss = bossStub();
     const suggestions = { handle: vi.fn(), exhausted: vi.fn() };
@@ -160,6 +261,55 @@ describe("QueueService.registerAll", () => {
     )?.[2] as () => Promise<void>;
     await tick();
     expect(calendar.scan).toHaveBeenCalledWith(boss);
+  });
+
+  it("consumes manual topic planning only on production queues", async () => {
+    const boss = bossStub();
+    const planner = { scan: vi.fn(), planBrand: vi.fn().mockResolvedValue(1) };
+    const { publish, generate } = serviceStub();
+    const service = new QueueService(
+      publish as never,
+      generate as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never,
+    );
+    await service.registerAll(boss as never);
+    expect(boss.createQueue).toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, {
+      ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+    });
+    expect(boss.updateQueue).toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, {
+      ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+    });
+    const handler = boss.work.mock.calls.find(
+      (call) => call[0] === MANUAL_TOPIC_PLAN_QUEUE,
+    )?.[2] as (jobs: { data: { orgId: string; brandId: string } }[]) => Promise<void>;
+    await handler([{ data: { orgId: "org", brandId: "brand" } }]);
+    expect(planner.planBrand).toHaveBeenCalledWith("org", "brand");
+
+    boss.createQueue.mockClear();
+    boss.work.mockClear();
+    await service.registerAll(boss as never, {
+      publish: "test-publish",
+      publishDeadLetter: "test-publish-dlq",
+      generate: "test-generate",
+      generateDeadLetter: "test-generate-dlq",
+    });
+    expect(boss.createQueue).not.toHaveBeenCalledWith(MANUAL_TOPIC_PLAN_QUEUE, expect.anything());
+    expect(boss.work).not.toHaveBeenCalledWith(
+      MANUAL_TOPIC_PLAN_QUEUE,
+      expect.anything(),
+      expect.any(Function),
+    );
   });
 
   it("consumes the shared publish queue with the shared options", async () => {

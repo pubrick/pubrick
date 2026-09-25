@@ -28,7 +28,9 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
+import { BrandImport } from "./brand-import";
 
 type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
 /**
@@ -108,6 +110,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const activeMember = organization?.members?.find(
+    (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+  );
+  const canManageAccess = activeMember?.role === "owner" || activeMember?.role === "admin";
   const [brand, setBrand] = useState<Brand | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
@@ -472,6 +480,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <Link href={`/${locale}/brands/${id}/analytics`} className="text-accent underline">
           {tb("analyticsLink")}
         </Link>
+        {canManageAccess && (
+          <Link href={`/${locale}/brands/${id}/access`} className="text-accent underline">
+            {tb("accessLink")}
+          </Link>
+        )}
       </div>
       {error && (
         <p role="alert" className="mb-4 text-sm text-danger">
@@ -491,6 +504,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           >
             {tb("profileEdit")}
           </Button>
+          {brand && <BrandImport brandId={id} onApplied={load} />}
         </div>
         <p className="mb-4 text-sm text-fg-secondary">{tb("descriptionHint")}</p>
         {brand === null ? (

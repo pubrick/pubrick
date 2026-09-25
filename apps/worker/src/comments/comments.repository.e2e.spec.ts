@@ -11,6 +11,7 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
   let eq: typeof import("drizzle-orm").eq;
   const orgId = randomUUID();
   let itemId: string;
+  let brandId: string;
   const itemUrl = "https://t.me/example_channel/42";
 
   beforeAll(async () => {
@@ -29,6 +30,7 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
       .values({ orgId, name: "Newsroom" })
       .returning({ id: schema.brands.id });
     if (!brand) throw new Error("Brand fixture was not inserted");
+    brandId = brand.id;
     const [source] = await db
       .insert(schema.newsSources)
       .values({
@@ -90,5 +92,168 @@ describe.skipIf(!url)("Telegram comment persistence e2e", () => {
     await expect(
       pool.query("UPDATE news_items SET comments_status = $1 WHERE id = $2", ["guessing", itemId]),
     ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("retains bounded publication replies across errors, rejects stale jobs and erases them with the brand", async () => {
+    const { encryptJson } = await import("@pubrick/shared");
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId,
+        platform: "telegram",
+        name: "Public",
+        credentialsEncrypted: encryptJson(
+          { botToken: "123:abc", chatId: "@pubrick" },
+          process.env.APP_ENCRYPTION_KEY ?? "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=",
+        ),
+      })
+      .returning({ id: schema.channels.id });
+    if (!channel) throw new Error("No channel");
+    const [content] = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId,
+        brandId,
+        body: "Published body",
+        status: "published",
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!content) throw new Error("No content");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId,
+        contentItemId: content.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("No adaptation");
+    const [publication] = await db
+      .insert(schema.publications)
+      .values({
+        orgId,
+        adaptationId: adaptation.id,
+        channelId: channel.id,
+        status: "published",
+        externalId: "42",
+        externalUrl: itemUrl,
+      })
+      .returning({ id: schema.publications.id });
+    if (!publication) throw new Error("No publication");
+    const requestedAt = new Date("2026-09-25T00:00:00.000Z");
+    await db.insert(schema.publicationCommentSamples).values({
+      orgId,
+      brandId,
+      publicationId: publication.id,
+      status: "pending",
+      requestedAt,
+    });
+    const job = {
+      kind: "publication" as const,
+      orgId,
+      brandId,
+      publicationId: publication.id,
+      requestedAt: requestedAt.toISOString(),
+    };
+    expect(await repo.publication(randomUUID(), brandId, publication.id)).toBeNull();
+    expect(await repo.publication(orgId, randomUUID(), publication.id)).toBeNull();
+    expect(await repo.publication(orgId, brandId, publication.id)).toMatchObject({ url: itemUrl });
+    await repo.savePublication(job, itemUrl, {
+      status: "available",
+      comments: Array.from({ length: 51 }, (_, i) => ({
+        messageId: i + 1,
+        body: `Reply ${i + 1}`,
+        publishedAt: new Date("2026-09-25T00:01:00Z"),
+      })),
+    });
+    let rows = await db
+      .select({ body: schema.publicationComments.body })
+      .from(schema.publicationComments)
+      .where(eq(schema.publicationComments.publicationId, publication.id));
+    expect(rows).toHaveLength(50);
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ status: "pending" })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    await repo.failPublication(
+      { ...job, requestedAt: "2026-09-24T00:00:00.000Z" },
+      itemUrl,
+      "telegram_collection_failed",
+    );
+    let [sample] = await db
+      .select({ status: schema.publicationCommentSamples.status })
+      .from(schema.publicationCommentSamples)
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    expect(sample?.status).toBe("pending");
+    await repo.failPublication(job, itemUrl, "telegram_collection_failed");
+    [sample] = await db
+      .select({ status: schema.publicationCommentSamples.status })
+      .from(schema.publicationCommentSamples)
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    expect(sample?.status).toBe("error");
+    rows = await db
+      .select({ body: schema.publicationComments.body })
+      .from(schema.publicationComments)
+      .where(eq(schema.publicationComments.publicationId, publication.id));
+    expect(rows).toHaveLength(50);
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ status: "pending", errorCode: null })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    await repo.savePublication(job, itemUrl, { status: "private", comments: [] });
+    rows = await db
+      .select({ body: schema.publicationComments.body })
+      .from(schema.publicationComments)
+      .where(eq(schema.publicationComments.publicationId, publication.id));
+    expect(rows).toHaveLength(50);
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ status: "pending" })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    await repo.savePublication(job, itemUrl, { status: "available", comments: [] });
+    [sample] = await db
+      .select({ status: schema.publicationCommentSamples.status })
+      .from(schema.publicationCommentSamples)
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    expect(sample?.status).toBe("no_comments");
+    expect(
+      await db
+        .select()
+        .from(schema.publicationComments)
+        .where(eq(schema.publicationComments.publicationId, publication.id)),
+    ).toEqual([]);
+    await db.delete(schema.channels).where(eq(schema.channels.id, channel.id));
+    expect(await repo.publication(orgId, brandId, publication.id)).toBeNull();
+    await db
+      .update(schema.publicationCommentSamples)
+      .set({ status: "pending" })
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    await repo.savePublication(job, itemUrl, {
+      status: "available",
+      comments: [{ messageId: 99, body: "Late reply", publishedAt: new Date() }],
+    });
+    [sample] = await db
+      .select({ status: schema.publicationCommentSamples.status })
+      .from(schema.publicationCommentSamples)
+      .where(eq(schema.publicationCommentSamples.publicationId, publication.id));
+    expect(sample?.status).toBe("pending");
+    await db.delete(schema.brands).where(eq(schema.brands.id, brandId));
+    expect(
+      await db
+        .select()
+        .from(schema.publicationCommentSamples)
+        .where(eq(schema.publicationCommentSamples.publicationId, publication.id)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(schema.publicationComments)
+        .where(eq(schema.publicationComments.publicationId, publication.id)),
+    ).toEqual([]);
+    expect(
+      await db.select().from(schema.publications).where(eq(schema.publications.id, publication.id)),
+    ).toHaveLength(1);
   });
 });

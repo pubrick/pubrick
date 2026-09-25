@@ -3,7 +3,7 @@ import { Injectable } from "@nestjs/common";
 import type { UsageRecord } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
 import { toLedgerCostUsd } from "@pubrick/shared";
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 
 export function topicKey(title: string): string {
@@ -13,6 +13,11 @@ export function topicKey(title: string): string {
 }
 
 export type Suggestion = { title: string; description: string; newsItemId: string | null };
+
+// Provider calls are bounded to 60 seconds; this permits several queue expiry
+// windows before declaring a worker that stopped heartbeating abandoned.
+const STALE_AUTOMATIC_MINUTES = 10;
+export const STALE_AUTOMATIC_SWEEP_LIMIT = 100;
 
 @Injectable()
 export class SuggestionsRepository {
@@ -30,11 +35,15 @@ export class SuggestionsRepository {
           eq(schema.topicSuggestionRequests.orgId, orgId),
           eq(schema.topicSuggestionRequests.brandId, brandId),
           eq(schema.topicSuggestionRequests.id, requestId),
-          lt(schema.topicSuggestionRequests.attempts, 3),
+          sql`(${schema.topicSuggestionRequests.origin} = 'manual' and ${schema.topicSuggestionRequests.attempts} < 3 or ${schema.topicSuggestionRequests.origin} = 'automatic' and ${schema.topicSuggestionRequests.attempts} = 0 and ${schema.topicSuggestionRequests.status} = 'queued')`,
           sql`${schema.topicSuggestionRequests.status} <> 'succeeded'`,
         ),
       )
-      .returning({ id: schema.topicSuggestionRequests.id });
+      .returning({
+        id: schema.topicSuggestionRequests.id,
+        origin: schema.topicSuggestionRequests.origin,
+        localDate: schema.topicSuggestionRequests.localDate,
+      });
     if (!claimed[0]) return null;
     const brands = await db
       .select({
@@ -94,6 +103,8 @@ export class SuggestionsRepository {
       .orderBy(desc(newsRankScore), desc(schema.newsItems.createdAt))
       .limit(40);
     return {
+      origin: claimed[0].origin,
+      localDate: claimed[0].localDate,
       brand: brands[0],
       topics,
       news: news
@@ -104,6 +115,68 @@ export class SuggestionsRepository {
         )
         .slice(0, 10),
     };
+  }
+
+  async heartbeatAutomatic(orgId: string, brandId: string, requestId: string): Promise<void> {
+    await db
+      .update(schema.topicSuggestionRequests)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brandId),
+          eq(schema.topicSuggestionRequests.id, requestId),
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+          eq(schema.topicSuggestionRequests.status, "running"),
+        ),
+      );
+  }
+
+  async recoverStaleAutomatic(orgId: string, brandId: string, requestId: string): Promise<boolean> {
+    const recovered = await db
+      .update(schema.topicSuggestionRequests)
+      .set({ status: "failed", errorCode: "model_failed", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.orgId, orgId),
+          eq(schema.topicSuggestionRequests.brandId, brandId),
+          eq(schema.topicSuggestionRequests.id, requestId),
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+          eq(schema.topicSuggestionRequests.status, "running"),
+          sql`${schema.topicSuggestionRequests.updatedAt} < now() - ${STALE_AUTOMATIC_MINUTES} * interval '1 minute'`,
+        ),
+      )
+      .returning({ id: schema.topicSuggestionRequests.id });
+    return recovered.length > 0;
+  }
+
+  async sweepStaleAutomatic(): Promise<number> {
+    const candidates = db
+      .select({ id: schema.topicSuggestionRequests.id })
+      .from(schema.topicSuggestionRequests)
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+          eq(schema.topicSuggestionRequests.status, "running"),
+          sql`${schema.topicSuggestionRequests.updatedAt} < now() - ${STALE_AUTOMATIC_MINUTES} * interval '1 minute'`,
+        ),
+      )
+      .orderBy(asc(schema.topicSuggestionRequests.id))
+      .limit(STALE_AUTOMATIC_SWEEP_LIMIT)
+      .for("update", { skipLocked: true });
+    const recovered = await db
+      .update(schema.topicSuggestionRequests)
+      .set({ status: "failed", errorCode: "model_failed", updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.topicSuggestionRequests.origin, "automatic"),
+          eq(schema.topicSuggestionRequests.status, "running"),
+          sql`${schema.topicSuggestionRequests.updatedAt} < now() - ${STALE_AUTOMATIC_MINUTES} * interval '1 minute'`,
+          inArray(schema.topicSuggestionRequests.id, candidates),
+        ),
+      )
+      .returning({ id: schema.topicSuggestionRequests.id });
+    return recovered.length;
   }
 
   async complete(

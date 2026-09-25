@@ -1,11 +1,10 @@
 import { Injectable } from "@nestjs/common";
-import { KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
+import { type FeedbackSignals, KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { decryptJson, parseStoredAiCredential, toLedgerCostUsd } from "@pubrick/shared";
 import { and, asc, desc, eq, gt, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
-import type { FeedbackSignals } from "./feedback-adjustment";
 
 @Injectable()
 export class RelevanceRepository {

@@ -9,6 +9,6 @@ import { MediaImageService } from "./media-image.service";
   imports: [AiCredentialsModule],
   controllers: [MediaController],
   providers: [MediaRepository, MediaImageService, GeminiImageCaller],
-  exports: [MediaRepository],
+  exports: [MediaRepository, MediaImageService],
 })
 export class MediaModule {}

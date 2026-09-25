@@ -8,6 +8,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Res,
   UseGuards,
@@ -17,11 +18,15 @@ import {
   adaptationUpdateSchema,
   type ContentApprove,
   type ContentCreate,
+  type ContentImageRegenerate,
+  type ContentImagesReplace,
   type ContentUpdate,
   type ContentVersionListQuery,
   type ContentVersionRestore,
   contentApproveSchema,
   contentCreateSchema,
+  contentImageRegenerateSchema,
+  contentImagesReplaceSchema,
   contentUpdateSchema,
   contentVersionListQuerySchema,
   contentVersionRestoreSchema,
@@ -40,17 +45,22 @@ import {
   refineRequestSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
+import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { ContentRepository } from "./content.repository";
+import { ContentImagesRepository } from "./content-images.repository";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "resource", resource: "content" })
 export class ContentController {
   constructor(
     private readonly content: ContentRepository,
+    private readonly contentImages: ContentImagesRepository,
     private readonly editorialNotes: EditorialNotesRepository,
   ) {}
 
@@ -77,19 +87,22 @@ export class ContentController {
    * that always answers empty.
    */
   @Get()
+  @BrandScope({ kind: "org-list" })
   async list(
     @OrgId() orgId: string,
+    @VisibleBrandIds() visibleBrandIds: string[] | null,
     @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
     @Query("status") status?: string,
     @Query("limit") limit?: string,
     @Query("cursor") cursor?: string,
   ) {
-    const page = await this.content.list(orgId, { status, limit, cursor });
+    const page = await this.content.list(orgId, { status, limit, cursor }, visibleBrandIds);
     if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
     return page.rows;
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(contentCreateSchema)) body: ContentCreate,
@@ -100,6 +113,31 @@ export class ContentController {
   @Get(":id")
   get(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.get(orgId, id);
+  }
+
+  @Get(":id/images")
+  images(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.contentImages.list(orgId, id);
+  }
+
+  @Put(":id/images")
+  replaceImages(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(contentImagesReplaceSchema)) body: ContentImagesReplace,
+  ) {
+    return this.contentImages.replace(orgId, id, body);
+  }
+
+  @Post(":id/images/:slotId/regenerate")
+  @HttpCode(200)
+  regenerateImage(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("slotId", ParseUUIDPipe) slotId: string,
+    @Body(new ZodValidationPipe(contentImageRegenerateSchema)) body: ContentImageRegenerate,
+  ) {
+    return this.contentImages.regenerate(orgId, id, slotId, body);
   }
 
   @Get(":id/versions")
@@ -345,6 +383,7 @@ export class ContentController {
    * platform accepted a post.
    */
   @Post(":id/adaptations/:adaptationId/delivery")
+  @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
   @HttpCode(200)
   assertDelivery(
     @OrgId() orgId: string,
@@ -376,6 +415,25 @@ export class ContentController {
     @Body(new ZodValidationPipe(contentApproveSchema)) body: ContentApprove,
   ) {
     return this.content.approve(orgId, id, body.scheduledAt ? new Date(body.scheduledAt) : null);
+  }
+
+  @Post(":id/archive")
+  @HttpCode(200)
+  archive(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.archive(orgId, id);
+  }
+
+  @Post(":id/restore")
+  @HttpCode(200)
+  restore(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.content.restore(orgId, id);
+  }
+
+  /** Permanently remove an archived draft with no delivery history. */
+  @Delete(":id")
+  @HttpCode(204)
+  async delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
+    await this.content.delete(orgId, id);
   }
 
   @Post(":id/reject")

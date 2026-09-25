@@ -52,6 +52,10 @@ const NOT_A_TENANT_LIST: Record<string, string> = {
   health: "anonymous liveness probe; returns a status and a version, never a row",
   notifications:
     "one org-scoped settings singleton, not a collection; notifications.repository.e2e.spec.ts proves another org sees only its defaults",
+  "search-credentials":
+    "one org-scoped search key setting, not a collection; search-credentials.e2e.spec.ts proves another org sees only its own configuration",
+  "content/:id/claim-review":
+    "the latest review for one scoped article, not a collection; claim-review.e2e.spec.ts proves another org receives 404",
   "brands/:brandId/feed":
     "one brand-scoped feed resource, not an array collection; feeds.e2e.spec.ts proves another org cannot read its URL or entries",
   "brands/:brandId/autopilot":
@@ -182,6 +186,7 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
   {
     controller: "calendar/slots",
     identify: id,
+    foreignBrandNotFound: true,
     seed: async (agent) => {
       const { brandId, channelId } = await brandWithChannel(agent);
       const slot = await agent
@@ -234,8 +239,22 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "brands/:brandId/access",
+    identify: (row) => row.memberId as string,
+    rows: (body) => (body as { members: Record<string, unknown>[] }).members,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Access brand" }).expect(201);
+      const access = await agent.get(`/api/brands/${brand.body.id}/access`).expect(200);
+      const owner = access.body.members.find((member: { role: string }) => member.role === "owner");
+      if (!owner) throw new Error("Organization owner missing from access list");
+      return { id: owner.memberId as string, paths: [`/api/brands/${brand.body.id}/access`] };
+    },
+  },
+  {
     controller: "knowledge",
     identify: id,
+    foreignBrandNotFound: true,
     seed: async (agent) => {
       const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);
       const entry = await agent

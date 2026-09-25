@@ -43,8 +43,13 @@ Opposing matches cancel; unrelated marks have no effect. **Sort by relevance** a
 use the ranking score. The API returns both `relevanceScore` (the raw AI score)
 and `rankScore` with `feedbackDelta` so the adjustment is inspectable. When
 feedback applies, the app shows the ranking score beside the raw AI badge.
-Changing a mark affects future scores only; existing scored articles
-are not silently rescored.
+Changing a mark affects future scores immediately. To apply saved feedback to
+already scored articles, choose **Update rankings**. Each request checks up to
+50 scored stories from the last 30 days; choose **Continue updating rankings**
+until the page reports completion. This recalculates only the feedback
+adjustment from saved editor marks. It makes no new AI calls, does not add a
+usage charge, and leaves the original AI score, reason, urgency, and editor
+marks unchanged. Existing stories are never silently rescored.
 
 When no Google key is available, or an embedding call fails, the score still
 finishes with the existing lexical comparison. A failed embedding is recorded

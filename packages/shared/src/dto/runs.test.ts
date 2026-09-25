@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoInlineImagePlacements,
   briefRunInputSchema,
   contentTypeRequiresMaterial,
   DISMISSABLE_RUN_STATUSES,
@@ -14,6 +15,19 @@ import {
   runStepsSchema,
   sourceRunInputSchema,
 } from "./runs.js";
+
+describe("automatic article image placement", () => {
+  it("uses the same bounded paragraph positions for worker and receipt", () => {
+    expect(autoInlineImagePlacements("One.")).toEqual([]);
+    expect(autoInlineImagePlacements("One.\n\nTwo.")).toEqual([
+      { afterParagraph: 0, text: "One." },
+    ]);
+    expect(autoInlineImagePlacements("One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive.")).toEqual([
+      { afterParagraph: 1, text: "Two." },
+      { afterParagraph: 3, text: "Four." },
+    ]);
+  });
+});
 
 /**
  * The set six call sites used to spell out for themselves — the brand delete's
@@ -300,6 +314,42 @@ describe("what a run may be asked for", () => {
     expect(runCreateSchema.safeParse({ ...body, useEditorialFeedback: "true" }).success).toBe(
       false,
     );
+  });
+
+  it("admits generated inline images only for article formats", () => {
+    for (const contentType of [
+      "expert_article",
+      "comparison",
+      "case_study",
+      "educational",
+    ] as const) {
+      const body = {
+        ...base,
+        brief: "Illustrate the article",
+        contentType,
+        ...(contentType === "case_study" && { material: "Real case evidence." }),
+        generateInlineImages: true,
+      };
+      expect(runCreateSchema.parse(body)).toEqual(body);
+    }
+    for (const contentType of [
+      undefined,
+      "social_post",
+      "news_digest",
+      "product_update",
+      "repost",
+    ] as const) {
+      const denied = runCreateSchema.safeParse({
+        ...base,
+        brief: "Illustrate the post",
+        contentType,
+        generateInlineImages: true,
+      });
+      expect(denied.success).toBe(false);
+      expect(denied.error?.issues.map((issue) => issue.path)).toContainEqual([
+        "generateInlineImages",
+      ]);
+    }
   });
 
   it("accepts material alone: a paste-only run has no brief to send", () => {

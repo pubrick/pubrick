@@ -104,6 +104,8 @@ export type ModelCallOptions = {
 
 export type GenerateStructuredArgs<T> = ModelCallOptions & {
   model: LanguageModel;
+  /** Set false for a caller that can pay for only one physical model call. */
+  repairSchemaErrors?: boolean;
   /**
    * Whose key is paying. Taken from the credential rather than parsed out of the
    * SDK's provider id: the ledger column is an enum, and the caller resolved the
@@ -146,9 +148,9 @@ export type GenerateStructuredArgs<T> = ModelCallOptions & {
  * `repairText` hook** — it exists only on the deprecated API — and it does not
  * retry a schema violation: `maxRetries` covers transport errors only, and a
  * violation throws `NoObjectGeneratedError` straight out. So the repair is
- * ours: one retry that feeds the offending text and the validation message
- * back, then we give up as permanent rather than burn a third call on a model
- * that has now failed the same schema twice.
+ * ours: by default one retry that feeds the offending text and the validation
+ * message back, then we give up as permanent. Callers with a strict one-call
+ * budget disable that repair with `repairSchemaErrors: false`.
  *
  * Every round trip the SDK actually made is reported to `onUsage`, including
  * the ones its own retry loop made and the ones that failed. The provider counts
@@ -176,6 +178,17 @@ export async function generateStructured<T>(args: GenerateStructuredArgs<T>): Pr
     } catch (firstError) {
       if (!NoObjectGeneratedError.isInstance(firstError)) {
         throw classifyAiError(firstError, budget.abortedBy());
+      }
+
+      if (args.repairSchemaErrors === false) {
+        const failure = withRunFailure(
+          new PermanentError(
+            `the model returned output that does not match the required schema: ${validationMessage(firstError)}`,
+          ),
+          "no_structured_output",
+        );
+        failure.cause = firstError;
+        throw failure;
       }
 
       // A tool call instead of text is a different failure: there is no

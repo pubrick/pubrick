@@ -101,6 +101,24 @@ export const privateTelegramSourceCreateSchema = z.object({
 });
 export type PrivateTelegramSourceCreate = z.infer<typeof privateTelegramSourceCreateSchema>;
 
+/** Transient Telegram sign-in input. Intermediate MTProto state stays server-side. */
+export const telegramLoginBeginSchema = z.strictObject({
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/),
+});
+export type TelegramLoginBegin = z.infer<typeof telegramLoginBeginSchema>;
+
+export const telegramLoginCodeSchema = z.strictObject({
+  challengeId: z.string().uuid(),
+  code: z.string().regex(/^\d{3,12}$/),
+});
+export type TelegramLoginCode = z.infer<typeof telegramLoginCodeSchema>;
+
+export const telegramLoginPasswordSchema = z.strictObject({
+  challengeId: z.string().uuid(),
+  password: z.string().min(1).max(256),
+});
+export type TelegramLoginPassword = z.infer<typeof telegramLoginPasswordSchema>;
+
 export const newsSourceUpdateSchema = z.object({
   name: newsSourceNameSchema.optional(),
   url: z.union([telegramUrl, feedUrl]).optional(),
@@ -108,6 +126,14 @@ export const newsSourceUpdateSchema = z.object({
   checkIntervalMinutes: z.number().int().min(15).max(1440).optional(),
 });
 export type NewsSourceUpdate = z.infer<typeof newsSourceUpdateSchema>;
+
+export const newsCommentCollectionUpdateSchema = z.strictObject({ enabled: z.boolean() });
+export type NewsCommentCollectionUpdate = z.infer<typeof newsCommentCollectionUpdateSchema>;
+export const newsCommentCollectionDtoSchema = z.object({
+  enabled: z.boolean(),
+  updatedAt: z.string().nullable(),
+});
+export type NewsCommentCollectionDto = z.infer<typeof newsCommentCollectionDtoSchema>;
 
 export const newsSourceDtoSchema = z.object({
   id: z.string().uuid(),
@@ -156,6 +182,26 @@ export const newsItemListQuerySchema = z.object({
 });
 export type NewsItemListQuery = z.infer<typeof newsItemListQuerySchema>;
 
+export const newsRerankCursorSchema = z.strictObject({
+  createdAt: z.iso.datetime({ offset: true }),
+  id: z.string().uuid(),
+});
+export type NewsRerankCursor = z.infer<typeof newsRerankCursorSchema>;
+
+/** A small, resumable recalculation of local editor feedback, without model calls. */
+export const newsRerankRequestSchema = z.strictObject({
+  days: z.number().int().min(1).max(30).default(30),
+  cursor: newsRerankCursorSchema.optional(),
+});
+export type NewsRerankRequest = z.infer<typeof newsRerankRequestSchema>;
+
+export const newsRerankResponseSchema = z.strictObject({
+  processed: z.number().int().min(0).max(50),
+  changed: z.number().int().min(0).max(50),
+  nextCursor: newsRerankCursorSchema.nullable(),
+});
+export type NewsRerankResponse = z.infer<typeof newsRerankResponseSchema>;
+
 export const newsCommentDtoSchema = z.object({
   id: z.string().uuid(),
   body: z.string(),
@@ -190,6 +236,7 @@ export const commentAnalysisDtoSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("no_comments") }),
   z.object({ status: z.literal("no_key") }),
   z.object({ status: z.literal("limit_reached") }),
+  z.object({ status: z.literal("in_progress") }),
   z.object({ status: z.literal("timed_out") }),
   z.object({ status: z.literal("failed") }),
   z.object({ status: z.literal("not_analyzed") }),

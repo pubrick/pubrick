@@ -1027,6 +1027,10 @@ describe("Settings — public API management", () => {
       "href",
       "/en/settings/api-keys",
     );
+    expect(screen.getByRole("link", { name: en.SettingsPage.telegramSourcesOpen })).toHaveAttribute(
+      "href",
+      "/en/settings/telegram",
+    );
   });
 
   it("does not offer API key management to a regular member", async () => {
@@ -1038,6 +1042,9 @@ describe("Settings — public API management", () => {
     await renderSettings();
     expect(
       screen.queryByRole("link", { name: en.SettingsPage.publicApiOpen }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: en.SettingsPage.telegramSourcesOpen }),
     ).not.toBeInTheDocument();
   });
 });

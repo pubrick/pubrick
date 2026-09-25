@@ -6,6 +6,7 @@ import {
   CONTENT_STATUSES,
   contentCreateSchema,
   contentUpdateSchema,
+  contentVersionRestoreSchema,
   DELIVERY_OUTCOMES,
   decodeContentCursor,
   encodeContentCursor,
@@ -70,6 +71,37 @@ describe("body newline normalisation", () => {
     expect(adaptationUpdateSchema.parse({ body: null }).body).toBeNull();
   });
 
+  it("accepts a metadata-only channel PATCH while refusing an empty one", () => {
+    expect(adaptationUpdateSchema.parse({ hashtags: ["news"], expectedHashtags: [] })).toEqual({
+      hashtags: ["news"],
+      expectedHashtags: [],
+    });
+    expect(adaptationUpdateSchema.parse({ cta: "Ask a question", expectedCta: null })).toEqual({
+      cta: "Ask a question",
+      expectedCta: null,
+    });
+    expect(adaptationUpdateSchema.safeParse({}).success).toBe(false);
+    expect(adaptationUpdateSchema.safeParse({ hashtags: ["news"] }).success).toBe(false);
+    expect(adaptationUpdateSchema.safeParse({ cta: "Ask a question" }).success).toBe(false);
+    expect(
+      adaptationUpdateSchema.safeParse({ hashtags: [`bad\0tag`], expectedHashtags: [] }).success,
+    ).toBe(false);
+  });
+
+  it("requires a complete channel metadata snapshot for a restore request", () => {
+    expect(contentVersionRestoreSchema.safeParse({ expectedBody: "Copy" }).success).toBe(true);
+    expect(
+      contentVersionRestoreSchema.safeParse({ expectedBody: "Copy", expectedHashtags: [] }).success,
+    ).toBe(false);
+    expect(
+      contentVersionRestoreSchema.safeParse({
+        expectedBody: "Copy",
+        expectedHashtags: [],
+        expectedCta: null,
+      }).success,
+    ).toBe(true);
+  });
+
   it("bounds the length AFTER normalising, so a CRLF body is not refused for a dropped character", () => {
     // `MAX_BODY_LENGTH` is the length of what gets STORED. A body of
     // MAX_BODY_LENGTH + 1 characters that collapses to exactly the limit fits,
@@ -124,6 +156,7 @@ describe("the draft and delivery lifecycles keep every status they had", () => {
       "rejected",
       "published",
       "failed",
+      "archived",
     ]);
   });
 

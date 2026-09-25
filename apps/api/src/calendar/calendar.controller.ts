@@ -20,12 +20,14 @@ import {
   calendarSlotUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { CalendarRepository } from "./calendar.repository";
 
 @Controller("calendar/slots")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class CalendarController {
   constructor(private readonly slots: CalendarRepository) {}
 
@@ -39,6 +41,7 @@ export class CalendarController {
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(calendarSlotCreateSchema)) body: CalendarSlotCreate,
@@ -47,6 +50,7 @@ export class CalendarController {
   }
 
   @Post("bulk")
+  @BrandScope({ kind: "brand", source: "body" })
   createBulk(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(calendarSlotsBulkCreateSchema)) body: CalendarSlotsBulkCreate,

@@ -67,6 +67,7 @@ describe("generation schema", () => {
       "rejected",
       "published",
       "failed",
+      "archived",
     ]);
     expect(schema.contentItems.status.enumValues).toEqual(CONTENT_STATUSES);
 

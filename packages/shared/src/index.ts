@@ -43,11 +43,14 @@ export * from "./dto/ai-credentials.js";
 export * from "./dto/analytics.js";
 export * from "./dto/api-keys.js";
 export * from "./dto/autopilot.js";
+export * from "./dto/brand-access.js";
 export * from "./dto/brands.js";
 export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
+export * from "./dto/claim-review.js";
 export * from "./dto/client-review.js";
 export * from "./dto/content.js";
+export * from "./dto/content-images.js";
 export * from "./dto/draft-revision.js";
 export * from "./dto/editorial-notes.js";
 export * from "./dto/errors.js";
@@ -57,14 +60,19 @@ export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
 export {
   PROMPT_ROLES,
+  type PromptDecisionHistoryDto,
   type PromptRevisionCreate,
   type PromptRevisionDto,
+  type PromptRevisionUsageDto,
   type PromptRole,
+  promptDecisionHistoryDtoSchema,
   promptRevisionCreateSchema,
   promptRevisionDtoSchema,
+  promptRevisionUsageDtoSchema,
   promptRoleSchema,
 } from "./dto/prompts.js";
 export * from "./dto/runs.js";
+export * from "./dto/search-credentials.js";
 export * from "./dto/source-extraction.js";
 export * from "./dto/sources.js";
 export * from "./dto/text.js";
@@ -72,11 +80,31 @@ export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {
+  hashtagSuffix,
+  normalizeHashtags,
+  replaceHashtags,
+  stripHashtagSuffix,
+  withHashtags,
+} from "./hashtags.js";
+export {
+  AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE,
+  AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE,
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
   GENERATE_WORK_OPTIONS,
   type GenerateJob,
+  MANUAL_AUTOPILOT_DLQ,
+  MANUAL_AUTOPILOT_QUEUE,
+  MANUAL_AUTOPILOT_QUEUE_OPTIONS,
+  MANUAL_TOPIC_PLAN_QUEUE,
+  MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  type ManualAutopilotJob,
+  type ManualTopicPlanJob,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_ABANDONED_GRACE_SECONDS,
   PUBLISH_DLQ,
@@ -107,6 +135,7 @@ export {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
   type TopicSuggestionsJob,
   telegramCommentsJobOptions,
+  telegramPublicationCommentsJobOptions,
   VK_METRICS_OPTIONS,
   VK_METRICS_QUEUE,
   VK_METRICS_SCAN_QUEUE,
@@ -137,3 +166,4 @@ export {
   type RefineAcceptArgs,
   type RefineAcceptPlan,
 } from "./refine-merge.js";
+export { isPublicTelegramPostUrl } from "./telegram-public-post.js";

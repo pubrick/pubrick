@@ -116,6 +116,74 @@ describe("runStepStates", () => {
     ).toBe("done");
   });
 
+  it("shows active, partial, unavailable, and short article illustration outcomes", () => {
+    const input = {
+      kind: "brief" as const,
+      text: "Brief",
+      channelIds: [CH_A],
+      contentType: "expert_article" as const,
+      generateInlineImages: true,
+    };
+    const editor = {
+      status: "succeeded" as const,
+      output: { body: "One.\n\nTwo.\n\nThree.\n\nFour.\n\nFive." },
+    };
+    const active = makeRun({
+      input,
+      status: "running",
+      currentStep: "inline_image:3",
+      steps: {
+        editor,
+        "inline_image:1": {
+          status: "succeeded",
+          output: { result: "generated", mediaId: "asset" },
+        },
+      },
+    });
+    expect(runStepStates(active).find((step) => step.key === "inline_image")).toMatchObject({
+      state: "active",
+      done: 1,
+      total: 2,
+    });
+    const partial = makeRun({
+      ...active,
+      status: "succeeded",
+      currentStep: null,
+      steps: {
+        ...active.steps,
+        "inline_image:3": { status: "succeeded", output: { result: "unavailable", mediaId: null } },
+      },
+    });
+    expect(runStepStates(partial).find((step) => step.key === "inline_image")).toMatchObject({
+      state: "unavailable",
+      done: 1,
+      total: 2,
+    });
+    const unavailable = makeRun({
+      input,
+      status: "succeeded",
+      steps: {
+        editor: { status: "succeeded", output: { body: "One.\n\nTwo." } },
+        "inline_image:0": { status: "succeeded", output: { result: "unavailable", mediaId: null } },
+      },
+    });
+    expect(runStepStates(unavailable).find((step) => step.key === "inline_image")).toMatchObject({
+      state: "unavailable",
+      done: 0,
+      total: 1,
+    });
+    const short = makeRun({
+      input,
+      status: "succeeded",
+      steps: { editor: { status: "succeeded", output: { body: "One." } } },
+    });
+    expect(runStepStates(short).find((step) => step.key === "inline_image")).toMatchObject({
+      state: "skipped",
+      done: 0,
+      total: 0,
+    });
+  });
+
   it("marks checkpointed steps done and the current one active", () => {
     const run = makeRun({
       status: "running",

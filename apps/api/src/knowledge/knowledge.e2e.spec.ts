@@ -83,9 +83,7 @@ describe.skipIf(!url)("knowledge e2e", () => {
     expect(
       (await owner.get(`/api/knowledge?brandId=${otherBrand.body.id}`).expect(200)).body,
     ).toHaveLength(0);
-    expect(
-      (await outsider.get(`/api/knowledge?brandId=${brand.body.id}`).expect(200)).body,
-    ).toHaveLength(0);
+    await outsider.get(`/api/knowledge?brandId=${brand.body.id}`).expect(404);
     await outsider
       .patch(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
       .send({ title: "Stolen" })
@@ -234,9 +232,7 @@ describe.skipIf(!url)("knowledge e2e", () => {
       { title: "Binding", tags: ["books"], isActive: true },
       { title: "Voice", tags: ["coffee, roasted", "bulk|B2B"], isActive: false },
     ]);
-    expect(
-      (await outsider.get(`/api/knowledge?brandId=${brand.body.id}`).expect(200)).body,
-    ).toEqual([]);
+    await outsider.get(`/api/knowledge?brandId=${brand.body.id}`).expect(404);
     await outsider
       .post("/api/knowledge/bulk-import")
       .send({ brandId: brand.body.id, entries })

@@ -21,12 +21,14 @@ import {
   topicUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { TopicsRepository } from "./topics.repository";
 
 @Controller("topics")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class TopicsController {
   constructor(private readonly topics: TopicsRepository) {}
 
@@ -36,6 +38,7 @@ export class TopicsController {
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(topicCreateSchema)) body: TopicCreate,

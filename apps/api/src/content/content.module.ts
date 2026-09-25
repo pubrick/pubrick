@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
+import { MediaModule } from "../media/media.module";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
+import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 import { ReadaptCaller } from "./readapt.caller";
@@ -19,10 +21,11 @@ import { RefineCaller } from "./refine.caller";
  * so content e2e tests can replace them without reaching a provider.
  */
 @Module({
-  imports: [AiCredentialsModule],
+  imports: [AiCredentialsModule, MediaModule],
   controllers: [ContentController],
   providers: [
     ContentRepository,
+    ContentImagesRepository,
     EditorialNotesRepository,
     RefineCaller,
     ReadaptCaller,

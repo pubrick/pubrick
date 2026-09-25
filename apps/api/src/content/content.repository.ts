@@ -3,11 +3,13 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { AiCredential, StepBrand, StepChannel } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  ADAPTATION_STATUSES,
   type AdaptationProposal,
   type AdaptationStatus,
   type AdaptationUpdate,
   type AiVersionRow,
   type ApiErrorCode,
+  adaptationLimit,
   allSentencesAi,
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
@@ -31,23 +33,31 @@ import {
   MAX_REFINE_CALLS_PER_HOUR,
   nextItemStatus,
   normalizeForComparison,
+  normalizeHashtags,
   normalizeNewlines,
   OUTSTANDING_ADAPTATION_STATUSES,
+  PROMPT_ROLES,
+  type PromptRole,
   planRefineAccept,
   type RefineAcceptPlan,
   type RefineProposal,
   type RefineRequest,
   type RefineVerb,
   type RunInput,
+  replaceHashtags,
+  stripHashtagSuffix,
   toLedgerCostUsd,
+  withHashtags,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
+import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { assertImagesFitBody } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 import { ReadaptCaller } from "./readapt.caller";
@@ -160,6 +170,7 @@ type PinnedItemStatus = Exclude<ContentStatus, EditableItemStatus>;
 const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
   approved: "Approved content cannot be edited; reject it first",
   published: "This content has already been published and can no longer be edited",
+  archived: "Restore this archived content before editing it",
 };
 
 /**
@@ -178,7 +189,16 @@ const PINNED_ITEM_MESSAGE: Record<PinnedItemStatus, string> = {
 const PINNED_ITEM_CODE: Record<PinnedItemStatus, ApiErrorCode> = {
   approved: "content_pinned_approved",
   published: "content_pinned_published",
+  archived: "content_archived",
 };
+
+/** States in which a channel can still send without another approval. */
+const ACTIVE_ARCHIVE_DELIVERY_STATUSES = [
+  "manual_ready",
+  "scheduled",
+  "queued",
+  "publishing",
+] as const satisfies readonly AdaptationStatus[];
 
 /**
  * HOW FAR "already published" reaches, for the one gate both decisions go
@@ -537,6 +557,8 @@ const ADAPTATION_COLUMNS = {
   contentItemId: schema.adaptations.contentItemId,
   channelId: schema.adaptations.channelId,
   body: schema.adaptations.body,
+  hashtags: schema.adaptations.hashtags,
+  cta: schema.adaptations.cta,
   status: schema.adaptations.status,
   /**
    * Tracked per channel because the adaptation body is what actually reaches
@@ -1151,7 +1173,11 @@ export class ContentRepository {
    * `contentListItemDtoSchema` (`@pubrick/shared`) is the wire shape, asserted
    * in the api's own e2e.
    */
-  async list(orgId: string, options: ContentListOptions = {}) {
+  async list(
+    orgId: string,
+    options: ContentListOptions = {},
+    visibleBrandIds: string[] | null = null,
+  ) {
     const { status, cursor: rawCursor } = options;
     // CODED, like every other refusal on this route. A bare
     // `BadRequestException` carries no `code`, and `errorMessage` on the web
@@ -1177,9 +1203,12 @@ export class ContentRepository {
     }
     const where = and(
       eq(schema.contentItems.orgId, orgId),
+      visibleBrandIds === null ? undefined : inArray(schema.contentItems.brandId, visibleBrandIds),
       // Safe: membership just verified above, so the widened `string` really is one
       // of the literal statuses drizzle's column type expects.
-      status ? eq(schema.contentItems.status, status as ContentStatus) : undefined,
+      status
+        ? eq(schema.contentItems.status, status as ContentStatus)
+        : ne(schema.contentItems.status, "archived"),
       cursor ? afterCursor(cursor) : undefined,
     );
     const page = await db
@@ -1380,6 +1409,8 @@ export class ContentRepository {
           coverMediaId: schema.contentItems.coverMediaId,
           videoMediaId: schema.contentItems.videoMediaId,
           linkPolicyWebsite: schema.contentItems.linkPolicyWebsite,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -1409,6 +1440,8 @@ export class ContentRepository {
       coverMediaId: cover[0]?.coverMediaId ?? null,
       videoMediaId: cover[0]?.videoMediaId ?? null,
       linkPolicyWebsite: cover[0]?.linkPolicyWebsite ?? null,
+      archivedFromStatus: cover[0]?.archivedFromStatus ?? null,
+      isSafeToDelete: cover[0]?.isSafeToDelete ?? false,
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable
@@ -1529,6 +1562,8 @@ export class ContentRepository {
         id: schema.contentVersions.id,
         adaptationId: schema.contentVersions.adaptationId,
         body: schema.contentVersions.body,
+        hashtags: schema.contentVersions.hashtags,
+        cta: schema.contentVersions.cta,
         origin: schema.contentVersions.origin,
         createdAt: schema.contentVersions.createdAt,
       })
@@ -1570,6 +1605,8 @@ export class ContentRepository {
       const [version] = await tx
         .select({
           body: schema.contentVersions.body,
+          hashtags: schema.contentVersions.hashtags,
+          cta: schema.contentVersions.cta,
           adaptationId: schema.contentVersions.adaptationId,
         })
         .from(schema.contentVersions)
@@ -1588,7 +1625,12 @@ export class ContentRepository {
         // An adaptation lock comes before the item lock throughout the product.
         // It also protects this version's FK target against a concurrent delete.
         const [adaptation] = await tx
-          .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+          .select({
+            status: schema.adaptations.status,
+            body: schema.adaptations.body,
+            hashtags: schema.adaptations.hashtags,
+            cta: schema.adaptations.cta,
+          })
           .from(schema.adaptations)
           .where(
             and(
@@ -1610,16 +1652,34 @@ export class ContentRepository {
         if (adaptation.body !== data.expectedBody) {
           throw conflict("version_changed", "This channel's text changed; reload before restoring");
         }
-        if (adaptation.body !== version.body) {
+        if (data.expectedHashtags === undefined || data.expectedCta === undefined) {
+          throw badRequest("invalid_request", "Channel restore requires current details");
+        }
+        if (
+          JSON.stringify(adaptation.hashtags) !== JSON.stringify(data.expectedHashtags) ||
+          adaptation.cta !== data.expectedCta
+        ) {
+          throw conflict(
+            "version_changed",
+            "This channel's details changed; reload before restoring",
+          );
+        }
+        if (
+          adaptation.body !== version.body ||
+          JSON.stringify(adaptation.hashtags) !== JSON.stringify(version.hashtags) ||
+          adaptation.cta !== version.cta
+        ) {
           await tx
             .update(schema.adaptations)
-            .set({ body: version.body })
+            .set({ body: version.body, hashtags: version.hashtags, cta: version.cta })
             .where(eq(schema.adaptations.id, version.adaptationId));
           await this.recordHumanVersion(tx, {
             orgId,
             contentItemId: itemId,
             adaptationId: version.adaptationId,
             body: version.body,
+            hashtags: version.hashtags,
+            cta: version.cta,
             createdBy: userId,
           });
         }
@@ -1629,6 +1689,7 @@ export class ContentRepository {
           throw conflict("version_changed", "This post changed; reload before restoring");
         }
         if (item.body !== version.body) {
+          await assertImagesFitBody(tx, orgId, itemId, version.body);
           await tx
             .update(schema.contentItems)
             .set({ body: version.body })
@@ -1837,6 +1898,8 @@ export class ContentRepository {
       contentItemId: string;
       adaptationId: string | null;
       body: string;
+      hashtags?: string[];
+      cta?: string | null;
       createdBy: string;
     },
   ): Promise<void> {
@@ -1846,6 +1909,9 @@ export class ContentRepository {
   async update(orgId: string, id: string, data: ContentUpdate, userId: string) {
     await db.transaction(async (tx) => {
       const current = await this.requireEditableItem(tx, orgId, id);
+      if (data.body !== undefined && data.body !== current.body) {
+        await assertImagesFitBody(tx, orgId, id, data.body);
+      }
       await tx
         .update(schema.contentItems)
         .set(data)
@@ -2067,12 +2133,15 @@ export class ContentRepository {
     const proposal = normalizeNewlines(outcome.text);
     return db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({ id: schema.contentItems.id })
+        .select({ id: schema.contentItems.id, status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
         .limit(1)
         .for("update");
       if (!existing) throw notFound("content_not_found", "Content item not found");
+      if (existing.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.draftRevisionProposals)
         .where(eq(schema.draftRevisionProposals.contentItemId, id));
@@ -2145,6 +2214,7 @@ export class ContentRepository {
         throw conflict(refusal.code, refusal.message);
       }
       if (!("unchanged" in plan)) {
+        await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
         await tx
           .update(schema.contentItems)
           .set({ body: plan.mergedBody, status: "draft" })
@@ -2586,8 +2656,8 @@ export class ContentRepository {
     reason: string;
   }): Promise<RefineProposal | undefined> {
     return db.transaction(async (tx) => {
-      await tx
-        .select({ id: schema.contentItems.id })
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(
           and(
@@ -2597,6 +2667,9 @@ export class ContentRepository {
         )
         .limit(1)
         .for("no key update");
+      if (item?.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.refineProposals)
         .where(eq(schema.refineProposals.contentItemId, row.contentItemId));
@@ -2756,6 +2829,7 @@ export class ContentRepository {
       }
 
       if (!("unchanged" in plan)) {
+        await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
         await tx
           .update(schema.contentItems)
           // The `org_id` predicate is defence in depth and CANNOT be pinned by a
@@ -2965,12 +3039,15 @@ export class ContentRepository {
         .for("no key update");
       if (!locked) throw notFound("adaptation_not_found", "Adaptation not found");
       const [parent] = await tx
-        .select({ id: schema.contentItems.id })
+        .select({ status: schema.contentItems.status })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
         .limit(1)
         .for("no key update");
       if (!parent) throw notFound("content_not_found", "Content item not found");
+      if (parent.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
       await tx
         .delete(schema.adaptationProposals)
         .where(eq(schema.adaptationProposals.adaptationId, adaptationId));
@@ -2986,7 +3063,13 @@ export class ContentRepository {
   async acceptReadapt(orgId: string, itemId: string, adaptationId: string, proposalId: string) {
     await db.transaction(async (tx) => {
       const [adaptation] = await tx
-        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+        .select({
+          status: schema.adaptations.status,
+          channelId: schema.adaptations.channelId,
+          body: schema.adaptations.body,
+          hashtags: schema.adaptations.hashtags,
+          cta: schema.adaptations.cta,
+        })
         .from(schema.adaptations)
         .where(
           and(
@@ -3029,16 +3112,40 @@ export class ContentRepository {
           "The source or channel text changed; ask for a new adaptation",
         );
       }
-      if (adaptation.body !== proposal.proposal) {
+      // The model sees the previously composed channel body. If it carries
+      // forward that exact managed final block, remove only that block before
+      // composing again. Any different authored tag paragraph stays intact.
+      const proposedText = stripHashtagSuffix(proposal.proposal, adaptation.hashtags);
+      if (!proposedText.trim()) {
+        throw badRequest("invalid_request", "Channel text must contain content before hashtags");
+      }
+      const proposedBody = withHashtags(proposedText, adaptation.hashtags);
+      const [channel] = await tx
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, adaptation.channelId)))
+        .limit(1);
+      if (!channel) throw notFound("channel_not_found", "Channel not found");
+      const limit = adaptationLimit(channel.platform);
+      if (limit === undefined) throw badRequest("invalid_request", "Unknown channel platform");
+      if (proposedBody.length > limit) {
+        throw badRequest(
+          "invalid_request",
+          `Channel text with hashtags exceeds ${limit} characters`,
+        );
+      }
+      if (adaptation.body !== proposedBody) {
         await tx
           .update(schema.adaptations)
-          .set({ body: proposal.proposal, origin: "ai" })
+          .set({ body: proposedBody, origin: "ai" })
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)));
         await tx.insert(schema.contentVersions).values({
           orgId,
           contentItemId: itemId,
           adaptationId,
-          body: proposal.proposal,
+          body: proposedBody,
+          hashtags: adaptation.hashtags,
+          cta: adaptation.cta,
           origin: "ai",
           scope: "full",
           createdBy: null,
@@ -3092,7 +3199,13 @@ export class ContentRepository {
       // text this save is compared against, read under the lock that makes the
       // comparison hold until the write lands.
       const locked = await tx
-        .select({ status: schema.adaptations.status, body: schema.adaptations.body })
+        .select({
+          status: schema.adaptations.status,
+          channelId: schema.adaptations.channelId,
+          body: schema.adaptations.body,
+          hashtags: schema.adaptations.hashtags,
+          cta: schema.adaptations.cta,
+        })
         .from(schema.adaptations)
         .where(
           and(
@@ -3117,9 +3230,47 @@ export class ContentRepository {
         );
       }
 
+      if (
+        (data.hashtags !== undefined &&
+          JSON.stringify(current.hashtags) !== JSON.stringify(data.expectedHashtags)) ||
+        (data.cta !== undefined && current.cta !== data.expectedCta)
+      ) {
+        throw conflict("version_changed", "This channel's details changed; reload before saving");
+      }
+      const bodySource = data.body === undefined ? current.body : data.body;
+      const hashtags =
+        bodySource === null
+          ? []
+          : data.hashtags === undefined
+            ? current.hashtags
+            : normalizeHashtags(data.hashtags);
+      const cta = bodySource === null ? null : data.cta === undefined ? current.cta : data.cta;
+      const nextBody =
+        bodySource === null
+          ? null
+          : data.body === undefined
+            ? replaceHashtags(bodySource, current.hashtags, hashtags)
+            : withHashtags(bodySource, hashtags);
+      const [channel] = await tx
+        .select({ platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, current.channelId)))
+        .limit(1);
+      if (!channel) throw notFound("channel_not_found", "Channel not found");
+      const limit = adaptationLimit(channel.platform);
+      if (limit === undefined) throw badRequest("invalid_request", "Unknown channel platform");
+      if (nextBody !== null && nextBody.length > limit) {
+        throw badRequest(
+          "invalid_request",
+          `Channel text with hashtags exceeds ${limit} characters`,
+        );
+      }
+      if (!nextBody?.trim() && (hashtags.length > 0 || cta)) {
+        throw badRequest("invalid_request", "Hashtags and calls to action require channel text");
+      }
       const rows = await tx
         .update(schema.adaptations)
-        .set({ body: data.body })
+        .set({ body: nextBody, hashtags, cta })
         .where(
           and(
             eq(schema.adaptations.orgId, orgId),
@@ -3131,13 +3282,20 @@ export class ContentRepository {
       const updated = rows[0];
       if (!updated) throw notFound("adaptation_not_found", "Adaptation not found");
 
-      const versionBody = humanVersionBody(current.body, data.body);
-      if (versionBody !== null) {
+      const versionBody = humanVersionBody(current.body, nextBody);
+      if (
+        nextBody !== null &&
+        (versionBody !== null ||
+          JSON.stringify(current.hashtags) !== JSON.stringify(hashtags) ||
+          current.cta !== cta)
+      ) {
         await this.recordHumanVersion(tx, {
           orgId,
           contentItemId,
           adaptationId,
-          body: versionBody,
+          body: versionBody ?? nextBody ?? "",
+          hashtags,
+          cta,
           createdBy: userId,
         });
       }
@@ -3374,6 +3532,9 @@ export class ContentRepository {
         "content_already_published",
         "This content has already been published; it can no longer be approved or rejected",
       );
+    }
+    if (rows[0]?.status === "archived") {
+      throw conflict("content_archived", "Restore this archived content before changing it");
     }
     if (reach.of === "the item") return false;
     // NO LOCK ON THE ADAPTATIONS, and no new one anywhere: `reject` has
@@ -3684,6 +3845,163 @@ export class ContentRepository {
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
   }
 
+  /** The decision journal has an org FK. Take its implicit lock before item locks. */
+  private async holdDecisionOrganization(tx: Tx, orgId: string): Promise<void> {
+    await tx
+      .select({ id: schema.organization.id })
+      .from(schema.organization)
+      .where(eq(schema.organization.id, orgId))
+      .for("key share");
+  }
+
+  /** Read only after the item lock: delivery status alone is not a new verdict. */
+  private async shouldJournalDecision(
+    tx: Tx,
+    orgId: string,
+    id: string,
+    verdict: "approved" | "rejected",
+    hasFailedTarget = false,
+  ): Promise<{ should: boolean; ordinal: number }> {
+    const [item] = await tx
+      .select({ status: schema.contentItems.status })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    const [last] = await tx
+      .select({ verdict: schema.promptDecisions.verdict, ordinal: schema.promptDecisions.ordinal })
+      .from(schema.promptDecisions)
+      .where(
+        and(eq(schema.promptDecisions.orgId, orgId), eq(schema.promptDecisions.contentItemId, id)),
+      )
+      .orderBy(desc(schema.promptDecisions.ordinal))
+      .limit(1);
+    const preStatus = item?.status;
+    const should =
+      verdict === "approved"
+        ? // A failed delivery, an edited draft, or a partly published fan-out
+          // can require a new human approval even after an earlier approval.
+          preStatus === "draft" ||
+          preStatus === "failed" ||
+          preStatus === "rejected" ||
+          preStatus === "partially_published" ||
+          hasFailedTarget ||
+          last?.verdict === "rejected"
+        : // A re-opened draft can be rejected again, but a delivery's status
+          // change alone never manufactures a second reject verdict.
+          (preStatus !== "rejected" && preStatus !== "partially_published") ||
+          last?.verdict === "approved";
+    return { should, ordinal: (last?.ordinal ?? 0) + 1 };
+  }
+
+  /** Persist the observed human act without locking a run after the item. */
+  private async appendPromptDecision(
+    tx: Tx,
+    orgId: string,
+    id: string,
+    verdict: "approved" | "rejected",
+    ordinal: number,
+  ): Promise<void> {
+    const fullAiMasters = await tx
+      .select({ runId: schema.contentVersions.runId })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, id),
+          isNull(schema.contentVersions.adaptationId),
+          eq(schema.contentVersions.origin, "ai"),
+          eq(schema.contentVersions.scope, "full"),
+        ),
+      )
+      .orderBy(asc(schema.contentVersions.createdAt), asc(schema.contentVersions.id))
+      .limit(2);
+    let runId: string | null = null;
+    let revisions: { role: PromptRole; revisionId: string; version: number }[] = [];
+    // A second full AI master has no single trustworthy producing-run anchor.
+    if (fullAiMasters.length === 1 && fullAiMasters[0]?.runId) {
+      const [run] = await tx
+        .select({
+          id: schema.pipelineRuns.id,
+          guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
+        })
+        .from(schema.pipelineRuns)
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.id, fullAiMasters[0].runId),
+            eq(schema.pipelineRuns.contentItemId, id),
+          ),
+        )
+        .limit(1);
+      const snapshot = run?.guidanceSnapshot;
+      if (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)) {
+        const entries = Object.entries(snapshot);
+        const wellFormed = entries.every(
+          ([role, value]) =>
+            (PROMPT_ROLES as readonly string[]).includes(role) &&
+            value !== null &&
+            typeof value === "object" &&
+            z.string().uuid().safeParse(value.revisionId).success &&
+            Number.isInteger(value.version) &&
+            value.version > 0,
+        );
+        if (wellFormed) {
+          const candidates = entries.map(([role, value]) => ({
+            role: role as PromptRole,
+            revisionId: value.revisionId,
+            version: value.version,
+          }));
+          const stored = candidates.length
+            ? await tx
+                .select({
+                  id: schema.promptRevisions.id,
+                  role: schema.promptRevisions.role,
+                  version: schema.promptRevisions.version,
+                })
+                .from(schema.promptRevisions)
+                .where(
+                  and(
+                    eq(schema.promptRevisions.orgId, orgId),
+                    inArray(
+                      schema.promptRevisions.id,
+                      candidates.map((candidate) => candidate.revisionId),
+                    ),
+                  ),
+                )
+            : [];
+          if (
+            candidates.every((candidate) =>
+              stored.some(
+                (revision) =>
+                  revision.id === candidate.revisionId &&
+                  revision.role === candidate.role &&
+                  revision.version === candidate.version,
+              ),
+            )
+          ) {
+            runId = run.id;
+            revisions = candidates;
+          }
+        }
+      }
+    }
+    const decidedAt = new Date();
+    const [decision] = await tx
+      .insert(schema.promptDecisions)
+      .values({ orgId, contentItemId: id, runId, verdict, ordinal, createdAt: decidedAt })
+      .returning({ id: schema.promptDecisions.id });
+    if (decision && revisions.length) {
+      await tx.insert(schema.promptDecisionRevisions).values(
+        revisions.map((revision) => ({
+          orgId,
+          decisionId: decision.id,
+          ...revision,
+          decidedAt,
+        })),
+      );
+    }
+  }
+
   /**
    * Which of these adaptations had an attempt whose outcome nobody knows.
    *
@@ -3771,6 +4089,197 @@ export class ContentRepository {
   }
 
   /**
+   * Hide a finished or still-unapproved item while keeping its adaptations,
+   * versions and publication receipts intact. A queued, scheduled, manual or
+   * in-flight delivery must be stopped explicitly with Reject first.
+   *
+   * Lock every adaptation before the parent, in the same order as publishing
+   * and approval. The status check therefore observes a worker's committed
+   * claim and holds that verdict steady until the archive write commits.
+   */
+  async archive(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status === "archived") return;
+      if (
+        adaptations.some((adaptation) =>
+          (ACTIVE_ARCHIVE_DELIVERY_STATUSES as readonly AdaptationStatus[]).includes(
+            adaptation.status,
+          ),
+        )
+      ) {
+        throw conflict(
+          "content_archive_delivery_active",
+          "Stop every active delivery before archiving this content",
+        );
+      }
+      await tx
+        .update(schema.contentItems)
+        .set({ status: "archived", archivedFromStatus: item.status })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    });
+    return this.get(orgId, id);
+  }
+
+  /** Restore the archived status without scheduling or enqueueing a delivery. */
+  async restore(orgId: string, id: string) {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "archived") return;
+      if (!item.archivedFromStatus || item.archivedFromStatus === "archived") {
+        throw conflict("content_archived", "The archived status could not be restored");
+      }
+      await tx
+        .update(schema.contentItems)
+        .set({ status: item.archivedFromStatus, archivedFromStatus: null })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    });
+    return this.get(orgId, id);
+  }
+
+  /**
+   * Permanently remove an archived, unpublished draft or rejection. Publication
+   * receipts are evidence of a delivery and must never disappear with an item.
+   * A delivery attempt without a receipt is evidence too: attemptCount is
+   * checked even when the worker could not record the platform's answer.
+   *
+   * Lock every linked adaptation in ID order before the parent, as required by
+   * docs/lock-order.md. Publication writers hold that same adaptation lock, so
+   * the history check cannot race an in-flight receipt. The final unlocked
+   * adaptation read catches a new row inserted while we waited for the parent;
+   * once its FOR UPDATE lock is held, the item's FK blocks further inserts.
+   */
+  async delete(orgId: string, id: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      await this.requireItem(tx, orgId, id);
+      const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
+      const [item] = await tx
+        .select({
+          status: schema.contentItems.status,
+          archivedFromStatus: schema.contentItems.archivedFromStatus,
+          isSafeToDelete: schema.contentItems.isSafeToDelete,
+        })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1)
+        .for("update");
+      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (item.status !== "archived") {
+        throw conflict(
+          "content_delete_requires_archive",
+          "Archive this content before deleting it",
+        );
+      }
+      if (item.archivedFromStatus !== "draft" && item.archivedFromStatus !== "rejected") {
+        throw conflict(
+          "content_delete_not_draft",
+          "Only archived drafts and rejected content can be permanently deleted",
+        );
+      }
+      if (!item.isSafeToDelete) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Delivery history cannot be ruled out for this content",
+        );
+      }
+
+      // A generated draft also lives in pipeline_runs.steps. Cascading the
+      // content item only nulls that run's FK; it does not erase the checkpoint
+      // text, which GET /runs/:id can still return. Refuse until run retention
+      // and redaction have an explicit design.
+      const [generationRun] = await tx
+        .select({ id: schema.pipelineRuns.id })
+        .from(schema.pipelineRuns)
+        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.contentItemId, id)))
+        .limit(1);
+      if (generationRun) {
+        throw conflict(
+          "content_delete_has_generation_history",
+          "Generated drafts cannot be permanently deleted while their run is retained",
+        );
+      }
+
+      const currentAdaptations = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, id)));
+      if (
+        currentAdaptations.length !== adaptations.length ||
+        currentAdaptations.some((row) => !adaptations.some((locked) => locked.id === row.id))
+      ) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Content channels changed during deletion",
+        );
+      }
+      if (
+        adaptations.some(
+          (adaptation) =>
+            adaptation.attemptCount > 0 ||
+            adaptation.status === "published" ||
+            adaptation.status === "failed" ||
+            (ACTIVE_ARCHIVE_DELIVERY_STATUSES as readonly AdaptationStatus[]).includes(
+              adaptation.status,
+            ),
+        )
+      ) {
+        throw conflict(
+          "content_delete_has_delivery_history",
+          "Content with active or attempted deliveries cannot be permanently deleted",
+        );
+      }
+      if (adaptations.length > 0) {
+        const [publication] = await tx
+          .select({ id: schema.publications.id })
+          .from(schema.publications)
+          .where(
+            and(
+              eq(schema.publications.orgId, orgId),
+              inArray(
+                schema.publications.adaptationId,
+                adaptations.map((adaptation) => adaptation.id),
+              ),
+            ),
+          )
+          .limit(1);
+        if (publication) {
+          throw conflict(
+            "content_delete_has_delivery_history",
+            "Content with publication history cannot be permanently deleted",
+          );
+        }
+      }
+
+      const deleted = await tx
+        .delete(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .returning({ id: schema.contentItems.id });
+      if (deleted.length === 0) throw notFound("content_not_found", "Content item not found");
+    });
+  }
+
+  /**
    * Approves an item and enqueues (or re-enqueues) its outstanding adaptations.
    *
    * `scheduled` is in the target set, not just `pending`/`failed`: without it
@@ -3834,6 +4343,7 @@ export class ContentRepository {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
     await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, [
         "pending",
@@ -3842,10 +4352,34 @@ export class ContentRepository {
         "manual_ready",
       ]);
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
+      const journalDecision = await this.shouldJournalDecision(
+        tx,
+        orgId,
+        id,
+        "approved",
+        targets.some((target) => target.status === "failed"),
+      );
       // After `requireNotPublished` too: an item whose channels are gone AND
       // which already published from them is a published item first.
       await this.requireAdaptations(tx, orgId, id);
       await requireClientReviewApproval(tx, orgId, id);
+      const [unreviewedImage] = await tx
+        .select({ id: schema.contentImageSlots.id })
+        .from(schema.contentImageSlots)
+        .where(
+          and(
+            eq(schema.contentImageSlots.orgId, orgId),
+            eq(schema.contentImageSlots.contentItemId, id),
+            eq(schema.contentImageSlots.needsReview, true),
+          ),
+        )
+        .limit(1);
+      if (unreviewedImage) {
+        throw conflict(
+          "content_images_need_review",
+          "Review the generated article images and their descriptions before approving",
+        );
+      }
       /*
        * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
        * ROW.
@@ -4100,6 +4634,9 @@ export class ContentRepository {
       }
 
       await this.setItemStatus(tx, orgId, id, "approved");
+      if (journalDecision.should && (sendable.length > 0 || manualReady.length > 0)) {
+        await this.appendPromptDecision(tx, orgId, id, "approved", journalDecision.ordinal);
+      }
     });
 
     return this.get(orgId, id);
@@ -4199,6 +4736,19 @@ export class ContentRepository {
           .limit(1)
       )[0];
       if (!current) throw notFound("adaptation_not_found", "Adaptation not found");
+
+      // Archive locks this adaptation before changing the parent. This read is
+      // stable for the rest of the transaction while our adaptation lock is
+      // held, without moving content_items ahead of the publication's channel
+      // foreign-key lock in the global lock order.
+      const [item] = await tx
+        .select({ status: schema.contentItems.status })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, contentItemId)))
+        .limit(1);
+      if (item?.status === "archived") {
+        throw conflict("content_archived", "Restore this archived content before changing it");
+      }
 
       // The in-flight statuses first, and the records that answer them are the
       // ones `updateAdaptation` uses: one reading of "this delivery is not
@@ -4428,6 +4978,7 @@ export class ContentRepository {
    */
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
+      await this.holdDecisionOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,
@@ -4437,6 +4988,7 @@ export class ContentRepository {
         of: "the fan-out",
         hasOutstanding: outstanding.length > 0,
       });
+      const journalDecision = await this.shouldJournalDecision(tx, orgId, id, "rejected");
 
       for (const adaptation of outstanding) {
         if (adaptation.status !== "manual_ready") {
@@ -4465,6 +5017,9 @@ export class ContentRepository {
       }
 
       await this.setItemStatus(tx, orgId, id, live ? "partially_published" : "rejected");
+      if (journalDecision.should && (outstanding.length > 0 || !live)) {
+        await this.appendPromptDecision(tx, orgId, id, "rejected", journalDecision.ordinal);
+      }
     });
 
     return this.get(orgId, id);

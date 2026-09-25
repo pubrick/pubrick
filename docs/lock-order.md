@@ -11,11 +11,122 @@ Every transaction that takes row locks on more than one of these tables takes
 them in that order. A transaction that needs only some of them skips the rest;
 it never goes backwards.
 
+The dated-topic planner, topic edits, and manual calendar writers serialize on
+the brand row with `FOR NO KEY UPDATE` before touching topics or calendar slots.
+This is compatible with the `FOR KEY SHARE` lock taken by generation's brand
+foreign key after it has locked a slot or topic. The worker then locks
+its config and topic rows in stable ID order before checking the day's slots.
+This makes the daily cap and linked-topic check atomic across worker replicas
+and manual placement. Removing a linked slot holds the brand lock while
+clearing the topic's target date, so the next scan does not undo the editor's
+removal.
+
+Content archive and restore lock all of an item's adaptations by ID before
+locking `content_items`, then change only the parent status. Archive refuses
+active delivery rows. The publish worker's `markPublishing` locks its adaptation
+before reading and locking the parent, so a job fetched before archive cannot
+claim a send after archive has committed. Worker status recomputation keeps an
+archived parent unchanged.
+
+Permanent deletion of an archived unsent post takes the same ordered adaptation
+locks before the content item lock. It refuses any delivery attempt or linked
+publication record, a retained generation run, or an item whose durable safety
+marker is false before deleting it. A trigger on adaptation deletion remembers
+delivery history that would otherwise lose its item link when a channel is
+deleted. Historical posts have the marker false because prior orphaned receipts
+cannot be matched back to a post.
+
+Daily topic suggestions also serialize admission on `brands`. Both the manual
+`TopicsRepository.requestSuggestions` path and the automatic
+`SuggestionsScanService.trigger` path take that brand row `FOR NO KEY UPDATE` before
+checking the 30-minute request cooldown. The automatic path then locks its
+`autopilot_configs` row and inserts the request and queue job in the same
+transaction. This order prevents simultaneous manual and automatic admissions
+from each missing the other's new request.
+
+Telegram account sign-in has a separate workspace-scoped lock chain:
+`member` → `telegram_login_attempts` → `telegram_source_accounts`.
+The final verified-session replacement and disconnect recheck the actor's
+owner/admin membership under a row lock, then lock or update the organization's
+login attempt, then write its account row. The phone and verification admission
+updates touch only the attempt row; no transaction holds a database lock during
+an MTProto network call. A disconnect invalidates a pending verification before
+deleting the account, so a late Telegram response cannot reconnect it.
+
+Brand access replacement has its own short chain: `brands` → `member` →
+`brand_access`. Replacing one brand's grants locks its brand row `FOR UPDATE`,
+then the selected member rows by ID `FOR KEY SHARE`, then deletes and inserts
+grant rows. A member role update holds that member row first and its trigger
+deletes the member's grants. The trigger does not ask for a brand row, so it
+cannot close a cycle with replacement waiting on that member. Brand deletion
+cascades into grants after holding the brand; it never asks for a member row.
+Keep future grant writers on this order, and do not add a brand lookup or lock
+inside the role-change trigger.
+
 Channel re-adaptation stages its proposal after the model returns. The stage
 transaction locks its adaptation, then its item, then replaces the proposal.
 Accept takes the same two parent locks before reading the proposal and writing
 an AI version. Discard only deletes the proposal. The proposal's composite
 foreign key also checks that its adaptation belongs to its content item.
+
+Inline image replacement locks the organization `FOR KEY SHARE` before its
+`content_items` row, matching tenant deletion's outer-to-inner cascade. It
+then checks the whole-set revision, locking selected image assets
+`FOR KEY SHARE` in ID order,
+and replacing `content_image_slots`. The revision increments in that same
+transaction, so a stale editor receives a 409 before deleting any slot. Body
+edits, version restoration, refine acceptance, and approval already serialize
+on that same item lock; the body update trigger prevents any writer from
+leaving an image beyond the last paragraph. Slot inserts also take
+`FOR KEY SHARE` on referenced `media_assets` rows.
+Regenerating one saved inline image checks the organization and item under
+`FOR KEY SHARE` before calling Gemini. It holds no database lock during the
+provider call. Afterward, a short transaction locks the organization
+`FOR KEY SHARE`, item `FOR UPDATE`, and new media asset `FOR KEY SHARE`, then
+updates the selected slot. It rechecks the item's state, image revision, and
+slot identity under those locks. If any changed, the generated asset remains
+in the media library and the slot stays untouched.
+Media deletion checks cover, inline, and public feed references, then deletes
+the asset; its foreign-key fallback turns a concurrent attachment into a 409.
+It never takes a content-item row lock after touching media, so this path cannot
+reverse the item-to-media acquisition order. Feed snapshot insertion references
+its feed entry and media asset but never takes an item lock afterward.
+Brand deletion locks its runs and adaptations in the canonical order, then all
+brand items in ID order before clearing feed snapshots and inline slots. This
+waits for any editor or feed publisher holding an item and prevents a new
+snapshot or slot from arriving after cleanup; the subsequent brand cascade can
+delete its media while direct media deletion remains blocked by the
+slot-to-media `NO ACTION` foreign keys.
+
+Telegram publication comment refresh takes an organization `FOR KEY SHARE`
+lock, then a brand `FOR KEY SHARE` lock before the live adaptation, channel,
+content item, and publication receipt in that order. It then claims its sample
+row and enqueues the workspace-serialized Telegram comments job in one
+transaction. The worker uses the same order before
+locking the sample `FOR UPDATE` and replacing its bounded reply rows. This
+keeps organization and brand deletion cascades from waiting on a sample while
+the worker waits for either parent. It also makes a concurrent channel delete
+finish before the live check or wait for the short sample write. Public Telegram reads happen
+outside the transaction; the worker rechecks the live publication before
+writing and matches the job's request timestamp, so a stale read cannot
+overwrite a later sample. The receipt lock follows the channel lock because
+channel deletion stamps that receipt in a trigger.
+
+Paid comment analysis admission has a short organization-scoped transaction:
+it locks `organization FOR NO KEY UPDATE`, expires any stale active admission
+for the target, counts the previous rolling hour's admissions across source
+items and publication replies plus pre-admission ledger calls, and inserts one
+reservation. All cutoffs use the database clock. This lock makes
+the ten-call budget atomic across API replicas. The provider call runs only
+after commit. Usage ledger inserts and the final admission completion are
+separate single-table writes; neither holds an admission lock while asking
+for an organization or brand lock. A stale lease can be closed and replaced
+after two minutes without releasing its original hour's budget.
+Both analysis save paths recheck the original sample timestamp after the paid
+call. Publication analysis also checks the collection request timestamp and
+locks organization, brand, adaptation, channel, item, receipt, then sample.
+Source analysis locks organization, brand, source, then news item before saving;
+it discards a result if the worker replaced that item's reply sample.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
@@ -88,11 +199,21 @@ an implicit `FOR KEY SHARE` on a row nothing else holds while asking for
 anything, conflicting only with a delete of the account itself.
 
 **`organization`** sits above everything (a tenant delete cascades into all of
-it). Application code never takes it EXPLICITLY together with anything else;
-it is taken implicitly, `FOR KEY SHARE`, by every insert carrying an `org_id`
-foreign key (a version row, a ledger row, a proposal). That mode conflicts only
-with a delete or a key update of the organization row itself — the tenant
-delete — which holds nothing else first, so the edge cannot close a cycle.
+it). Most inserts carrying an `org_id` foreign key acquire an implicit
+`FOR KEY SHARE` lock on that row. Inline image replacement and Telegram
+publication comment refresh/worker writes also take it explicitly, before
+`brands` or any other row they lock. This order matters: taking a brand or
+sample first and then reaching the organization through a foreign key could
+deadlock with a tenant delete, which locks the organization before cascading
+to either child. `FOR KEY SHARE` conflicts with the tenant delete but allows
+independent writers in the same organization to proceed concurrently.
+
+Approve and Reject also append prompt decision evidence. They take the
+organization's `FOR KEY SHARE` lock before adaptation and item locks so the
+event's organization foreign key adds no late edge. Historical run, revision,
+and item IDs in the event deliberately have no foreign key: the path reads the
+producing run and revisions without locking them after the item, and the
+journal survives deletion of those records.
 
 **`ai_credentials`** IS taken together with a table in the order, and is named
 here rather than left silent. `AiCredentialsRepository.delete` locks the key rows

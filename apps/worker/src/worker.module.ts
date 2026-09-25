@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { TopicPlannerService } from "./calendar/topic-planner.service";
+import { ClaimReviewWorkerRepository } from "./claim-review/claim-review.repository";
+import { ClaimReviewService } from "./claim-review/claim-review.service";
 import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { GenerateRepository } from "./generate/generate.repository";
@@ -19,12 +22,15 @@ import { RssService } from "./rss/rss.service";
 import { TelegramReader } from "./rss/telegram.reader";
 import { SuggestionsRepository } from "./suggestions/suggestions.repository";
 import { SuggestionsService } from "./suggestions/suggestions.service";
+import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
   providers: [
     AutopilotService,
     QueueService,
+    ClaimReviewWorkerRepository,
+    ClaimReviewService,
     PublishRepository,
     PublishService,
     GenerateRepository,
@@ -36,12 +42,14 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     RssRepository,
     RssService,
     CalendarService,
+    TopicPlannerService,
     TelegramReader,
     RelevanceRepository,
     RelevanceService,
     CommentsRepository,
     CommentsService,
     SuggestionsRepository,
+    SuggestionsScanService,
     SuggestionsService,
     WebhooksService,
   ],

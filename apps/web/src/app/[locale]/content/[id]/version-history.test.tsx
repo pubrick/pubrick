@@ -16,6 +16,8 @@ const version: ContentVersionDto = {
   id: "11111111-1111-4111-8111-111111111111",
   adaptationId: null,
   body: "An older saved draft.",
+  hashtags: [],
+  cta: null,
   origin: "human",
   createdAt: "2026-09-01T10:00:00.000Z",
 };
@@ -85,6 +87,42 @@ describe("VersionHistory", () => {
       "Save your current edits before restoring a version.",
     );
     expect(mockApi).not.toHaveBeenCalled();
+  });
+
+  it("restores editorial metadata even when the sent text is unchanged", async () => {
+    const older = {
+      ...version,
+      adaptationId: "33333333-3333-4333-8333-333333333333",
+      body: "Same text",
+      hashtags: ["news"],
+      cta: "Ask a question",
+    };
+    mockApiPage.mockResolvedValue({ rows: [older], nextCursor: null });
+    const user = userEvent.setup();
+    render(
+      <VersionHistory
+        itemId="22222222-2222-4222-8222-222222222222"
+        adaptationId={older.adaptationId}
+        currentBody="Same text"
+        draftBody="Same text"
+        currentHashtags={["news"]}
+        currentCta=""
+        editable
+        onRestored={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    await user.click(screen.getByText("Version history"));
+    await user.click(await screen.findByRole("button", { name: "Preview" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Ask a question");
+    await user.click(screen.getByRole("button", { name: "Restore this text" }));
+    expect(mockApi).toHaveBeenCalledWith(expect.stringContaining("/restore"), {
+      method: "POST",
+      body: JSON.stringify({
+        expectedBody: "Same text",
+        expectedHashtags: ["news"],
+        expectedCta: "",
+      }),
+    });
   });
 
   it("translates a stale restore refusal and leaves the current text untouched", async () => {

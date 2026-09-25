@@ -7,6 +7,7 @@ import {
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   integer,
@@ -47,7 +48,20 @@ export const contentItems = pgTable(
     coverMediaId: uuid("cover_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     videoMediaId: uuid("video_media_id").references(() => mediaAssets.id, { onDelete: "restrict" }),
     body: text("body").notNull(),
+    /** Compare-and-swap token for whole-set inline image edits. */
+    imagesRevision: integer("images_revision").default(0),
     status: text("status", { enum: CONTENT_STATUSES }).notNull().default("draft"),
+    /** Original status while archived; cleared when the item is restored. */
+    archivedFromStatus: text("archived_from_status", { enum: CONTENT_STATUSES }),
+    /**
+     * Durable deletion gate. Rows from before migration 0060 are false because
+     * a channel delete may already have erased the only item-to-receipt link.
+     * New rows start true. Deleting a delivery adaptation turns this false
+     * permanently, even if the channel is removed. While an adaptation still
+     * exists, the API checks its attempt count, status, and receipts directly.
+     * A database trigger refuses false -> true, including for historical rows.
+     */
+    isSafeToDelete: boolean("is_safe_to_delete").notNull().default(true),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
     /** Website used by the generation-time link policy; null means none ran. */
@@ -68,6 +82,7 @@ export const contentItems = pgTable(
   (t) => [
     index("content_items_org_id_idx").on(t.orgId),
     index("content_items_brand_id_idx").on(t.brandId),
+    uniqueIndex("content_items_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     /**
      * THE ORDER THE QUEUE IS READ IN — newest first, ties broken by `id`.
      *
@@ -115,6 +130,12 @@ export const contentItems = pgTable(
      * outside this set makes that lookup return `undefined` at runtime.
      */
     enumCheck("content_items_status_check", t.status, CONTENT_STATUSES),
+    enumCheck("content_items_archived_from_status_check", t.archivedFromStatus, CONTENT_STATUSES),
+    check(
+      "content_items_archive_pair_check",
+      sql`(${t.status} = 'archived') = (${t.archivedFromStatus} IS NOT NULL)
+        AND (${t.archivedFromStatus} IS NULL OR ${t.archivedFromStatus} <> 'archived')`,
+    ),
     enumCheck("content_items_origin_check", t.origin, CONTENT_ORIGINS),
     check(
       "content_items_one_media_check",
@@ -138,6 +159,10 @@ export const adaptations = pgTable(
       .references(() => channels.id, { onDelete: "cascade" }),
     /** Per-channel override; falls back to the content item body when null. */
     body: text("body"),
+    /** Normalized channel tags; the canonical body includes their final suffix. */
+    hashtags: text("hashtags").array().notNull().default([]),
+    /** Editorial suggestion only; never appended to the sent body. */
+    cta: text("cta"),
     status: text("status", { enum: ADAPTATION_STATUSES }).notNull().default("pending"),
     /**
      * The adaptation body is what actually reaches the platform, so provenance
@@ -462,6 +487,7 @@ export const publications = pgTable(
   },
   (t) => [
     index("publications_org_id_idx").on(t.orgId),
+    uniqueIndex("publications_org_id_id_idx").on(t.orgId, t.id),
     index("publications_adaptation_id_idx").on(t.adaptationId),
     /**
      * Postgres does not index a referencing column for you, and TWO things now

@@ -18,3 +18,37 @@ export const promptRevisionDtoSchema = z.object({
   createdAt: z.string(),
 });
 export type PromptRevisionDto = z.infer<typeof promptRevisionDtoSchema>;
+
+/** Observed run and current draft states, never an efficacy or A/B score. */
+export const promptRevisionUsageDtoSchema = z.object({
+  revisionId: z.string().uuid(),
+  role: promptRoleSchema,
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+  runCount: z.number().int().nonnegative(),
+  runsByStatus: z.record(z.string(), z.number().int().nonnegative()),
+  currentItemStatuses: z.record(z.string(), z.number().int().nonnegative()),
+  withoutCurrentItem: z.number().int().nonnegative(),
+});
+export type PromptRevisionUsageDto = z.infer<typeof promptRevisionUsageDtoSchema>;
+
+/** Historical human acts; an unattributed act has no per-revision row. */
+export const promptDecisionHistoryDtoSchema = z.object({
+  revisionId: z.string().uuid(),
+  role: promptRoleSchema,
+  days: z.union([z.literal(7), z.literal(30), z.literal(90)]),
+  counts: z.object({
+    approved: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+  }),
+  rows: z.array(
+    z.object({
+      id: z.string().uuid(),
+      contentItemId: z.string().uuid(),
+      itemExists: z.boolean(),
+      verdict: z.enum(["approved", "rejected"]),
+      decidedAt: z.string(),
+    }),
+  ),
+  nextCursor: z.string().uuid().nullable(),
+});
+export type PromptDecisionHistoryDto = z.infer<typeof promptDecisionHistoryDtoSchema>;

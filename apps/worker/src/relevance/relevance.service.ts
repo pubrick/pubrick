@@ -3,6 +3,7 @@ import {
   type AiCredential,
   callOutcomeOf,
   embedKnowledgeText,
+  feedbackAdjustment,
   generateStructured,
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,
@@ -21,7 +22,6 @@ import {
 import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
-import { feedbackAdjustment } from "./feedback-adjustment";
 import { RelevanceRepository } from "./relevance.repository";
 
 const verdictSchema = z.object({

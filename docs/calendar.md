@@ -51,6 +51,17 @@ action also refuses a topic that already has a calendar slot; existing
 single-slot actions keep their current rules. This action creates planned draft
 generation slots; it does not start a run or approve publication.
 
+An owner or admin can also enable **Plan approved dated topics automatically**
+in Autopilot settings. The worker then scans hourly and places approved topics
+with target dates in the next 14 local days at 10:00 in the brand's time zone.
+It respects the selected channels and daily slot limit, counts manually added
+slots against that limit, and leaves unapproved or past-dated ideas untouched.
+The settings page also offers **Plan now** after the opt-in is saved. This
+queues the same idempotent planner, with a 60-second per-brand cooldown; it
+does not start generation or publication. Removing or unlinking a slot clears
+its topic's target date. A linked topic's date and priority cannot be changed
+until its unstarted slot is removed.
+
 Deleting a topic with any linked calendar slot is refused, including after a
 slot starts. This preserves the original approval trail; remove unstarted
 slots or keep the topic as an archive. A started slot remains immutable.
@@ -101,6 +112,9 @@ primary Add action still plans a generation slot.
   snapshots the currently approved topic again. `generateCover` can be changed
   until generation starts.
 - `DELETE /api/calendar/slots/:id?brandId=<uuid>`: remove a planned slot.
+- `POST /api/brands/:brandId/autopilot/plan-topics`: owner/admin request to run
+  the saved, opt-in dated-topic planner now. Returns 202 when queued or 409
+  when the feature is off or was requested within 60 seconds.
 
 Every route requires an active organization. The repository scopes all reads
 and writes by organization and brand and returns only explicit public columns.

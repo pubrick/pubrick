@@ -1,13 +1,20 @@
 "use client";
 
-import type { AdaptationProposal, DraftRevisionProposal } from "@pubrick/shared";
+import type {
+  AdaptationProposal,
+  ContentImagesState,
+  DraftRevisionProposal,
+} from "@pubrick/shared";
 import {
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
+  normalizeHashtags,
   type PublishFailureReason,
   REFINE_VERBS,
   type RefineProposal,
   type RefineVerb,
+  stripHashtagSuffix,
+  withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -17,11 +24,13 @@ import { AppShell } from "@/components/app-shell";
 import { FeedEntryAction } from "@/components/feed-controls";
 import { MediaLibrary } from "@/components/media-library";
 import { OriginBadge } from "@/components/origin-badge";
+import { Advanced } from "@/components/ui/advanced";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { DimmedTextarea } from "@/components/ui/dimmed-textarea";
 import { Input } from "@/components/ui/input";
 import { Menu } from "@/components/ui/menu";
+import { Modal } from "@/components/ui/modal";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
 import {
@@ -40,10 +49,13 @@ import { hasPlatformAccelerator } from "@/lib/hotkey";
 import { type AiVersionBodies, type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { adaptationLimit, channelLabel as platformChannelLabel } from "@/lib/platform";
 import type { RunInput } from "@/lib/runs";
+import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
+import { InlineImages } from "./inline-images";
 import { SourceStrip } from "./source-strip";
+import { buildVcPackage } from "./vc-package";
 import { VersionHistory } from "./version-history";
 
 type Channel = { id: string; platform: string; name: string };
@@ -53,6 +65,8 @@ type Adaptation = {
   contentItemId: string;
   channelId: string;
   body: string | null;
+  hashtags: string[];
+  cta: string | null;
   status: AdaptationStatus;
   /**
    * What happened to this channel's post — the api's verdict, not one this
@@ -104,6 +118,8 @@ type ContentItem = {
   title: string | null;
   body: string;
   status: ContentStatus;
+  archivedFromStatus: ContentStatus | null;
+  isSafeToDelete: boolean;
   origin: ContentOrigin;
   createdAt: string;
   updatedAt: string;
@@ -241,9 +257,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
+  const [ctaDrafts, setCtaDrafts] = useState<Record<string, string>>({});
+  const tagBaselines = useRef<Record<string, string[]>>({});
+  const ctaBaselines = useRef<Record<string, string | null>>({});
+  const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const closeDelete = useCallback(() => {
+    if (!deleteBusy) setDeleteOpen(false);
+  }, [deleteBusy]);
   /**
    * The lens, off by default (provenance-lens design §5).
    *
@@ -293,6 +320,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [manualUrlDrafts, setManualUrlDrafts] = useState<Record<string, string>>({});
   const [manualBusy, setManualBusy] = useState<string | null>(null);
   const [copiedManualField, setCopiedManualField] = useState<string | null>(null);
+  const [vcPackageBusy, setVcPackageBusy] = useState<string | null>(null);
+  const [vcPackageReady, setVcPackageReady] = useState<string | null>(null);
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -386,14 +415,56 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     if (seededFor.current !== item.id) {
       seededFor.current = item.id;
       setBodyDraft(item.body);
-      setOverrideDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.body ?? ""])));
+      setOverrideDrafts(
+        Object.fromEntries(
+          item.adaptations.map((a) => [
+            a.id,
+            a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags),
+          ]),
+        ),
+      );
+      setTagDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags.join(", ")])));
+      setCtaDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta ?? ""])));
+      tagBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags]));
+      ctaBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta]));
+      bodyBaselines.current = Object.fromEntries(
+        item.adaptations.map((a) => [
+          a.id,
+          a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags),
+        ]),
+      );
       return;
     }
     setOverrideDrafts((prev) => {
       const added = item.adaptations.filter((a) => !(a.id in prev));
       if (added.length === 0) return prev;
-      return { ...prev, ...Object.fromEntries(added.map((a) => [a.id, a.body ?? ""])) };
+      return {
+        ...prev,
+        ...Object.fromEntries(
+          added.map((a) => [a.id, a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags)]),
+        ),
+      };
     });
+    setTagDrafts((prev) => ({
+      ...Object.fromEntries(
+        item.adaptations.filter((a) => !(a.id in prev)).map((a) => [a.id, a.hashtags.join(", ")]),
+      ),
+      ...prev,
+    }));
+    setCtaDrafts((prev) => ({
+      ...Object.fromEntries(
+        item.adaptations.filter((a) => !(a.id in prev)).map((a) => [a.id, a.cta ?? ""]),
+      ),
+      ...prev,
+    }));
+    for (const adaptation of item.adaptations) {
+      if (!(adaptation.id in tagBaselines.current)) {
+        tagBaselines.current[adaptation.id] = adaptation.hashtags;
+        ctaBaselines.current[adaptation.id] = adaptation.cta;
+        bodyBaselines.current[adaptation.id] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+      }
+    }
   }, [item]);
 
   /**
@@ -445,13 +516,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const refineBlockedReason =
     refineBusy !== null
       ? t(REFINE_BUSY_MESSAGE[refineBusy])
-      : item !== null && item.origin !== "ai"
-        ? te("refine_needs_ai_draft")
-        : draftMoved
-          ? t("refineUnsaved")
-          : selection === null
-            ? t("refineNoSelection")
-            : null;
+      : item?.status === "archived"
+        ? te("content_archived")
+        : item !== null && item.origin !== "ai"
+          ? te("refine_needs_ai_draft")
+          : draftMoved
+            ? t("refineUnsaved")
+            : selection === null
+              ? t("refineNoSelection")
+              : null;
   const canRefine = item !== null && refineBlockedReason === null;
 
   /**
@@ -598,12 +671,62 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   async function saveOverride(adaptationId: string) {
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
+    const tagValue = tagDrafts[adaptationId] ?? "";
+    const hashtags = normalizeHashtags(tagValue.split(","));
+    const cta = ctaDrafts[adaptationId] ?? "";
+    const saved = item?.adaptations.find((adaptation) => adaptation.id === adaptationId);
+    const baselineTags = tagBaselines.current[adaptationId] ?? saved?.hashtags ?? [];
+    const baselineCta =
+      adaptationId in ctaBaselines.current
+        ? ctaBaselines.current[adaptationId]
+        : (saved?.cta ?? null);
+    const tagsChanged = JSON.stringify(hashtags) !== JSON.stringify(baselineTags);
+    const ctaChanged = cta !== (baselineCta ?? "");
+    const metadataChanged = tagsChanged || ctaChanged;
+    const canSaveMetadataWithoutReplacingBody =
+      metadataChanged &&
+      saved?.body !== null &&
+      saved !== undefined &&
+      value === bodyBaselines.current[adaptationId];
     try {
-      await api(`/api/content/${id}/adaptations/${adaptationId}`, {
+      const persisted = await api<Adaptation>(`/api/content/${id}/adaptations/${adaptationId}`, {
         method: "PATCH",
-        body: JSON.stringify({ body: value.trim() === "" ? null : value }),
+        body: JSON.stringify({
+          ...(canSaveMetadataWithoutReplacingBody
+            ? {}
+            : {
+                body:
+                  value.trim() === ""
+                    ? hashtags.length > 0 || cta.trim()
+                      ? bodyDraft
+                      : null
+                    : value,
+              }),
+          ...(tagsChanged ? { hashtags, expectedHashtags: baselineTags } : {}),
+          ...(ctaChanged ? { cta, expectedCta: baselineCta } : {}),
+        }),
       });
       await reload();
+      const persistedText =
+        persisted.body === null ? "" : stripHashtagSuffix(persisted.body, persisted.hashtags);
+      setOverrideDrafts((current) =>
+        (current[adaptationId] ?? "") === value
+          ? { ...current, [adaptationId]: persistedText }
+          : current,
+      );
+      setTagDrafts((current) =>
+        (current[adaptationId] ?? "") === tagValue
+          ? { ...current, [adaptationId]: persisted.hashtags.join(", ") }
+          : current,
+      );
+      setCtaDrafts((current) =>
+        (current[adaptationId] ?? "") === cta
+          ? { ...current, [adaptationId]: persisted.cta ?? "" }
+          : current,
+      );
+      bodyBaselines.current[adaptationId] = persistedText;
+      tagBaselines.current[adaptationId] = persisted.hashtags;
+      ctaBaselines.current[adaptationId] = persisted.cta;
     } catch (err) {
       handleError(err);
     }
@@ -648,8 +771,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
       applyToItem(() => updated);
       const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
-      if (adaptation)
-        setOverrideDrafts((drafts) => ({ ...drafts, [adaptationId]: adaptation.body ?? "" }));
+      if (adaptation) {
+        bodyBaselines.current[adaptationId] =
+          adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+        setOverrideDrafts((drafts) => ({
+          ...drafts,
+          [adaptationId]:
+            adaptation.body === null
+              ? ""
+              : stripHashtagSuffix(adaptation.body, adaptation.hashtags),
+        }));
+      }
     } catch (err) {
       handleError(err);
       await reload();
@@ -741,6 +873,35 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function changeArchiveState(action: "archive" | "restore") {
+    setArchiveBusy(true);
+    setActionError(null);
+    try {
+      await api(`/api/content/${id}/${action}`, { method: "POST" });
+      await reload();
+    } catch (err) {
+      handleError(err);
+      await reload();
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  async function deleteArchivedPost() {
+    setDeleteBusy(true);
+    setActionError(null);
+    try {
+      await apiVoid(`/api/content/${id}`, { method: "DELETE" });
+      router.replace(`/${locale}/content`);
+    } catch (err) {
+      closeDelete();
+      handleError(err);
+      await reload();
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   /**
    * WHAT THE READER FOUND WHEN THEY OPENED THE CHANNEL.
    *
@@ -786,6 +947,65 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setCopiedManualField(key);
     } catch {
       setActionError(t("copyFailed"));
+    }
+  }
+
+  async function downloadVcPackage(adaptation: Adaptation, currentItem: ContentItem) {
+    if (vcPackageBusy) return;
+    setVcPackageBusy(adaptation.id);
+    setVcPackageReady(null);
+    setActionError(null);
+    try {
+      // Fetch the saved slots at click time: the inline editor can save them
+      // independently of this page's item poll.
+      const state = await api<ContentImagesState>(`/api/content/${currentItem.id}/images`, {
+        cache: "no-store",
+      });
+      // Manual-ready items stop polling. Re-read the item last so another tab's
+      // Reject/Edit cannot leave this package using a withdrawn adaptation.
+      const latest = await api<ContentItem>(`/api/content/${currentItem.id}`, {
+        cache: "no-store",
+      });
+      const latestAdaptation = latest.adaptations.find(
+        (candidate) => candidate.id === adaptation.id,
+      );
+      const channel = channels.find((candidate) => candidate.id === adaptation.channelId);
+      if (
+        latest.id !== currentItem.id ||
+        latest.brandId !== currentItem.brandId ||
+        !latestAdaptation ||
+        latestAdaptation.channelId !== adaptation.channelId ||
+        latestAdaptation.status !== "manual_ready" ||
+        channel?.platform !== "vc_ru"
+      ) {
+        applyToItem(() => latest);
+        setActionError(t("vcPackageNotReady"));
+        return;
+      }
+      const payload = await buildVcPackage({
+        title: latest.title || tc("untitled"),
+        body: latestAdaptation.body ?? latest.body,
+        masterBody: latest.body,
+        coverMediaId: latest.coverMediaId,
+        images: state.images,
+      });
+      const url = URL.createObjectURL(new Blob([payload], { type: "application/zip" }));
+      try {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `pubrick-vc-${latest.id}.zip`;
+        document.body.append(link);
+        link.click();
+        link.remove();
+      } finally {
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      setVcPackageReady(adaptation.id);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.noActiveOrg) handleError(cause);
+      else setActionError(errorMessage(cause, t("vcPackageFailed"), te));
+    } finally {
+      setVcPackageBusy(null);
     }
   }
 
@@ -991,11 +1211,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   function reviewPreview(adaptation: Adaptation, currentItem: ContentItem) {
     const channel = channels.find((c) => c.id === adaptation.channelId);
-    const override = overrideDrafts[adaptation.id] ?? adaptation.body ?? "";
+    const override =
+      overrideDrafts[adaptation.id] ??
+      (adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags));
+    const tags = normalizeHashtags(
+      (tagDrafts[adaptation.id] ?? adaptation.hashtags.join(", ")).split(","),
+    );
     const usesMaster = override.trim() === "";
-    const previewText = usesMaster ? bodyDraft : override;
+    const previewText =
+      usesMaster && tags.length === 0
+        ? bodyDraft
+        : withHashtags(usesMaster ? bodyDraft : override, tags);
     const unsaved =
-      override !== (adaptation.body ?? "") || (usesMaster && bodyDraft !== currentItem.body);
+      previewText !== (adaptation.body ?? currentItem.body) ||
+      (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
     const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
@@ -1081,6 +1310,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   const isPublished = item.status === "published";
+  const isArchived = item.status === "archived";
+  const canDeleteArchived =
+    isArchived &&
+    item.isSafeToDelete &&
+    item.runId === null &&
+    ["draft", "rejected"].includes(item.archivedFromStatus ?? "") &&
+    item.adaptations.every(
+      (adaptation) => adaptation.attemptCount === 0 && adaptation.status === "pending",
+    );
   /**
    * THE THREE FACTS A PARTLY DELIVERED POST'S CONTROLS ARE DRAWN FROM, derived
    * from `item.adaptations` rather than from `item.status` — because the state
@@ -1179,12 +1417,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
        * card, next to the other approval path.
        */
       primaryAction={
-        <Button
-          variant="primary"
-          onClick={() => approve(false)}
-          disabled={isPublished || manualReadyWithoutApprovalTargets}
-        >
-          {/*
+        isArchived ? (
+          <Button
+            variant="primary"
+            onClick={() => changeArchiveState("restore")}
+            disabled={archiveBusy}
+          >
+            {t("restore")}
+          </Button>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => approve(false)}
+            disabled={isPublished || manualReadyWithoutApprovalTargets || archiveBusy}
+          >
+            {/*
             The same button, saying what it will do to THIS post. "Publish now"
             on a post that is already live in one channel reads as "publish it
             again", which is the one thing approve cannot do — and the reader
@@ -1195,14 +1442,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             send to no channels: an item whose only remaining half ended
             `unknown` has nothing approve will target, and the api refuses it.
           */}
-          {manualReadyWithoutApprovalTargets
-            ? t("manualReadyAction")
-            : hasManualApprovalTarget
-              ? t("approveManual")
-              : partialSendCount > 0
-                ? t("approveNowPartial", { count: partialSendCount })
-                : t("approveNow")}
-        </Button>
+            {manualReadyWithoutApprovalTargets
+              ? t("manualReadyAction")
+              : hasManualApprovalTarget
+                ? t("approveManual")
+                : partialSendCount > 0
+                  ? t("approveNowPartial", { count: partialSendCount })
+                  : t("approveNow")}
+          </Button>
+        )
       }
     >
       <p className="mb-3">
@@ -1396,6 +1644,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             label={t("bodyLabel")}
             value={bodyDraft}
             onChange={setBodyDraft}
+            disabled={isArchived}
             onSelectionChange={setSelection}
             aiVersions={item.aiVersionBodies.item}
             dimmed={lens}
@@ -1404,7 +1653,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             rows={10}
           />
           <div className="mt-3">
-            <Button variant="secondary" onClick={saveBody}>
+            <Button variant="secondary" onClick={saveBody} disabled={isArchived}>
               {t("saveBody")}
             </Button>
           </div>
@@ -1420,6 +1669,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           />
         </div>
       </Card>
+
+      <InlineImages
+        itemId={item.id}
+        brandId={item.brandId}
+        savedBody={item.body}
+        bodyHasUnsavedChanges={draftMoved}
+        editable={["draft", "rejected", "failed"].includes(item.status)}
+        manualVc={manualAdaptations.length > 0}
+        onReloadArticle={() => window.location.reload()}
+      />
+
+      <ClaimEvidence
+        itemId={item.id}
+        savedBody={item.body}
+        draftBody={bodyDraft}
+        editable={["draft", "rejected", "failed"].includes(item.status)}
+      />
 
       {/*
         The proposal, BESIDE the draft and never in it (dossier anti-pattern 8):
@@ -1496,7 +1762,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="secondary"
               size="sm"
               onClick={() => acceptProposal(proposal)}
-              disabled={refineBusy !== null || draftMoved}
+              disabled={isArchived || refineBusy !== null || draftMoved}
               aria-describedby={draftMoved ? refineStaleId : undefined}
             >
               {t("refineAccept")}
@@ -1513,7 +1779,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => propose(proposal.verb, proposal)}
-              disabled={refineBusy !== null || proposalStale}
+              disabled={isArchived || refineBusy !== null || proposalStale}
               aria-describedby={proposalStale ? refineStaleId : undefined}
             >
               {t("refineRetry")}
@@ -1522,7 +1788,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               variant="ghost"
               size="sm"
               onClick={() => discardProposal(proposal)}
-              disabled={refineBusy !== null}
+              disabled={isArchived || refineBusy !== null}
             >
               {t("refineDiscard")}
             </Button>
@@ -1552,6 +1818,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               aria-label={t("overrideLabel", { channel: channelLabel(a.channelId) })}
               value={overrideDrafts[a.id] ?? ""}
               onChange={(value) => setOverrideDrafts({ ...overrideDrafts, [a.id]: value })}
+              disabled={isArchived}
               /*
                * This adaptation's OWN `ai` versions. Not the item's, and not
                * every adaptation's joined together: a human who wrote the same
@@ -1573,9 +1840,49 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               showCount
               rows={4}
             />
+            <Advanced
+              label={t("channelMetadata")}
+              dirty={
+                (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
+                (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
+              }
+              className="mt-3"
+            >
+              <div className="space-y-3">
+                <Input
+                  label={t("hashtagsLabel")}
+                  value={tagDrafts[a.id] ?? ""}
+                  onChange={(event) =>
+                    setTagDrafts((current) => ({ ...current, [a.id]: event.target.value }))
+                  }
+                  placeholder={t("hashtagsPlaceholder")}
+                  disabled={isArchived || !canEditChannel(item, a)}
+                />
+                <Input
+                  label={t("ctaLabel")}
+                  value={ctaDrafts[a.id] ?? ""}
+                  onChange={(event) =>
+                    setCtaDrafts((current) => ({ ...current, [a.id]: event.target.value }))
+                  }
+                  maxLength={500}
+                  disabled={isArchived || !canEditChannel(item, a)}
+                />
+                <p className="text-xs text-fg-tertiary">{t("ctaEditorialOnly")}</p>
+                {a.body === null &&
+                  (normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length > 0 ||
+                    (ctaDrafts[a.id] ?? "").trim()) && (
+                    <p className="text-xs text-fg-tertiary">{t("channelCopyHint")}</p>
+                  )}
+              </div>
+            </Advanced>
             {reviewPreview(a, item)}
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" size="sm" onClick={() => saveOverride(a.id)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => saveOverride(a.id)}
+                disabled={isArchived}
+              >
                 {t("saveOverride")}
               </Button>
               <Button
@@ -1585,14 +1892,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 disabled={
                   readaptBusy !== null ||
                   draftMoved ||
-                  (overrideDrafts[a.id] ?? "") !== (a.body ?? "") ||
+                  (overrideDrafts[a.id] ?? "") !==
+                    (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags)) ||
                   !canEditChannel(item, a)
                 }
               >
                 {readaptBusy === a.id ? t("readaptWorking") : t("readaptAction")}
               </Button>
             </div>
-            {(draftMoved || (overrideDrafts[a.id] ?? "") !== (a.body ?? "")) && (
+            {(draftMoved ||
+              (overrideDrafts[a.id] ?? "") !==
+                (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))) && (
               <p className="mt-2 text-sm text-fg-tertiary">{t("readaptSaveFirst")}</p>
             )}
             {!canEditChannel(item, a) && (
@@ -1626,7 +1936,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                           stale ||
                           draftMoved ||
                           !canEditChannel(item, a) ||
-                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                          (overrideDrafts[a.id] ?? "") !==
+                            (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))
                         }
                       >
                         {t("readaptAccept")}
@@ -1639,7 +1950,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                           readaptBusy !== null ||
                           draftMoved ||
                           !canEditChannel(item, a) ||
-                          (overrideDrafts[a.id] ?? "") !== (a.body ?? "")
+                          (overrideDrafts[a.id] ?? "") !==
+                            (a.body === null ? "" : stripHashtagSuffix(a.body, a.hashtags))
                         }
                       >
                         {t("refineRetry")}
@@ -1648,7 +1960,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                         variant="ghost"
                         size="sm"
                         onClick={() => discardReadapt(a.id, p.id)}
-                        disabled={readaptBusy !== null}
+                        disabled={isArchived || readaptBusy !== null}
                       >
                         {t("refineDiscard")}
                       </Button>
@@ -1660,12 +1972,47 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               itemId={id}
               adaptationId={a.id}
               currentBody={a.body}
+              currentHashtags={a.hashtags}
+              currentCta={a.cta}
+              unsavedMetadata={
+                (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
+                (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
+              }
               draftBody={
-                (overrideDrafts[a.id] ?? "").trim() === "" ? null : (overrideDrafts[a.id] ?? "")
+                (overrideDrafts[a.id] ?? "").trim() === "" &&
+                normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length === 0
+                  ? null
+                  : withHashtags(
+                      (overrideDrafts[a.id] ?? "").trim() === ""
+                        ? bodyDraft
+                        : (overrideDrafts[a.id] ?? ""),
+                      normalizeHashtags((tagDrafts[a.id] ?? "").split(",")),
+                    )
               }
               editable={canEditChannel(item, a)}
-              onRestored={async (body) => {
-                setOverrideDrafts((current) => ({ ...current, [a.id]: body }));
+              onRestored={async () => {
+                const updated = await api<ContentItem>(`/api/content/${id}`);
+                const restored = updated.adaptations.find((row) => row.id === a.id);
+                if (restored) {
+                  bodyBaselines.current[a.id] =
+                    restored.body === null
+                      ? ""
+                      : stripHashtagSuffix(restored.body, restored.hashtags);
+                  tagBaselines.current[a.id] = restored.hashtags;
+                  ctaBaselines.current[a.id] = restored.cta;
+                }
+                setOverrideDrafts((current) => ({
+                  ...current,
+                  [a.id]:
+                    restored?.body === null || !restored
+                      ? ""
+                      : stripHashtagSuffix(restored.body, restored.hashtags),
+                }));
+                setTagDrafts((current) => ({
+                  ...current,
+                  [a.id]: restored?.hashtags.join(", ") ?? "",
+                }));
+                setCtaDrafts((current) => ({ ...current, [a.id]: restored?.cta ?? "" }));
                 await reload();
               }}
             />
@@ -1686,17 +2033,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
       <EditorialNotes itemId={id} currentBody={item.body} draftBody={bodyDraft} />
 
-      <DraftRevision
-        itemId={id}
-        currentBody={item.body}
-        draftBody={bodyDraft}
-        eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
-        staged={item.draftRevisionProposal}
-        onAccepted={async (updatedBody) => {
-          setBodyDraft(updatedBody);
-          await reload();
-        }}
-      />
+      {!isArchived && (
+        <DraftRevision
+          itemId={id}
+          currentBody={item.body}
+          draftBody={bodyDraft}
+          eligible={item.origin === "ai" && ["draft", "rejected", "failed"].includes(item.status)}
+          staged={item.draftRevisionProposal}
+          onAccepted={async (updatedBody) => {
+            setBodyDraft(updatedBody);
+            await reload();
+          }}
+        />
+      )}
 
       {/*
         The rest of the decision. "Publish now" is the header's one primary
@@ -1721,42 +2070,83 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
-      <Card className="mb-6">
-        {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
-        {partlyLive && !hasOutstanding && (
-          <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
-        )}
-        <div className="flex flex-wrap items-end gap-3">
-          <Input
-            id="scheduledAt"
-            type="datetime-local"
-            label={t("scheduleLabel")}
-            value={scheduledAt}
-            onChange={(e) => setScheduledAt(e.target.value)}
-            disabled={isPublished}
-            min={nowLocal}
-          />
-          <Button
-            variant="secondary"
-            onClick={() => approve(true)}
-            disabled={
-              isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
-            }
-          >
-            {t("approveScheduled")}
-          </Button>
-          {manualAdaptations.length > 0 && (
-            <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+      {isArchived ? (
+        <Card className="mb-6">
+          <p className="mb-3 text-sm text-fg-secondary">{t("archivedHint")}</p>
+          {canDeleteArchived ? (
+            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+              {t("delete")}
+            </Button>
+          ) : (
+            <p className="text-sm text-fg-tertiary">{t("deleteUnavailableHint")}</p>
           )}
-          <Button
-            variant="danger"
-            onClick={reject}
-            disabled={isPublished || (partlyLive && !hasOutstanding)}
-          >
-            {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
-          </Button>
-        </div>
-      </Card>
+        </Card>
+      ) : (
+        <Card className="mb-6">
+          {isPublished && <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>}
+          {partlyLive && !hasOutstanding && (
+            <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
+          )}
+          <div className="flex flex-wrap items-end gap-3">
+            <Input
+              id="scheduledAt"
+              type="datetime-local"
+              label={t("scheduleLabel")}
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              disabled={isPublished}
+              min={nowLocal}
+            />
+            <Button
+              variant="secondary"
+              onClick={() => approve(true)}
+              disabled={
+                isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+              }
+            >
+              {t("approveScheduled")}
+            </Button>
+            {manualAdaptations.length > 0 && (
+              <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
+            )}
+            <Button
+              variant="danger"
+              onClick={reject}
+              disabled={isPublished || (partlyLive && !hasOutstanding) || archiveBusy}
+            >
+              {partlyLive && hasOutstanding ? t("rejectCancelOutstanding") : t("reject")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => changeArchiveState("archive")}
+              disabled={hasOutstanding || archiveBusy}
+            >
+              {t("archive")}
+            </Button>
+          </div>
+          {hasOutstanding && (
+            <p className="mt-3 text-sm text-fg-secondary">{t("archiveActiveHint")}</p>
+          )}
+        </Card>
+      )}
+
+      <Modal
+        open={deleteOpen}
+        onClose={closeDelete}
+        title={t("deleteTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeDelete} disabled={deleteBusy}>
+              {t("deleteCancel")}
+            </Button>
+            <Button variant="danger" onClick={deleteArchivedPost} disabled={deleteBusy}>
+              {t("delete")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
+      </Modal>
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>
@@ -1791,6 +2181,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     >
                       {copiedManualField === `${a.id}:body` ? t("copied") : t("copyBody")}
                     </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => downloadVcPackage(a, item)}
+                      disabled={vcPackageBusy !== null}
+                    >
+                      {vcPackageBusy === a.id ? t("vcPackageWorking") : t("downloadVcPackage")}
+                    </Button>
                     <a
                       href="https://vc.ru/"
                       target="_blank"
@@ -1800,11 +2198,17 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                       {t("openVc")}
                     </a>
                   </div>
+                  {vcPackageReady === a.id && (
+                    <p role="status" className="text-sm text-fg-secondary">
+                      {t("vcPackageReady")}
+                    </p>
+                  )}
                   <Input
                     type="url"
                     label={t("vcUrlLabel")}
                     placeholder="https://vc.ru/..."
                     value={manualUrlDrafts[a.id] ?? ""}
+                    disabled={isArchived}
                     onChange={(event) =>
                       setManualUrlDrafts({ ...manualUrlDrafts, [a.id]: event.target.value })
                     }
@@ -1813,7 +2217,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     <Button
                       variant="secondary"
                       size="sm"
-                      disabled={!manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
+                      disabled={isArchived || !manualUrlDrafts[a.id]?.trim() || manualBusy === a.id}
                       onClick={() => confirmManualPublication(a.id)}
                     >
                       {t("recordManualPublication")}
@@ -1923,14 +2327,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   <Button
                     variant="secondary"
                     onClick={() => assertDelivery(a.id, true)}
-                    disabled={deliveryBusy === a.id}
+                    disabled={isArchived || deliveryBusy === a.id}
                   >
                     {t("markDelivered")}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => assertDelivery(a.id, false)}
-                    disabled={deliveryBusy === a.id}
+                    disabled={isArchived || deliveryBusy === a.id}
                   >
                     {t("markNotDelivered")}
                   </Button>

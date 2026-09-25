@@ -166,6 +166,32 @@ export const CONTENT_TYPES = [
 ] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 
+/** Draft formats with enough structure to place illustrations within the body. */
+export const INLINE_IMAGE_CONTENT_TYPES = [
+  "expert_article",
+  "comparison",
+  "case_study",
+  "educational",
+] as const satisfies readonly ContentType[];
+export const MAX_AUTO_INLINE_IMAGES = 2;
+
+export function supportsInlineImages(contentType: ContentType | undefined): boolean {
+  return INLINE_IMAGE_CONTENT_TYPES.some((type) => type === contentType);
+}
+
+/** Keep worker placement and run receipt counts on the same paragraph rule. */
+export function autoInlineImagePlacements(
+  body: string,
+): Array<{ afterParagraph: number; text: string }> {
+  const paragraphs = body.split(/\n\s*\n/).filter((part) => part.trim());
+  if (paragraphs.length < 2) return [];
+  const count = paragraphs.length >= 4 ? MAX_AUTO_INLINE_IMAGES : 1;
+  return Array.from({ length: count }, (_, index) => {
+    const afterParagraph = Math.floor(((index + 1) * (paragraphs.length + 1)) / (count + 1)) - 1;
+    return { afterParagraph, text: paragraphs[afterParagraph] ?? "" };
+  });
+}
+
 /** Formats that would invite invented facts if admitted without source text. */
 export function contentTypeRequiresMaterial(contentType: ContentType | undefined): boolean {
   return contentType === "repost" || contentType === "case_study";
@@ -220,6 +246,8 @@ export const runCreateSchema = z
     contentType: z.enum(CONTENT_TYPES).optional(),
     /** One additional BYOK Gemini image call, only when explicitly requested. */
     generateCover: z.boolean().optional(),
+    /** Up to two additional BYOK Gemini calls for article illustrations. */
+    generateInlineImages: z.boolean().optional(),
     /** Copy this brand's recent editorial notes into the run only when requested. */
     useEditorialFeedback: z.boolean().optional(),
     /**
@@ -316,6 +344,10 @@ export const runCreateSchema = z
   .refine((v) => !contentTypeRequiresMaterial(v.contentType) || (v.material ?? "").trim() !== "", {
     message: "this format requires source material",
     path: ["material"],
+  })
+  .refine((v) => !v.generateInlineImages || supportsInlineImages(v.contentType), {
+    message: "inline images require an article format",
+    path: ["generateInlineImages"],
   });
 export type RunCreate = z.infer<typeof runCreateSchema>;
 
@@ -432,6 +464,7 @@ const briefRunInputBaseSchema = z.object({
   contentType: z.enum(CONTENT_TYPES).optional(),
   /** Optional so runs created before cover generation remain executable. */
   generateCover: z.boolean().optional(),
+  generateInlineImages: z.boolean().optional(),
   /** Optional for rows created before editorial feedback was available. */
   useEditorialFeedback: z.boolean().optional(),
   editorialFeedback: runEditorialFeedbackSchema.optional(),
@@ -463,6 +496,7 @@ export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
   contentType: z.enum(CONTENT_TYPES).optional(),
   generateCover: z.boolean().optional(),
+  generateInlineImages: z.boolean().optional(),
   /** Optional for rows created before editorial feedback was available. */
   useEditorialFeedback: z.boolean().optional(),
   editorialFeedback: runEditorialFeedbackSchema.optional(),

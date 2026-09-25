@@ -26,6 +26,7 @@ import {
 import type { Response } from "express";
 import { z } from "zod";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { MEDIA_MAX_UPLOAD_BYTES, MediaRepository } from "./media.repository";
@@ -35,6 +36,7 @@ const offsetSchema = z.coerce.number().int().min(0).max(100_000).default(0);
 
 @Controller("media")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class MediaController {
   constructor(
     private readonly media: MediaRepository,
@@ -63,6 +65,7 @@ export class MediaController {
   }
 
   @Post("generate")
+  @BrandScope({ kind: "brand", source: "body" })
   generate(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(mediaGenerateSchema)) body: MediaGenerate,
@@ -71,6 +74,7 @@ export class MediaController {
   }
 
   @Get(":id/file")
+  @BrandScope({ kind: "resource", resource: "media" })
   async file(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,
@@ -82,7 +86,7 @@ export class MediaController {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Cache-Control", "private, max-age=300");
     await new Promise<void>((resolve) => {
-      response.sendFile(asset.path, (error) => {
+      response.sendFile(asset.path, { dotfiles: "allow" }, (error) => {
         if (error && !response.headersSent) response.status(404).end();
         resolve();
       });
@@ -90,12 +94,14 @@ export class MediaController {
   }
 
   @Delete(":id")
+  @BrandScope({ kind: "resource", resource: "media" })
   @HttpCode(204)
   async delete(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string): Promise<void> {
     await this.media.delete(orgId, id);
   }
 
   @Patch("posts/:id/cover")
+  @BrandScope({ kind: "resource", resource: "content" })
   attach(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,
@@ -105,6 +111,7 @@ export class MediaController {
   }
 
   @Patch("posts/:id/video")
+  @BrandScope({ kind: "resource", resource: "content" })
   attachVideo(
     @OrgId() orgId: string,
     @Param("id", ParseUUIDPipe) id: string,

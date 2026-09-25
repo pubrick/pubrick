@@ -248,6 +248,24 @@ export class AiCredentialsRepository {
       .from(schema.pipelineRuns)
       .where(eq(schema.pipelineRuns.orgId, orgId));
 
+    // Standalone comment analysis has no pipeline run, but a failed ledger
+    // write is still a paid call whose cost must make this total a lower bound.
+    const analysisLost = await db
+      .select({
+        unrecordedCalls: sql<string>`coalesce(sum(${schema.analysisAdmissions.unrecordedCalls}), 0)`,
+      })
+      .from(schema.analysisAdmissions)
+      .where(eq(schema.analysisAdmissions.orgId, orgId));
+
+    // Claim reviews survive deletion of their article so a failed ledger
+    // insert never turns a lower-bound lifetime spend back into an exact sum.
+    const claimReviewLost = await db
+      .select({
+        unrecordedCalls: sql<string>`coalesce(sum(${schema.claimReviews.unrecordedCalls}), 0)`,
+      })
+      .from(schema.claimReviews)
+      .where(eq(schema.claimReviews.orgId, orgId));
+
     const row = rows[0];
     // An aggregate over zero rows still returns one row; this guards the type,
     // not a case Postgres produces.
@@ -255,7 +273,11 @@ export class AiCredentialsRepository {
 
     return summarizeCost({
       usd: Number(row.usd),
-      unpricedCalls: Number(row.unpricedCalls) + Number(lost[0]?.unrecordedCalls ?? 0),
+      unpricedCalls:
+        Number(row.unpricedCalls) +
+        Number(lost[0]?.unrecordedCalls ?? 0) +
+        Number(analysisLost[0]?.unrecordedCalls ?? 0) +
+        Number(claimReviewLost[0]?.unrecordedCalls ?? 0),
       estimatedCalls: Number(row.estimatedCalls),
     });
   }

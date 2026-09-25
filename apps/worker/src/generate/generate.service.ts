@@ -25,13 +25,17 @@ import {
   withRunFailure,
 } from "@pubrick/ai";
 import {
+  autoInlineImagePlacements,
   brandLinkPolicySchema,
   briefRunInputSchema,
   COVER_SUPPORTED_PLATFORMS,
   type GenerateJob,
+  normalizeHashtags,
   PermanentError,
   type RunFailure,
   sourceRunInputSchema,
+  supportsInlineImages,
+  withHashtags,
 } from "@pubrick/shared";
 import { z } from "zod";
 import {
@@ -180,6 +184,7 @@ const coverOutputSchema = z.object({
   result: z.enum(["generated", "unavailable"]),
 });
 
+const inlineImageOutputSchema = coverOutputSchema;
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -546,22 +551,38 @@ export class GenerateService {
     });
     if (checked === STOPPED) return STOPPED;
 
-    const adaptations: Array<{ channelId: string; body: string }> = [];
+    const adaptations: Array<{
+      channelId: string;
+      body: string;
+      hashtags: string[];
+      cta: string | null;
+    }> = [];
     for (const channel of context.channels) {
       // Its checkpoint key is `adapter:<channelId>`, so a crash mid-fan-out
       // re-runs only the channels that had not finished.
       const adapted = await this.runStep(state, adapterFor(channel), { body: edited.body });
       if (adapted === STOPPED) return STOPPED;
+      const hashtags = normalizeHashtags(adapted.hashtags ?? []);
+      const linkedBody = applyLinkPolicy(
+        adapted.body,
+        linkPolicy,
+        channel.platform,
+        run.createdAt,
+        input.contentType ?? "social_post",
+        adaptationLimit(channel.platform),
+      );
+      const body = withHashtags(linkedBody, hashtags);
+      if (body.length > adaptationLimit(channel.platform)) {
+        throw withRunFailure(
+          new PermanentError(`the channel text with hashtags exceeds ${channel.platform}'s limit`),
+          "too_long_for_channel",
+        );
+      }
       adaptations.push({
         channelId: channel.id,
-        body: applyLinkPolicy(
-          adapted.body,
-          linkPolicy,
-          channel.platform,
-          run.createdAt,
-          input.contentType ?? "social_post",
-          adaptationLimit(channel.platform),
-        ),
+        body,
+        hashtags,
+        cta: adapted.cta ?? null,
       });
     }
 
@@ -639,10 +660,11 @@ export class GenerateService {
               return { mediaId: null, result: "unavailable" as const };
             }
             try {
-              const mediaId = await this.repo.saveGeneratedCover(
+              const mediaId = await this.repo.saveGeneratedImage(
                 run.orgId,
                 run.brandId,
                 result.bytes,
+                "cover",
               );
               return { mediaId, result: "generated" as const };
             } catch (error) {
@@ -659,10 +681,104 @@ export class GenerateService {
       coverMediaId = cover.mediaId;
     }
 
+    const inlineImages: Array<NonNullable<TerminalPayload["inlineImages"]>[number]> = [];
+    if (input.generateInlineImages && supportsInlineImages(input.contentType)) {
+      const paragraphs = autoInlineImagePlacements(edited.body);
+      for (const { afterParagraph, text } of paragraphs) {
+        const stepName = `inline_image:${afterParagraph}`;
+        const image = await this.runStep(
+          state,
+          {
+            name: stepName,
+            schema: inlineImageOutputSchema,
+            run: async (ctx) => {
+              const googleKey = await this.repo.googleKnowledgeKey(run.orgId);
+              if (!googleKey) {
+                this.logger.warn(
+                  `Run ${run.id}: inline image skipped because the Google key is unavailable`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              const locked = await this.repo.withImageCallLock(run.orgId, async () => {
+                if (!(await this.repo.mayCallImageModel(run.orgId))) return null;
+                const prompt =
+                  `Create one 1K editorial illustration for ${context.brand.name}. ` +
+                  "The image should depict the passage below without text, logos, or watermarks. " +
+                  `Article context:\n<draft>\n${edited.body.slice(0, 1000)}\n</draft>\n` +
+                  `Passage to illustrate:\n<passage>\n${text.slice(0, 1000)}\n</passage>`;
+                const result = await this.imageCaller.call(googleKey, prompt);
+                const cost = imageCostUsd(result.usage);
+                const record: UsageRecord = {
+                  provider: "google",
+                  modelId: IMAGE_MODEL,
+                  attempt: 1,
+                  inputTokens: result.usage?.promptTokenCount ?? 0,
+                  outputTokens:
+                    (result.usage?.candidatesTokenCount ?? 0) +
+                    (result.usage?.thoughtsTokenCount ?? 0),
+                  cachedInputTokens: 0,
+                  reasoningTokens: result.usage?.thoughtsTokenCount ?? 0,
+                  costUsd: cost,
+                  costSource: cost === null ? "unknown" : "price_table",
+                  responseMs: result.responseMs,
+                  status: result.bytes ? "ok" : "errored",
+                  outcome: result.outcome,
+                };
+                // The ledger uses one bounded image category; each slot retains
+                // its own call in the checkpoint for accurate per-step display.
+                state.usage.set(stepName, [record]);
+                try {
+                  await ctx.onUsage(record, { step: "inline_image" });
+                } catch (error) {
+                  await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+                }
+                return result;
+              });
+              if (!locked.acquired || !locked.value) {
+                this.logger.warn(
+                  `Run ${run.id}: inline image skipped because the image budget is busy or full`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              const result = locked.value;
+              if (!result.bytes || !result.mimeType || result.outcome !== "completed") {
+                this.logger.warn(`Run ${run.id}: inline image was unavailable`);
+                return { mediaId: null, result: "unavailable" as const };
+              }
+              try {
+                const mediaId = await this.repo.saveGeneratedImage(
+                  run.orgId,
+                  run.brandId,
+                  result.bytes,
+                  "inline",
+                );
+                return { mediaId, result: "generated" as const };
+              } catch (error) {
+                this.logger.warn(
+                  `Run ${run.id}: generated inline image could not be saved: ${messageOf(error)}`,
+                );
+                return { mediaId: null, result: "unavailable" as const };
+              }
+            },
+          },
+          undefined,
+        );
+        if (image === STOPPED) return STOPPED;
+        if (image.mediaId) {
+          inlineImages.push({
+            mediaId: image.mediaId,
+            afterParagraph,
+            alt: `Generated illustration for paragraph ${afterParagraph + 1}; review before publishing`,
+          });
+        }
+      }
+    }
+
     return {
       body: edited.body,
       adaptations,
       coverMediaId,
+      inlineImages,
       linkPolicyWebsite: linkPolicy?.website ?? null,
     };
   }

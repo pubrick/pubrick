@@ -16,6 +16,32 @@ export const publicationMetricsDtoSchema = z.object({
 });
 export type PublicationMetricsDto = z.infer<typeof publicationMetricsDtoSchema>;
 
+/** A bounded discussion sample, not Telegram's total comment metric. */
+export const publicationCommentsDtoSchema = z.object({
+  status: z.enum(["not_collected", "pending", "available", "no_comments", "unavailable", "error"]),
+  requestedAt: z.iso.datetime().nullable(),
+  checkedAt: z.iso.datetime().nullable(),
+  canCollect: z.boolean(),
+  errorCode: z.string().nullable(),
+  comments: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        body: z.string(),
+        publishedAt: z.iso.datetime(),
+      }),
+    )
+    .max(50),
+});
+export type PublicationCommentsDto = z.infer<typeof publicationCommentsDtoSchema>;
+
+export const publicationCommentCollectionUpdateSchema = z.strictObject({ enabled: z.boolean() });
+export const publicationCommentCollectionDtoSchema = z.object({
+  enabled: z.boolean(),
+  updatedAt: z.iso.datetime().nullable(),
+});
+export type PublicationCommentCollectionDto = z.infer<typeof publicationCommentCollectionDtoSchema>;
+
 export const publicationResultDtoSchema = z.object({
   id: z.uuid(),
   contentItemId: z.uuid().nullable(),

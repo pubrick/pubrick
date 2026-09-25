@@ -34,6 +34,9 @@ const sourceUrl = z
     { message: "Source URL must not contain credentials" },
   );
 
+const plannedDate = z.iso.date();
+const priority = z.number().int().min(1).max(10);
+
 export const topicCreateSchema = z.object({
   brandId: z.string().uuid(),
   title: safeText(500),
@@ -44,6 +47,8 @@ export const topicCreateSchema = z.object({
     .refine((value) => !hasNulByte(value))
     .optional(),
   sourceUrl: sourceUrl.optional(),
+  plannedDate: plannedDate.nullable().optional(),
+  priority: priority.optional(),
 });
 export type TopicCreate = z.infer<typeof topicCreateSchema>;
 
@@ -56,6 +61,8 @@ export const topicUpdateSchema = z.object({
     .refine((value) => !hasNulByte(value))
     .optional(),
   sourceUrl: sourceUrl.nullable().optional(),
+  plannedDate: plannedDate.nullable().optional(),
+  priority: priority.optional(),
   status: z.enum(TOPIC_STATUSES).optional(),
 });
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
@@ -77,6 +84,8 @@ export const topicDtoSchema = z.object({
   description: z.string(),
   sourceUrl: z.string().nullable(),
   status: z.enum(TOPIC_STATUSES),
+  plannedDate: plannedDate.nullable(),
+  priority,
   origin: z.enum(TOPIC_ORIGINS),
   revision: z.number().int().positive(),
   createdAt: z.string(),

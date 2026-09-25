@@ -76,6 +76,7 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
   const fakeScripts = new Map<string, FakeTelegramBehaviour[]>();
   /** sendMessage requests whose BODY the fake server actually received. */
   const sendCounts = new Map<string, number>();
+  const sentTexts = new Map<string, string>();
   const vkRequests: URLSearchParams[] = [];
   const maxRequests: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
 
@@ -123,8 +124,10 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
         try {
           const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
             chat_id?: unknown;
+            text?: unknown;
           };
           chatId = String(payload.chat_id);
+          if (typeof payload.text === "string") sentTexts.set(chatId, payload.text);
         } catch {
           // Falls through to "no fake response configured" below.
         }
@@ -637,6 +640,26 @@ describe.skipIf(!url)("publish e2e (real DB + real pg-boss + fake Telegram)", ()
       .where(eq(schema.adaptations.id, adaptationId));
     expect(rows).toEqual([]);
   });
+
+  it("sends the saved hashtag body without adding the editorial CTA", async () => {
+    const chatId = `-100${Date.now()}91`;
+    fakeResponses.set(chatId, {
+      status: 200,
+      body: { ok: true, result: { message_id: 4712, chat: { id: Number(chatId) } } },
+    });
+    const { adaptationId } = await seedQueuedAdaptation(chatId);
+    const canonical = "A reviewed channel post.\n\n#news #launch";
+    await db
+      .update(schema.adaptations)
+      .set({ body: canonical, hashtags: ["news", "launch"], cta: "Ask a question" })
+      .where(eq(schema.adaptations.id, adaptationId));
+
+    const jobId = await boss.send(TEST_PUBLISH_QUEUE, { adaptationId, orgId });
+    if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");
+    expect((await waitUntilLeftQueued(adaptationId)).status).toBe("published");
+    expect(sentTexts.get(chatId)).toBe(canonical);
+    expect(sentTexts.get(chatId)).not.toContain("Ask a question");
+  }, 25_000);
 
   it("does not retry — and so cannot post twice — when the reply is lost after the send", async () => {
     const chatId = `-100${Date.now()}4`;

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TelegramSourceError } from "../rss/telegram.reader";
 import { CommentsService } from "./comments.service";
@@ -9,13 +11,31 @@ const item = {
   url: "https://t.me/example_channel/42",
   sourceKind: "telegram",
 };
+const publicationJob = {
+  kind: "publication" as const,
+  orgId: "org-1",
+  brandId: "brand-1",
+  publicationId: "publication-1",
+  requestedAt: "2026-09-25T00:00:00.000Z",
+};
 
 describe("CommentsService", () => {
   const repo = {
+    eligibleAuto: vi.fn(),
+    saveAuto: vi.fn(),
+    failAuto: vi.fn(),
+    scanAuto: vi.fn(),
+    scanPublicationsAuto: vi.fn(),
+    eligiblePublicationAuto: vi.fn(),
+    savePublicationAuto: vi.fn(),
+    failPublicationAuto: vi.fn(),
     item: vi.fn(),
+    publication: vi.fn(),
     session: vi.fn(),
     save: vi.fn(),
     fail: vi.fn(),
+    savePublication: vi.fn(),
+    failPublication: vi.fn(),
   };
   const telegram = { comments: vi.fn() };
   const service = new CommentsService(repo as never, telegram as never);
@@ -23,9 +43,72 @@ describe("CommentsService", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     repo.item.mockResolvedValue(item);
+    repo.eligibleAuto.mockResolvedValue({ url: item.url });
+    repo.eligiblePublicationAuto.mockResolvedValue({ id: "publication-1", url: item.url });
+    repo.publication.mockResolvedValue({ id: "publication-1", url: item.url });
     repo.session.mockResolvedValue("encrypted-session");
     repo.save.mockResolvedValue(undefined);
     repo.fail.mockResolvedValue(undefined);
+    repo.savePublication.mockResolvedValue(undefined);
+    repo.failPublication.mockResolvedValue(undefined);
+  });
+
+  const autoJob = {
+    kind: "news_auto" as const,
+    orgId: "org-1",
+    brandId: "brand-1",
+    itemId: "item-1",
+    revision: 3,
+  };
+
+  const publicationAutoJob = {
+    kind: "publication_auto" as const,
+    orgId: "org-1",
+    brandId: "brand-1",
+    publicationId: "publication-1",
+    revision: 1,
+  };
+
+  it("collects an automatic publication without invoking the paid analysis path", async () => {
+    const sample = { status: "available", comments: [] };
+    telegram.comments.mockResolvedValueOnce(sample);
+    await service.handle(publicationAutoJob);
+    expect(repo.eligiblePublicationAuto).toHaveBeenCalledTimes(2);
+    expect(telegram.comments).toHaveBeenCalledOnce();
+    expect(repo.savePublicationAuto).toHaveBeenCalledWith(publicationAutoJob, item.url, sample);
+    expect(repo.savePublication).not.toHaveBeenCalled();
+  });
+
+  it("skips a revoked automatic job without Telegram or AI calls", async () => {
+    repo.eligibleAuto.mockResolvedValueOnce(null);
+    await service.handle(autoJob);
+    expect(repo.session).not.toHaveBeenCalled();
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.saveAuto).not.toHaveBeenCalled();
+  });
+
+  it("uses only the existing Telegram reader and fenced automatic save", async () => {
+    const sample = { status: "available", comments: [] };
+    telegram.comments.mockResolvedValueOnce(sample);
+    await service.handle(autoJob);
+    expect(telegram.comments).toHaveBeenCalledOnce();
+    expect(repo.saveAuto).toHaveBeenCalledWith(autoJob, item.url, sample);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it("keeps the automatic collection worker independent of paid AI analysis", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/comments/comments.service.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/@pubrick\/ai|Gemini|CommentAnalysis|commentAnalysis/i);
+  });
+
+  it("leaves an automatic story eligible when its Telegram session is absent", async () => {
+    repo.session.mockResolvedValueOnce(null);
+    await service.handle(autoJob);
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.failAuto).not.toHaveBeenCalled();
   });
 
   it("reads only the scoped item's workspace session and persists its bounded sample", async () => {
@@ -53,5 +136,39 @@ describe("CommentsService", () => {
     await service.handle({ orgId: "other-org", itemId: "item-1" });
     expect(repo.session).not.toHaveBeenCalled();
     expect(telegram.comments).not.toHaveBeenCalled();
+  });
+
+  it("uses the owning workspace session for a public publication and records Telegram failures", async () => {
+    const sample = { status: "no_comments" as const, comments: [] };
+    telegram.comments.mockResolvedValueOnce(sample);
+    await service.handle(publicationJob);
+    expect(repo.publication).toHaveBeenCalledWith("org-1", "brand-1", "publication-1");
+    expect(repo.session).toHaveBeenCalledWith("org-1");
+    expect(repo.savePublication).toHaveBeenCalledWith(publicationJob, item.url, sample);
+    telegram.comments.mockRejectedValueOnce(new TelegramSourceError("telegram_not_connected"));
+    await service.handle(publicationJob);
+    expect(repo.failPublication).toHaveBeenCalledWith(
+      publicationJob,
+      item.url,
+      "telegram_not_connected",
+    );
+    repo.publication.mockResolvedValueOnce(null);
+    await service.handle(publicationJob);
+    expect(telegram.comments).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries infrastructure failures while fetching the publication session", async () => {
+    const dbFailure = new Error("database connection failed");
+    repo.session.mockRejectedValueOnce(dbFailure);
+    await expect(service.handle(publicationJob)).rejects.toBe(dbFailure);
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.failPublication).not.toHaveBeenCalled();
+  });
+
+  it("retries unexpected Telegram reader failures", async () => {
+    const transportFailure = new Error("transport failed");
+    telegram.comments.mockRejectedValueOnce(transportFailure);
+    await expect(service.handle(publicationJob)).rejects.toBe(transportFailure);
+    expect(repo.failPublication).not.toHaveBeenCalled();
   });
 });

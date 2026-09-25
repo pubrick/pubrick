@@ -85,6 +85,7 @@ export const CONTENT_BADGE_STATUS: Record<ContentStatus, StatusBadgeStatus> = {
   rejected: "draft",
   published: "published",
   failed: "failed",
+  archived: "draft",
 };
 
 /**

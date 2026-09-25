@@ -1,5 +1,14 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  check,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
 import { enumCheck } from "./enum-check.js";
@@ -27,6 +36,7 @@ export const mediaAssets = pgTable(
   },
   (t) => [
     index("media_assets_org_brand_created_idx").on(t.orgId, t.brandId, t.createdAt.desc()),
+    uniqueIndex("media_assets_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     enumCheck("media_assets_kind_check", t.kind, MEDIA_KINDS),
     check(
       "media_assets_shape_check",

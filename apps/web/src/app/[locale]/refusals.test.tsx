@@ -112,6 +112,9 @@ function serve(refuse: (url: string, method: string) => Response | undefined) {
     if (url.includes("/api/channels?brandId=")) {
       return jsonResponse(200, [{ id: CHANNEL_ID, platform: "telegram", name: "Main" }]);
     }
+    if (url === `/api/content/${ITEM_ID}/images`) {
+      return jsonResponse(200, { images: [], revision: 0 });
+    }
     if (url === `/api/content/${ITEM_ID}`) return jsonResponse(200, item);
     if (url === `/api/runs/${RUN_ID}`) return jsonResponse(200, run);
     if (url === "/api/brands") return jsonResponse(200, []);
@@ -255,6 +258,8 @@ describe("the post screen", () => {
           contentItemId: ITEM_ID,
           channelId: CHANNEL_ID,
           body: null,
+          hashtags: [],
+          cta: null,
           status: "failed",
           deliveryOutcome: "unknown",
           origin: "human",

@@ -4,9 +4,11 @@ import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { auth } from "./auth";
 import { AutopilotModule } from "./autopilot/autopilot.module";
+import { BrandAccessModule } from "./brand-access/brand-access.module";
 import { BrandsModule } from "./brands/brands.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { ChannelsModule } from "./channels/channels.module";
+import { ClaimReviewModule } from "./claim-review/claim-review.module";
 import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
@@ -19,6 +21,7 @@ import { PromptsModule } from "./prompts/prompts.module";
 import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
 import { RunsModule } from "./runs/runs.module";
+import { SearchCredentialsModule } from "./search-credentials/search-credentials.module";
 import { SourceExtractionModule } from "./source-extraction/source-extraction.module";
 import { SourcesModule } from "./sources/sources.module";
 import { TopicsModule } from "./topics/topics.module";
@@ -33,10 +36,12 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     HealthModule,
     KnowledgeModule,
     MediaModule,
+    BrandAccessModule,
     NotificationsModule,
     BrandsModule,
     CalendarModule,
     ChannelsModule,
+    ClaimReviewModule,
     ClientReviewModule,
     ContentModule,
     FeedsModule,
@@ -45,6 +50,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     PublicApiModule,
     AiCredentialsModule,
     RunsModule,
+    SearchCredentialsModule,
     SourceExtractionModule,
     SourcesModule,
     TopicsModule,

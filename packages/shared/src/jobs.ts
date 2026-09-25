@@ -44,9 +44,28 @@ export const TOPIC_SUGGESTIONS_QUEUE_OPTIONS = {
   heartbeatSeconds: 30,
   deadLetter: TOPIC_SUGGESTIONS_DLQ,
 } as const;
+/** Operator-requested, brand-scoped pass over approved dated topics. */
+export const MANUAL_TOPIC_PLAN_QUEUE = "topic-plan-manual";
+export type ManualTopicPlanJob = { orgId: string; brandId: string };
+export const MANUAL_TOPIC_PLAN_QUEUE_OPTIONS = {
+  retryLimit: 2,
+  retryDelay: 30,
+  expireInSeconds: 120,
+} as const;
+/** An operator-requested check uses the scheduled admission service unchanged. */
+export const MANUAL_AUTOPILOT_QUEUE = "autopilot-manual";
+export const MANUAL_AUTOPILOT_DLQ = "autopilot-manual-dlq";
+export type ManualAutopilotJob = { orgId: string; brandId: string; attemptId: string };
+export const MANUAL_AUTOPILOT_QUEUE_OPTIONS = {
+  retryLimit: 0,
+  expireInSeconds: 120,
+  deadLetter: MANUAL_AUTOPILOT_DLQ,
+} as const;
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
+export const AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE = "telegram-comments-auto-scan";
+export const AUTO_PUBLICATION_COMMENTS_SCAN_QUEUE = "telegram-publication-comments-auto-scan";
 /** Opt-in, bounded VK publication metric refresh. No credentials in job data. */
 export const VK_METRICS_QUEUE = "vk-metrics";
 export const VK_METRICS_SCAN_QUEUE = "vk-metrics-scan";
@@ -65,7 +84,24 @@ export const VK_METRICS_OPTIONS = {
 export function vkMetricsJobOptions(publicationId: string, channelId: string) {
   return { singletonKey: publicationId, singletonSeconds: 3600, group: { id: channelId } } as const;
 }
-export type TelegramCommentsJob = { orgId: string; itemId: string };
+/** Legacy news jobs omit `kind`; keep them readable until the queue drains. */
+export type TelegramCommentsJob =
+  | { kind?: "news"; orgId: string; itemId: string }
+  | { kind: "news_auto"; orgId: string; brandId: string; itemId: string; revision: number }
+  | {
+      kind: "publication_auto";
+      orgId: string;
+      brandId: string;
+      publicationId: string;
+      revision: number;
+    }
+  | {
+      kind: "publication";
+      orgId: string;
+      brandId: string;
+      publicationId: string;
+      requestedAt: string;
+    };
 export const TELEGRAM_COMMENTS_OPTIONS = {
   retryLimit: 1,
   retryDelay: 60,
@@ -73,6 +109,9 @@ export const TELEGRAM_COMMENTS_OPTIONS = {
 } as const;
 export function telegramCommentsJobOptions(itemId: string, orgId: string) {
   return { singletonKey: itemId, singletonSeconds: 900, group: { id: orgId } } as const;
+}
+export function telegramPublicationCommentsJobOptions(publicationId: string, orgId: string) {
+  return telegramCommentsJobOptions(`publication:${publicationId}`, orgId);
 }
 export const RSS_POLL_OPTIONS = {
   retryLimit: 2,
@@ -264,6 +303,16 @@ export const PUBLISH_MAX_LATENESS_HOURS_DEFAULT = 6;
 
 /** Queue the api enqueues generation runs to and the worker consumes. */
 export const GENERATE_QUEUE = "generate";
+
+/** Explicit, advisory review of the exact saved article body. */
+export const CLAIM_REVIEW_QUEUE = "claim-review";
+export const CLAIM_REVIEW_DLQ = "claim-review-dlq";
+export const CLAIM_REVIEW_QUEUE_OPTIONS = {
+  retryLimit: 0,
+  expireInSeconds: 600,
+  deadLetter: CLAIM_REVIEW_DLQ,
+} as const;
+export type ClaimReviewJob = { orgId: string; reviewId: string };
 
 /** Dead-letter queue for generation jobs whose retries were exhausted. */
 export const GENERATE_DLQ = "generate-dlq";

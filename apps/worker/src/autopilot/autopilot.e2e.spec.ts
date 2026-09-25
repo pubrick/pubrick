@@ -107,6 +107,54 @@ describe.skipIf(!url)("autopilot dispatch e2e", () => {
     expect(await service.trigger(boss, orgId, brandId)).toBe("quota_full");
   });
 
+  it("reserves dated approved topics for the calendar planner", async () => {
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Dated topics" })
+      .returning({ id: schema.brands.id });
+    const datedBrandId = brand?.id as string;
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId: datedBrandId,
+        platform: "telegram",
+        name: "Dated channel",
+        credentialsEncrypted: "test",
+      })
+      .returning({ id: schema.channels.id });
+    const datedChannelId = channel?.id as string;
+    await db.insert(schema.autopilotConfigs).values({
+      orgId,
+      brandId: datedBrandId,
+      enabled: true,
+      channelIds: [datedChannelId],
+      timezone: "UTC",
+      startHour: 0,
+      quietStartHour: 0,
+      quietEndHour: 0,
+      dailyRunLimit: 1,
+    });
+    await db.insert(schema.topics).values({
+      orgId,
+      brandId: datedBrandId,
+      title: "A planned topic",
+      status: "approved",
+      plannedDate: "2099-01-01",
+    });
+    expect(await service.trigger(boss, orgId, datedBrandId)).toBe("no_approved_topic");
+    const [undated] = await db
+      .insert(schema.topics)
+      .values({ orgId, brandId: datedBrandId, title: "Available now", status: "approved" })
+      .returning({ id: schema.topics.id });
+    expect(await service.trigger(boss, orgId, datedBrandId)).toBe("dispatched");
+    const dispatches = await db
+      .select({ topicId: schema.autopilotDispatches.topicId })
+      .from(schema.autopilotDispatches)
+      .where(eq(schema.autopilotDispatches.brandId, datedBrandId));
+    expect(dispatches).toEqual([{ topicId: undated?.id }]);
+  });
+
   it("stops admission on the recorded budget and during quiet hours", async () => {
     const first = await db
       .select({ runId: schema.autopilotDispatches.runId })

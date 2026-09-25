@@ -67,3 +67,20 @@ export const NOTIFICATION_EVENTS = [
   "morning_digest",
 ] as const;
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number];
+
+export const notificationHistoryQuerySchema = z.object({ cursor: z.uuid().optional() });
+export type NotificationHistoryQuery = z.infer<typeof notificationHistoryQuerySchema>;
+
+export const notificationHistorySchema = z.object({
+  events: z.array(
+    z.object({
+      id: z.uuid(),
+      event: z.enum(NOTIFICATION_EVENTS),
+      status: z.enum(["pending", "attempted", "sent", "failed", "skipped"]),
+      createdAt: z.iso.datetime(),
+      updatedAt: z.iso.datetime(),
+    }),
+  ),
+  nextCursor: z.uuid().nullable(),
+});
+export type NotificationHistory = z.infer<typeof notificationHistorySchema>;

@@ -1,11 +1,20 @@
 "use client";
 
-import { type AiCredentialPublic, COVER_SUPPORTED_PLATFORMS, type TopicDto } from "@pubrick/shared";
+import {
+  type AiCredentialPublic,
+  CONTENT_TYPES,
+  COVER_SUPPORTED_PLATFORMS,
+  type ContentType,
+  contentTypeRequiresMaterial,
+  supportsInlineImages,
+  type TopicDto,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -22,10 +31,12 @@ type Slot = {
   id: string;
   scheduledAt: string;
   brief: string;
+  contentType?: ContentType;
   topicId: string | null;
   topicTitle: string | null;
   channelIds: string[];
   generateCover: boolean;
+  generateInlineImages?: boolean;
   notes: string | null;
   runId: string | null;
   errorCode: string | null;
@@ -83,9 +94,11 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [busy, setBusy] = useState(false);
   const [dateInput, setDateInput] = useState(() => localInput(new Date(Date.now() + 86_400_000)));
   const [brief, setBrief] = useState("");
+  const [contentType, setContentType] = useState<ContentType>("social_post");
   const [notes, setNotes] = useState("");
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [generateCover, setGenerateCover] = useState(false);
+  const [generateInlineImages, setGenerateInlineImages] = useState(false);
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
   const [bulkPreviewRows, setBulkPreviewRows] = useState<BulkPreviewRow[]>([]);
   const [bulkChannels, setBulkChannels] = useState<string[]>([]);
@@ -190,7 +203,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           scheduledAt: new Date(dateInput).toISOString(),
           ...(selectedTopicId ? { topicId: selectedTopicId } : { brief }),
           channelIds: selectedChannels,
+          ...(contentType !== "social_post" && { contentType }),
           ...(generateCover && { generateCover: true }),
+          ...(generateInlineImages && { generateInlineImages: true }),
           notes: notes.trim() || null,
         }),
       });
@@ -198,6 +213,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
       setSelectedTopicId("");
       setNotes("");
       setGenerateCover(false);
+      setGenerateInlineImages(false);
+      setContentType("social_post");
       const nextDate = new Date(dateInput);
       setMonth(monthStart(nextDate));
       setSelectedDay(dayKey(nextDate));
@@ -221,6 +238,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setNotes(slot.notes ?? "");
     setSelectedChannels(slot.channelIds);
     setGenerateCover(slot.generateCover);
+    setGenerateInlineImages(slot.generateInlineImages ?? false);
+    setContentType(slot.contentType ?? "social_post");
     setFormError(null);
   }
   async function save(e: React.FormEvent) {
@@ -245,7 +264,9 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
               ? { topicId: null, brief }
               : { brief }),
           channelIds: selectedChannels,
+          contentType,
           generateCover,
+          generateInlineImages,
           notes: notes.trim() || null,
         }),
       });
@@ -450,25 +471,6 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         </div>
         {channels?.length === 0 && <p className="text-sm text-fg-secondary">{t("noChannels")}</p>}
       </fieldset>
-      <div className="rounded-control border border-border px-3 py-3">
-        <label className="flex min-h-11 items-start gap-3 text-sm text-fg">
-          <input
-            type="checkbox"
-            checked={generateCover}
-            onChange={(event) => setGenerateCover(event.target.checked)}
-            disabled={!generateCover && (!hasGoogleKey || !coverChannelsSupported)}
-            className="mt-0.5 h-5 w-5 rounded border-border text-accent"
-          />
-          <span>{tc("generateCover")}</span>
-        </label>
-        <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverHint")}</p>
-        {credentials !== null && !hasGoogleKey && (
-          <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverNeedsGoogle")}</p>
-        )}
-        {!coverChannelsSupported && (
-          <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverUnsupported")}</p>
-        )}
-      </div>
       <Textarea
         label={t("notes")}
         value={notes}
@@ -476,6 +478,69 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         maxLength={2000}
         showCount
       />
+      <Advanced dirty={contentType !== "social_post" || generateCover || generateInlineImages}>
+        <div className="flex flex-col gap-3">
+          <Select
+            label={tc("contentTypeLabel")}
+            value={contentType}
+            onChange={(event) => {
+              const selected = event.target.value as ContentType;
+              setContentType(selected);
+              if (!supportsInlineImages(selected)) setGenerateInlineImages(false);
+            }}
+          >
+            {CONTENT_TYPES.filter((type) => !contentTypeRequiresMaterial(type)).map((type) => (
+              <option key={type} value={type}>
+                {tc(`contentType.${type}`)}
+              </option>
+            ))}
+          </Select>
+          <div className="rounded-control border border-border px-3 py-3">
+            <label className="flex min-h-11 items-start gap-3 text-sm text-fg">
+              <input
+                type="checkbox"
+                checked={generateCover}
+                onChange={(event) => setGenerateCover(event.target.checked)}
+                disabled={!generateCover && (!hasGoogleKey || !coverChannelsSupported)}
+                className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+              />
+              <span>{tc("generateCover")}</span>
+            </label>
+            <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverHint")}</p>
+            {credentials !== null && !hasGoogleKey && (
+              <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverNeedsGoogle")}</p>
+            )}
+            {!coverChannelsSupported && (
+              <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateCoverUnsupported")}</p>
+            )}
+          </div>
+          <div className="rounded-control border border-border px-3 py-3">
+            <label className="flex min-h-11 items-start gap-3 text-sm text-fg">
+              <input
+                type="checkbox"
+                checked={generateInlineImages}
+                onChange={(event) => setGenerateInlineImages(event.target.checked)}
+                disabled={
+                  !generateInlineImages && (!hasGoogleKey || !supportsInlineImages(contentType))
+                }
+                className="mt-0.5 h-5 w-5 rounded border-border text-accent"
+              />
+              <span>{tc("generateInlineImages")}</span>
+            </label>
+            <p className="mt-1 pl-8 text-sm text-fg-tertiary">{tc("generateInlineImagesHint")}</p>
+            {credentials !== null && !hasGoogleKey && (
+              <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                {tc("generateInlineImagesNeedsGoogle")}
+              </p>
+            )}
+            {!supportsInlineImages(contentType) && (
+              <p className="mt-1 pl-8 text-sm text-fg-tertiary">
+                {tc("generateInlineImagesUnsupported")}
+              </p>
+            )}
+          </div>
+        </div>
+      </Advanced>
       <p className="text-sm text-fg-secondary">{t("reviewHint")}</p>
       {formError && (
         <p role="alert" className="text-sm text-danger">
@@ -616,6 +681,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                     {slot.notes && <p className="mt-2 text-sm text-fg-secondary">{slot.notes}</p>}
                     {slot.generateCover && (
                       <p className="mt-2 text-sm text-fg-secondary">{tc("generateCover")}</p>
+                    )}
+                    {slot.contentType && slot.contentType !== "social_post" && (
+                      <p className="mt-2 text-sm text-fg-secondary">
+                        {tc(`contentType.${slot.contentType}`)}
+                      </p>
+                    )}
+                    {slot.generateInlineImages && (
+                      <p className="mt-2 text-sm text-fg-secondary">{tc("generateInlineImages")}</p>
                     )}
                     {slot.retryAfter && !slot.runId && (
                       <p className="mt-2 text-sm text-fg-secondary">{t("waitingCapacity")}</p>

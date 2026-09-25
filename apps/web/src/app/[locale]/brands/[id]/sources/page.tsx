@@ -5,8 +5,11 @@ import {
   MAX_SOURCE_TEXT_LENGTH,
   type NewsCommentDto,
   type NewsItemDto,
+  type NewsRerankCursor,
+  type NewsRerankResponse,
   type NewsSourceDto,
   newsItemListQuerySchema,
+  newsRerankRequestSchema,
   newsSourceCreateSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
@@ -14,7 +17,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -27,6 +30,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { AutoComments } from "./auto-comments";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
@@ -44,6 +48,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
+  const [rerankCursor, setRerankCursor] = useState<NewsRerankCursor | null>(null);
+  const [rerankBusy, setRerankBusy] = useState(false);
+  const feedbackVersion = useRef(0);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [telegramConnected, setTelegramConnected] = useState(false);
   const [kind, setKind] = useState<"rss" | "telegram" | "telegram_private">("rss");
@@ -292,8 +299,41 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           current?.map((row) => (row.id === item.id ? { ...row, editorSignal: signal } : row)) ??
           null,
       );
+      feedbackVersion.current += 1;
+      setRerankCursor(null);
+      setNotice(t("feedbackSaved"));
     } catch (err) {
       setError(describeError(err));
+    }
+  }
+
+  async function rerankNews() {
+    const startedWithFeedbackVersion = feedbackVersion.current;
+    setRerankBusy(true);
+    setError(null);
+    try {
+      const request = newsRerankRequestSchema.parse({
+        days: 30,
+        ...(rerankCursor ? { cursor: rerankCursor } : {}),
+      });
+      const result = await api<NewsRerankResponse>(`/api/sources/items/rerank?brandId=${id}`, {
+        method: "POST",
+        body: JSON.stringify(request),
+      });
+      if (feedbackVersion.current === startedWithFeedbackVersion) {
+        setRerankCursor(result.nextCursor);
+        setNotice(
+          t(result.nextCursor ? "rerankMore" : "rerankDone", {
+            processed: result.processed,
+            changed: result.changed,
+          }),
+        );
+      }
+      load();
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setRerankBusy(false);
     }
   }
 
@@ -419,6 +459,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <p className="mt-3 text-sm text-fg-secondary">
             {!telegramConnected && <>{t("telegramSetup")} </>}
             {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
+            <Link href={`/${locale}/settings/telegram`} className="underline">
+              {t("telegramSettings")}
+            </Link>{" "}
             <a
               href="https://github.com/pubrick/pubrick/blob/main/docs/telegram-sources.md"
               target="_blank"
@@ -430,6 +473,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </p>
         )}
       </Card>
+
+      <AutoComments brandId={id} telegramConnected={telegramConnected} />
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
       <Card padded={false} className="mb-8">
@@ -528,7 +573,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           <option value="scored">{t("statusScored")}</option>
           <option value="failed">{t("statusFailed")}</option>
         </Select>
+        <Button variant="secondary" onClick={rerankNews} disabled={rerankBusy} className="self-end">
+          {t(rerankBusy ? "reranking" : rerankCursor ? "rerankContinue" : "rerank")}
+        </Button>
       </div>
+      <p className="mb-3 text-sm text-fg-secondary">{t("rerankHint")}</p>
       <Card padded={false}>
         {items === null ? (
           <div className="p-4">

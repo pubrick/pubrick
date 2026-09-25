@@ -23,6 +23,7 @@ import {
   knowledgeUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { KnowledgeRepository } from "./knowledge.repository";
@@ -31,6 +32,7 @@ import { KnowledgeIndexOwnerGuard } from "./knowledge-index-owner.guard";
 
 @Controller("knowledge")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "query" })
 export class KnowledgeController {
   constructor(
     private readonly entries: KnowledgeRepository,
@@ -43,6 +45,7 @@ export class KnowledgeController {
   }
 
   @Post()
+  @BrandScope({ kind: "brand", source: "body" })
   create(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(knowledgeCreateSchema)) data: KnowledgeCreate,
@@ -51,6 +54,7 @@ export class KnowledgeController {
   }
 
   @Post("bulk-import")
+  @BrandScope({ kind: "brand", source: "body" })
   import(
     @OrgId() orgId: string,
     @Body(new ZodValidationPipe(knowledgeImportSchema)) data: KnowledgeImport,
@@ -64,6 +68,7 @@ export class KnowledgeController {
   }
 
   @Post("index-batch")
+  @BrandScope({ kind: "brand", source: "body", roles: "manager" })
   @UseGuards(KnowledgeIndexOwnerGuard)
   indexBatch(
     @OrgId() orgId: string,
@@ -78,6 +83,7 @@ export class KnowledgeController {
   }
 
   @Patch("auto-index")
+  @BrandScope({ kind: "brand", source: "body", roles: "manager" })
   @UseGuards(KnowledgeIndexOwnerGuard)
   setAutoIndex(
     @OrgId() orgId: string,

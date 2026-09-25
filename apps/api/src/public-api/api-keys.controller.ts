@@ -12,6 +12,7 @@ import {
 } from "@nestjs/common";
 import { type ApiKeyCreate, apiKeyCreateSchema } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
@@ -21,6 +22,7 @@ import { ApiKeysManagerGuard } from "./api-keys-manager.guard";
 /** Only organization owners and admins can manage credentials. */
 @Controller("api-keys")
 @UseGuards(ActiveOrgGuard, ApiKeysManagerGuard)
+@BrandScope({ kind: "org", roles: "manager" })
 export class ApiKeysController {
   constructor(private readonly keys: ApiKeysRepository) {}
 

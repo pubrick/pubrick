@@ -35,6 +35,7 @@ describe("notifications settings", () => {
           digests: [],
         };
       if (path === "/api/notifications/test") return { ok: true };
+      if (path === "/api/notifications/events") return { events: [], nextCursor: null };
       throw new Error("unexpected request");
     });
   });
@@ -74,6 +75,7 @@ describe("notifications settings", () => {
           hasCredentials: true,
           digests: [],
         };
+      if (path === "/api/notifications/events") return { events: [], nextCursor: null };
       return { ok: false };
     });
     render(<NotificationsPage />, { locale: "ru" });
@@ -108,6 +110,7 @@ describe("notifications settings", () => {
             },
           ],
         };
+      if (path === "/api/notifications/events") return { events: [], nextCursor: null };
       throw new Error("unexpected request");
     });
     const user = userEvent.setup();
@@ -148,5 +151,56 @@ describe("notifications settings", () => {
         ([path, init]) => path === "/api/notifications" && init?.method === "PUT",
       ),
     ).toBe(false);
+  });
+
+  it("shows a bounded history and loads the next page only on request", async () => {
+    const firstId = "b4d86cba-8b69-42d0-8c63-27f72603675a";
+    const secondId = "18036429-00b8-4811-9c03-041f020a7df6";
+    request.mockImplementation(async (path) => {
+      if (path === "/api/notifications")
+        return {
+          enabled: true,
+          draftReady: false,
+          deliveryProblem: true,
+          hasCredentials: true,
+          digests: [],
+        };
+      if (path === "/api/notifications/events")
+        return {
+          events: [
+            {
+              id: firstId,
+              event: "delivery_unknown",
+              status: "attempted",
+              createdAt: "2026-09-25T08:00:00.000Z",
+              updatedAt: "2026-09-25T08:01:00.000Z",
+            },
+          ],
+          nextCursor: firstId,
+        };
+      if (path === `/api/notifications/events?cursor=${firstId}`)
+        return {
+          events: [
+            {
+              id: secondId,
+              event: "draft_ready",
+              status: "sent",
+              createdAt: "2026-09-24T08:00:00.000Z",
+              updatedAt: "2026-09-24T08:01:00.000Z",
+            },
+          ],
+          nextCursor: null,
+        };
+      throw new Error("unexpected request");
+    });
+    const user = userEvent.setup();
+    render(<NotificationsPage />);
+    expect(await screen.findByText("Delivery unconfirmed")).toBeInTheDocument();
+    expect(screen.getByText("Publication outcome unknown")).toBeInTheDocument();
+    expect(screen.getByText(/Last activity:/)).toBeInTheDocument();
+    expect(request).not.toHaveBeenCalledWith(`/api/notifications/events?cursor=${firstId}`);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText("Draft ready")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 });

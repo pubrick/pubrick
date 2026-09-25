@@ -12,15 +12,20 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
+import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { AutopilotDiagnostics } from "./diagnostics";
+import { AutopilotManualTrigger } from "./manual-trigger";
+import { AutopilotScheduledChecks } from "./scheduled-checks";
 
 type Channel = { id: string; name: string; platform: string };
 type Dispatch = {
   id: string;
   topicId: string;
+  topicTitle: string;
   runId: string;
   localDate: string;
   runStatus: string;
@@ -39,19 +44,24 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
   const locale = useLocale();
   const router = useRouter();
   const [config, setConfig] = useState<AutopilotConfig | null>(null);
+  const [persistedConfig, setPersistedConfig] = useState<AutopilotConfig | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [history, setHistory] = useState<Dispatch[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [planQueued, setPlanQueued] = useState(false);
 
   const describeError = useCallback(
-    (err: unknown) => {
+    (err: unknown, fallback = t("genericError")) => {
       if (err instanceof ApiError && err.noActiveOrg) {
         router.replace(`/${locale}/onboarding`);
         return null;
       }
-      return errorMessage(err, t("genericError"), te);
+      return errorMessage(err, fallback, te);
     },
     [locale, router, t, te],
   );
@@ -64,6 +74,8 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
     ])
       .then(([nextConfig, nextChannels, nextHistory]) => {
         setConfig(nextConfig);
+        setPersistedConfig(nextConfig);
+        setDirty(false);
         setChannels(nextChannels);
         setHistory(nextHistory);
         setError(null);
@@ -76,7 +88,9 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
 
   function set<K extends keyof AutopilotConfig>(key: K, value: AutopilotConfig[K]) {
     setConfig((previous) => (previous ? { ...previous, [key]: value } : previous));
+    setDirty(true);
     setSaved(false);
+    setPlanQueued(false);
   }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
@@ -95,11 +109,31 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
         body: JSON.stringify(parsed.data),
       });
       setConfig(next);
+      setPersistedConfig(next);
+      setDirty(false);
       setSaved(true);
     } catch (err) {
       setError(describeError(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function planNow() {
+    if (!persistedConfig?.autoPlanTopics || dirty || planning) return;
+    setPlanning(true);
+    setPlanQueued(false);
+    setSaved(false);
+    setError(null);
+    try {
+      await api<unknown>(`/api/brands/${id}/autopilot/plan-topics`, { method: "POST" });
+      setPlanQueued(true);
+      setPlanOpen(false);
+    } catch (err) {
+      setPlanOpen(false);
+      setError(describeError(err, t("planError")));
+    } finally {
+      setPlanning(false);
     }
   }
 
@@ -147,6 +181,64 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
                 <span className="mt-1 block text-fg-secondary">{t("enabledHint")}</span>
               </span>
             </label>
+            <label className="flex items-start gap-3 border-t border-border pt-5 text-sm text-fg">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={current.autoSuggestTopics ?? false}
+                onChange={(event) => set("autoSuggestTopics", event.target.checked)}
+              />
+              <span>
+                <span className="font-medium">{t("autoSuggestTopics")}</span>
+                <span className="mt-1 block text-fg-secondary">{t("autoSuggestTopicsHint")}</span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 border-t border-border pt-5 text-sm text-fg">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={current.autoPlanTopics ?? false}
+                onChange={(event) => set("autoPlanTopics", event.target.checked)}
+              />
+              <span>
+                <span className="font-medium">{t("autoPlanTopics")}</span>
+                <span className="mt-1 block text-fg-secondary">{t("autoPlanTopicsHint")}</span>
+              </span>
+            </label>
+            {current.autoPlanTopics && (
+              <div className="flex flex-col gap-3">
+                <Input
+                  label={t("planningDailyLimit")}
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={current.planningDailyLimit}
+                  onChange={(event) => set("planningDailyLimit", Number(event.target.value))}
+                  required
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="secondary"
+                    disabled={busy || planning || dirty || !persistedConfig?.autoPlanTopics}
+                    onClick={() => setPlanOpen(true)}
+                  >
+                    {t("planNow")}
+                  </Button>
+                  <Link
+                    href={`/${locale}/brands/${id}/calendar`}
+                    className="text-sm text-accent underline"
+                  >
+                    {t("openCalendar")}
+                  </Link>
+                </div>
+                {dirty && <p className="text-xs text-fg-secondary">{t("saveBeforePlanning")}</p>}
+                {planQueued && (
+                  <p role="status" className="text-sm text-success">
+                    {t("planQueued")}
+                  </p>
+                )}
+              </div>
+            )}
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-2 text-sm font-medium text-fg-secondary">
                 {t("channels")}
@@ -247,6 +339,9 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
           </form>
         </Card>
       )}
+      <AutopilotDiagnostics brandId={id} />
+      <AutopilotManualTrigger brandId={id} disabled={busy || dirty || !persistedConfig} />
+      <AutopilotScheduledChecks brandId={id} />
       <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>
         {history.length === 0 ? (
@@ -260,10 +355,10 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
                   href={`/${locale}/content/runs/${entry.runId}`}
                   className="text-accent underline"
                 >
-                  {t("runLink", { date: entry.localDate })}
+                  {entry.topicTitle || t("runLink", { date: entry.localDate })}
                 </Link>
               }
-              meta={new Date(entry.createdAt).toLocaleString(locale)}
+              meta={`${entry.localDate} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
               trailing={
                 <StatusBadge
                   status={
@@ -281,6 +376,25 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
           ))
         )}
       </Card>
+      <Modal
+        open={planOpen}
+        onClose={() => {
+          if (!planning) setPlanOpen(false);
+        }}
+        title={t("planNowTitle")}
+        footer={
+          <>
+            <Button variant="secondary" disabled={planning} onClick={() => setPlanOpen(false)}>
+              {t("cancel")}
+            </Button>
+            <Button disabled={planning} onClick={planNow}>
+              {planning ? t("planning") : t("planNowConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("planNowBody")}</p>
+      </Modal>
     </AppShell>
   );
 }

@@ -1,18 +1,33 @@
-import { Body, Controller, Get, HttpCode, Post, Put, UseGuards } from "@nestjs/common";
-import { type NotificationSettingsUpdate, notificationSettingsUpdateSchema } from "@pubrick/shared";
+import { Body, Controller, Get, HttpCode, Post, Put, Query, UseGuards } from "@nestjs/common";
+import {
+  type NotificationHistoryQuery,
+  type NotificationSettingsUpdate,
+  notificationHistoryQuerySchema,
+  notificationSettingsUpdateSchema,
+} from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { NotificationsRepository } from "./notifications.repository";
 
 @Controller("notifications")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "org", roles: "manager" })
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsRepository) {}
 
   @Get()
   get(@OrgId() orgId: string) {
     return this.notifications.get(orgId);
+  }
+
+  @Get("events")
+  history(
+    @OrgId() orgId: string,
+    @Query(new ZodValidationPipe(notificationHistoryQuerySchema)) query: NotificationHistoryQuery,
+  ) {
+    return this.notifications.history(orgId, query);
   }
 
   @Put()

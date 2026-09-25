@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
+  adaptationLimit,
   contentDetailDtoSchema,
   contentListItemDtoSchema,
   MAX_BODY_LENGTH,
@@ -813,6 +814,192 @@ describe.skipIf(!url)("content e2e", () => {
       .send({ body: "Channel-specific" })
       .expect(200);
     expect(updated.body.body).toBe("Channel-specific");
+  });
+
+  it("keeps structured hashtags, editorial CTA, preview text and restored versions aligned", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const adaptationId = created.body.adaptations[0].id as string;
+
+    const first = await agent
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({
+        body: "Channel copy",
+        hashtags: [" #new product ", "launch"],
+        expectedHashtags: [],
+        cta: "Ask a question",
+        expectedCta: null,
+      })
+      .expect(200);
+    expect(first.body).toMatchObject({
+      body: "Channel copy\n\n#new_product #launch",
+      hashtags: ["new_product", "launch"],
+      cta: "Ask a question",
+    });
+
+    const second = await agent
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({
+        body: "Channel copy",
+        hashtags: ["launch"],
+        expectedHashtags: ["new_product", "launch"],
+        cta: "",
+        expectedCta: "Ask a question",
+      })
+      .expect(200);
+    expect(second.body).toMatchObject({
+      body: "Channel copy\n\n#launch",
+      hashtags: ["launch"],
+      cta: "",
+    });
+
+    const versions = await agent
+      .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+      .expect(200);
+    expect(versions.body[0]).toMatchObject({
+      body: "Channel copy\n\n#launch",
+      hashtags: ["launch"],
+      cta: "",
+    });
+    const older = versions.body.find((row: { body: string }) => row.body.includes("#new_product"));
+    expect(older).toMatchObject({ hashtags: ["new_product", "launch"], cta: "Ask a question" });
+    await agent
+      .post(`/api/content/${itemId}/versions/${older.id}/restore`)
+      .send({ expectedBody: second.body.body })
+      .expect(400);
+    const restored = await agent
+      .post(`/api/content/${itemId}/versions/${older.id}/restore`)
+      .send({ expectedBody: second.body.body, expectedHashtags: ["launch"], expectedCta: "" })
+      .expect(200);
+    expect(restored.body.adaptations[0]).toMatchObject({
+      body: "Channel copy\n\n#new_product #launch",
+      hashtags: ["new_product", "launch"],
+      cta: "Ask a question",
+    });
+  });
+
+  it("bounds the canonical sent text including its hashtag suffix", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const adaptationId = created.body.adaptations[0].id as string;
+    const path = `/api/content/${created.body.id}/adaptations/${adaptationId}`;
+    const suffix = "\n\n#tag";
+    const limit = adaptationLimit("telegram") ?? MAX_BODY_LENGTH;
+    const atLimit = await agent
+      .patch(path)
+      .send({
+        body: "x".repeat(limit - suffix.length),
+        hashtags: ["tag"],
+        expectedHashtags: [],
+      })
+      .expect(200);
+    expect(atLimit.body.body).toHaveLength(limit);
+    await agent
+      .patch(path)
+      .send({
+        body: `${"x".repeat(limit - suffix.length)}x`,
+        hashtags: ["tag"],
+        expectedHashtags: ["tag"],
+      })
+      .expect(400);
+    const unchanged = await agent.get(`/api/content/${created.body.id}`).expect(200);
+    expect(unchanged.body.adaptations[0].body).toBe(atLimit.body.body);
+  });
+
+  it("rejects tags added to an existing body at the platform boundary", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    const body = "x".repeat(adaptationLimit("telegram") ?? MAX_BODY_LENGTH);
+    await agent.patch(path).send({ body }).expect(200);
+    await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: [] })
+      .expect(400);
+    expect(
+      (await agent.get(`/api/content/${created.body.id}`).expect(200)).body.adaptations[0],
+    ).toMatchObject({ body, hashtags: [] });
+  });
+
+  it("changes tags on the locked current body without replacing a concurrent text edit", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    await agent
+      .patch(path)
+      .send({ body: "First", hashtags: ["one"], expectedHashtags: [] })
+      .expect(200);
+    await agent.patch(path).send({ body: "Second" }).expect(200);
+    const changed = await agent
+      .patch(path)
+      .send({ hashtags: ["two"], expectedHashtags: ["one"] })
+      .expect(200);
+    expect(changed.body).toMatchObject({ body: "Second\n\n#two", hashtags: ["two"] });
+  });
+
+  it("preserves an authored final tag paragraph across structured tag edits and restores", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const itemId = created.body.id as string;
+    const path = `/api/content/${itemId}/adaptations/${created.body.adaptations[0].id}`;
+    const first = await agent
+      .patch(path)
+      .send({ body: "A post.\n\n#organic", hashtags: ["organic", "launch"], expectedHashtags: [] })
+      .expect(200);
+    expect(first.body.body).toBe("A post.\n\n#organic\n\n#organic #launch");
+    const second = await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: ["organic", "launch"] })
+      .expect(200);
+    expect(second.body.body).toBe("A post.\n\n#organic\n\n#news");
+    const history = await agent
+      .get(`/api/content/${itemId}/versions?adaptationId=${created.body.adaptations[0].id}`)
+      .expect(200);
+    const earlier = history.body.find((row: { body: string }) => row.body === first.body.body);
+    const restored = await agent
+      .post(`/api/content/${itemId}/versions/${earlier.id}/restore`)
+      .send({ expectedBody: second.body.body, expectedHashtags: ["news"], expectedCta: null })
+      .expect(200);
+    expect(restored.body.adaptations[0].body).toBe(first.body.body);
+  });
+
+  it("rejects a stale metadata field but lets an independent field edit proceed", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const created = await agent
+      .post("/api/content")
+      .send({ brandId, body: "Master", channelIds: [channelId] })
+      .expect(201);
+    const path = `/api/content/${created.body.id}/adaptations/${created.body.adaptations[0].id}`;
+    await agent.patch(path).send({ body: "Copy" }).expect(200);
+    await agent.patch(path).send({ cta: "New CTA", expectedCta: null }).expect(200);
+    await agent.patch(path).send({ cta: "Old editor", expectedCta: null }).expect(409);
+    const tags = await agent
+      .patch(path)
+      .send({ hashtags: ["news"], expectedHashtags: [] })
+      .expect(200);
+    expect(tags.body).toMatchObject({ body: "Copy\n\n#news", cta: "New CTA" });
   });
 
   it("edits a rejected item and its override: rejecting hands the text back to the author", async () => {
@@ -3933,6 +4120,361 @@ describe.skipIf(!url)("content e2e", () => {
     });
   });
 
+  describe("archiving content", () => {
+    it("keeps a rejected post and its history, hides it from the queue, and restores its exact status", async () => {
+      const agent = await orgAgent();
+      const otherOrg = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, title: "Saved post", body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      await agent
+        .patch(`/api/content/${itemId}`)
+        .send({ body: "Edited before filing." })
+        .expect(200);
+      await agent.post(`/api/content/${itemId}/reject`).expect(200);
+      const historyBefore = await versionRows(itemId);
+
+      await otherOrg.post(`/api/content/${itemId}/archive`).expect(404);
+      const archived = await agent.post(`/api/content/${itemId}/archive`).expect(200);
+      expect(archived.body.status).toBe("archived");
+      expect(archived.body.body).toBe("Edited before filing.");
+      expect(archived.body.adaptations[0].status).toBe("pending");
+      const delivery = await agent
+        .post(`/api/content/${itemId}/adaptations/${created.body.adaptations[0].id}/delivery`)
+        .send({ delivered: true })
+        .expect(409);
+      expect(delivery.body.code).toBe("content_archived");
+      expect((await agent.get("/api/content").expect(200)).body).toHaveLength(0);
+      const archive = await agent.get("/api/content?status=archived").expect(200);
+      expect(archive.body.map((item: { id: string }) => item.id)).toEqual([itemId]);
+      await agent.post(`/api/content/${itemId}/archive`).expect(200);
+
+      await agent.patch(`/api/content/${itemId}`).send({ body: "Changed" }).expect(409);
+      const approve = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+      expect(approve.body.code).toBe("content_archived");
+      const reject = await agent.post(`/api/content/${itemId}/reject`).expect(409);
+      expect(reject.body.code).toBe("content_archived");
+      await otherOrg.post(`/api/content/${itemId}/restore`).expect(404);
+
+      const restored = await agent.post(`/api/content/${itemId}/restore`).expect(200);
+      expect(restored.body.status).toBe("rejected");
+      expect(restored.body.body).toBe("Edited before filing.");
+      expect(await versionRows(itemId)).toEqual(historyBefore);
+      await agent.post(`/api/content/${itemId}/restore`).expect(200);
+      expect((await agent.get("/api/content").expect(200)).body).toHaveLength(1);
+      expect((await agent.get("/api/content?status=archived").expect(200)).body).toHaveLength(0);
+    });
+
+    it("refuses active deliveries until they are explicitly rejected", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      // Each delivery state that can still send is guarded by the same archive
+      // decision. The fixture changes only this row's status, never a job.
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        for (const status of ["queued", "scheduled", "publishing", "manual_ready"] as const) {
+          await db
+            .update(schema.adaptations)
+            .set({ status })
+            .where(eq(schema.adaptations.id, adaptationId));
+          const refused = await agent.post(`/api/content/${itemId}/archive`).expect(409);
+          expect(refused.body.code).toBe("content_archive_delivery_active");
+        }
+      } finally {
+        await pool.end();
+      }
+      await agent.post(`/api/content/${itemId}/reject`).expect(200);
+      expect((await agent.post(`/api/content/${itemId}/archive`).expect(200)).body.status).toBe(
+        "archived",
+      );
+    });
+
+    it("preserves published receipts and restores a published post without another send", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.adaptations)
+          .set({ status: "published" })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await db
+          .update(schema.contentItems)
+          .set({ status: "published" })
+          .where(eq(schema.contentItems.id, itemId));
+        await db.insert(schema.publications).values({
+          orgId,
+          adaptationId,
+          channelId,
+          status: "published",
+          externalUrl: "https://example.com/published-post",
+        });
+
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const restored = await agent.post(`/api/content/${itemId}/restore`).expect(200);
+        expect(restored.body.status).toBe("published");
+        expect(restored.body.adaptations[0].externalUrl).toBe("https://example.com/published-post");
+        expect(
+          await db
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(eq(schema.publications.adaptationId, adaptationId)),
+        ).toHaveLength(1);
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
+  describe("permanently deleting content", () => {
+    it("deletes an archived draft and its drafts, while preserving its AI cost ledger", async () => {
+      const agent = await orgAgent();
+      const otherOrg = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      await agent.patch(`/api/content/${itemId}`).send({ body: "A revised draft." }).expect(200);
+      expect(await versionRows(itemId)).toHaveLength(1);
+
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [ledger] = await db
+          .insert(schema.usageLedger)
+          .values({
+            orgId,
+            contentItemId: itemId,
+            adaptationId,
+            step: "test/delete",
+            provider: "google",
+            modelId: "gemini-test",
+            costSource: "price_table",
+            status: "ok",
+            outcome: "completed",
+          })
+          .returning({ id: schema.usageLedger.id });
+        if (!ledger) throw new Error("Expected a cost ledger row");
+
+        const unarchived = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(unarchived.body.code).toBe("content_delete_requires_archive");
+        const archived = await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        expect(archived.body.archivedFromStatus).toBe("draft");
+        await otherOrg.delete(`/api/content/${itemId}`).expect(404);
+        await agent.delete(`/api/content/${itemId}`).expect(204);
+        await agent.get(`/api/content/${itemId}`).expect(404);
+        await agent.delete(`/api/content/${itemId}`).expect(404);
+        expect(await versionRows(itemId)).toHaveLength(0);
+        expect(
+          await db
+            .select({ id: schema.adaptations.id })
+            .from(schema.adaptations)
+            .where(eq(schema.adaptations.id, adaptationId)),
+        ).toHaveLength(0);
+        const [cost] = await db
+          .select({
+            contentItemId: schema.usageLedger.contentItemId,
+            adaptationId: schema.usageLedger.adaptationId,
+          })
+          .from(schema.usageLedger)
+          .where(eq(schema.usageLedger.id, ledger.id));
+        expect(cost).toEqual({ contentItemId: null, adaptationId: null });
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("allows a rejected archive but refuses one that was previously approved", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const rejected = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const rejectedId = rejected.body.id as string;
+      await agent.post(`/api/content/${rejectedId}/reject`).expect(200);
+      expect(
+        (await agent.post(`/api/content/${rejectedId}/archive`).expect(200)).body
+          .archivedFromStatus,
+      ).toBe("rejected");
+      await agent.delete(`/api/content/${rejectedId}`).expect(204);
+
+      const approved = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const approvedId = approved.body.id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.contentItems)
+          .set({ status: "approved" })
+          .where(eq(schema.contentItems.id, approvedId));
+        await agent.post(`/api/content/${approvedId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${approvedId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_not_draft");
+        expect((await agent.get(`/api/content/${approvedId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("preserves every publication receipt, including a failed attempt on an archived draft", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({
+            orgId,
+            adaptationId,
+            channelId,
+            status: "failed",
+            error: "Rejected by platform",
+          })
+          .returning({ id: schema.publications.id });
+        if (!receipt) throw new Error("Expected a publication receipt");
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+        expect(
+          await db
+            .select({ id: schema.publications.id })
+            .from(schema.publications)
+            .where(eq(schema.publications.id, receipt.id)),
+        ).toHaveLength(1);
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("refuses an attempted delivery even without a surviving receipt", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.adaptations)
+          .set({ attemptCount: 1, status: "failed" })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("retains generated drafts while their run checkpoints remain readable", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db.insert(schema.pipelineRuns).values({
+          orgId,
+          brandId,
+          contentItemId: itemId,
+          input: { kind: "brief", text: "A private generation brief", channelIds: [channelId] },
+          status: "succeeded",
+        });
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_generation_history");
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("retains a draft when channel deletion orphaned its publication receipt", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const adaptationId = created.body.adaptations[0].id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({ orgId, adaptationId, channelId, status: "failed", error: "Rejected" })
+          .returning({ id: schema.publications.id });
+        if (!receipt) throw new Error("Expected receipt");
+        await agent.delete(`/api/channels/${channelId}`).expect(200);
+        const [orphan] = await db
+          .select({ adaptationId: schema.publications.adaptationId })
+          .from(schema.publications)
+          .where(eq(schema.publications.id, receipt.id));
+        expect(orphan?.adaptationId).toBeNull();
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_has_delivery_history");
+        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
+          "archived",
+        );
+      } finally {
+        await pool.end();
+      }
+    });
+  });
+
   /**
    * WHAT A QUEUE CARD IS, AND IN WHAT ORDER THE CARDS ARRIVE — the two halves
    * of design 0009's first commit that a caller can see.
@@ -4229,11 +4771,11 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(404);
       await stranger
         .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
-        .send({ expectedBody: "Second channel copy." })
+        .send({ expectedBody: "Second channel copy.", expectedHashtags: [], expectedCta: null })
         .expect(404);
       const restored = await agent
         .post(`/api/content/${itemId}/versions/${history.body[1].id}/restore`)
-        .send({ expectedBody: "Second channel copy." })
+        .send({ expectedBody: "Second channel copy.", expectedHashtags: [], expectedCta: null })
         .expect(200);
       expect(restored.body.body).toBe("Master copy.");
       expect(restored.body.adaptations[0].body).toBe("First channel copy.");
@@ -7718,6 +8260,102 @@ describe.skipIf(!url)("content e2e", () => {
         .expect(200);
       expect(versions.body[0]).toMatchObject({ body: first.body.proposal, origin: "ai" });
       await agent.post(`${path}/${first.body.id}/accept`).expect(404);
+    });
+
+    it("reattaches the managed tags exactly once after a channel re-adaptation", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({
+          body: "Earlier channel text",
+          hashtags: ["one", "two"],
+          expectedHashtags: [],
+          cta: "Ask a question",
+          expectedCta: null,
+        })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "A revised channel post.\n\n#one #two",
+        reason: "Shorter",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const accepted = await agent.post(`${path}/${staged.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0]).toMatchObject({
+        body: "A revised channel post.\n\n#one #two",
+        hashtags: ["one", "two"],
+        cta: "Ask a question",
+      });
+      const history = await agent
+        .get(`/api/content/${itemId}/versions?adaptationId=${adaptationId}`)
+        .expect(200);
+      expect(history.body[0]).toMatchObject({
+        body: "A revised channel post.\n\n#one #two",
+        hashtags: ["one", "two"],
+        cta: "Ask a question",
+        origin: "ai",
+      });
+    });
+
+    it("keeps a different authored tag paragraph when re-adaptation retains it", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["one", "two"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "A revised channel post.\n\n#organic",
+        reason: "Keep the author's tag",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      const accepted = await agent.post(`${path}/${staged.body.id}/accept`).expect(200);
+      expect(accepted.body.adaptations[0].body).toBe(
+        "A revised channel post.\n\n#organic\n\n#one #two",
+      );
+    });
+
+    it("refuses a re-adaptation that contains only the carried-over managed tags", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["one", "two"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "#one #two",
+        reason: "Only tags",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      await agent.post(`${path}/${staged.body.id}/accept`).expect(400);
+      const unchanged = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(unchanged.body.adaptations[0].body).toBe("Earlier channel text\n\n#one #two");
+      expect(unchanged.body.adaptationProposals[0].id).toBe(staged.body.id);
+    });
+
+    it("refuses a re-adaptation whose managed tags exceed the channel limit", async () => {
+      const { agent, itemId, adaptationId } = await setup();
+      await agent
+        .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+        .send({ body: "Earlier channel text", hashtags: ["news"], expectedHashtags: [] })
+        .expect(200);
+      readaptOutcome = {
+        ok: true,
+        text: "x".repeat(adaptationLimit("telegram") ?? MAX_BODY_LENGTH),
+        reason: "Long proposal",
+        usage: [],
+      };
+      const path = `/api/content/${itemId}/adaptations/${adaptationId}/readapt`;
+      const staged = await agent.post(path).expect(201);
+      await agent.post(`${path}/${staged.body.id}/accept`).expect(400);
+      const unchanged = await agent.get(`/api/content/${itemId}`).expect(200);
+      expect(unchanged.body.adaptations[0].body).toBe("Earlier channel text\n\n#news");
     });
 
     it("keeps a paid suggestion on failed retries and refuses stale acceptance", async () => {

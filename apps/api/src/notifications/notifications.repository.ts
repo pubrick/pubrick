@@ -1,13 +1,71 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
-import { decryptJson, encryptJson, type NotificationSettingsUpdate } from "@pubrick/shared";
-import { and, eq, sql } from "drizzle-orm";
+import {
+  decryptJson,
+  encryptJson,
+  type NotificationHistory,
+  type NotificationHistoryQuery,
+  type NotificationSettingsUpdate,
+} from "@pubrick/shared";
+import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
 @Injectable()
 export class NotificationsRepository {
+  async history(orgId: string, query: NotificationHistoryQuery): Promise<NotificationHistory> {
+    let before: { id: string; createdAt: Date } | undefined;
+    if (query.cursor) {
+      [before] = await db
+        .select({
+          id: schema.notificationEvents.id,
+          createdAt: schema.notificationEvents.createdAt,
+        })
+        .from(schema.notificationEvents)
+        .where(
+          and(
+            eq(schema.notificationEvents.orgId, orgId),
+            eq(schema.notificationEvents.id, query.cursor),
+          ),
+        )
+        .limit(1);
+      if (!before) throw new BadRequestException("Invalid notification history cursor");
+    }
+    const rows = await db
+      .select({
+        id: schema.notificationEvents.id,
+        event: schema.notificationEvents.event,
+        status: schema.notificationEvents.status,
+        createdAt: schema.notificationEvents.createdAt,
+        updatedAt: schema.notificationEvents.updatedAt,
+      })
+      .from(schema.notificationEvents)
+      .where(
+        and(
+          eq(schema.notificationEvents.orgId, orgId),
+          before
+            ? or(
+                lt(schema.notificationEvents.createdAt, before.createdAt),
+                and(
+                  eq(schema.notificationEvents.createdAt, before.createdAt),
+                  lt(schema.notificationEvents.id, before.id),
+                ),
+              )
+            : undefined,
+        ),
+      )
+      .orderBy(desc(schema.notificationEvents.createdAt), desc(schema.notificationEvents.id))
+      .limit(21);
+    const hasMore = rows.length > 20;
+    const events = rows.slice(0, 20).map((row) => ({
+      ...row,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+    return { events, nextCursor: hasMore ? (events.at(-1)?.id ?? null) : null };
+  }
+
   async get(orgId: string) {
     const digests = await db
       .select({

@@ -1,6 +1,23 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Put, UseGuards } from "@nestjs/common";
-import { type AutopilotConfig, autopilotConfigSchema } from "@pubrick/shared";
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+  UseGuards,
+} from "@nestjs/common";
+import {
+  type AutopilotConfig,
+  type AutopilotScanQuery,
+  autopilotConfigSchema,
+  autopilotScanQuerySchema,
+} from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
+import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { AutopilotRepository } from "./autopilot.repository";
@@ -8,6 +25,7 @@ import { AutopilotOwnerGuard } from "./autopilot-owner.guard";
 
 @Controller("brands/:brandId/autopilot")
 @UseGuards(ActiveOrgGuard)
+@BrandScope({ kind: "brand", source: "param" })
 export class AutopilotController {
   constructor(private readonly autopilot: AutopilotRepository) {}
 
@@ -17,6 +35,7 @@ export class AutopilotController {
   }
 
   @Put()
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
   @UseGuards(AutopilotOwnerGuard)
   put(
     @OrgId() orgId: string,
@@ -29,5 +48,44 @@ export class AutopilotController {
   @Get("history")
   history(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
     return this.autopilot.history(orgId, brandId);
+  }
+
+  @Get("scans")
+  scans(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(autopilotScanQuerySchema)) query: AutopilotScanQuery,
+  ) {
+    return this.autopilot.scanHistory(orgId, brandId, query);
+  }
+
+  @Get("diagnostics")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  diagnostics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.diagnostics(orgId, brandId);
+  }
+
+  @Post("plan-topics")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @HttpCode(202)
+  @UseGuards(AutopilotOwnerGuard)
+  planTopics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.planTopics(orgId, brandId);
+  }
+
+  @Post("trigger")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @HttpCode(202)
+  @UseGuards(AutopilotOwnerGuard)
+  trigger(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.trigger(orgId, brandId);
+  }
+
+  @Get("attempts")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  attempts(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.manualHistory(orgId, brandId);
   }
 }

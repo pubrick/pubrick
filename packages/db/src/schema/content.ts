@@ -1,6 +1,16 @@
 import { type BrandLinkPolicy, PLATFORM_IDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
-import { boolean, check, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { enumCheck } from "./enum-check.js";
 
@@ -23,7 +33,10 @@ export const brands = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (t) => [index("brands_org_id_idx").on(t.orgId)],
+  (t) => [
+    index("brands_org_id_idx").on(t.orgId),
+    uniqueIndex("brands_org_id_id_idx").on(t.orgId, t.id),
+  ],
 );
 
 export const channels = pgTable(

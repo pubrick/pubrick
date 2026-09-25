@@ -129,10 +129,10 @@ until nothing is left on it; there is no harm in leaving it there, and removing
 it early makes whatever is still on it unreadable.
 
 Telegram source sessions are different: polling reads them but does not re-encrypt
-them. If you connected a workspace before rotation, run the terminal command in
-[Telegram channel sources](telegram-sources.md) again for that workspace before
-removing the old key. The source row reports a connection error if its session
-cannot be opened.
+them. If you connected a workspace before rotation, reconnect it from **Settings
+→ Telegram source account** or use the terminal command in
+[Telegram channel sources](telegram-sources.md) before removing the old key. The
+source row reports a connection error if its session cannot be opened.
 
 Nothing moves while the ring has one key. Rows written before the ring existed
 carry no version and no key id; under a single key **Test connection** leaves

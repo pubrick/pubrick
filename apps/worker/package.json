@@ -17,6 +17,7 @@
     "@pubrick/ai": "workspace:*",
     "@pubrick/db": "workspace:*",
     "@pubrick/integrations": "workspace:*",
+    "@pubrick/search": "workspace:*",
     "@pubrick/shared": "workspace:*",
     "@pubrick/telegram": "workspace:*",
     "drizzle-orm": "^0.45.2",

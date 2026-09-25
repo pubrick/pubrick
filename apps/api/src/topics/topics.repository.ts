@@ -21,6 +21,8 @@ const COLUMNS = {
   description: schema.topics.description,
   sourceUrl: schema.topics.sourceUrl,
   status: schema.topics.status,
+  plannedDate: schema.topics.plannedDate,
+  priority: schema.topics.priority,
   origin: schema.topics.origin,
   revision: schema.topics.revision,
   createdAt: schema.topics.createdAt,
@@ -86,7 +88,7 @@ export class TopicsRepository {
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-        .for("update");
+        .for("no key update");
       if (!brand[0]) throw notFound("brand_not_found", "Brand not found");
       const recent = await tx
         .select({
@@ -160,6 +162,8 @@ export class TopicsRepository {
         title: data.title,
         description: data.description ?? "",
         sourceUrl: data.sourceUrl ?? null,
+        plannedDate: data.plannedDate ?? null,
+        priority: data.priority ?? 5,
       })
       .returning(COLUMNS);
     return rows[0];
@@ -215,24 +219,66 @@ export class TopicsRepository {
     // A changed brief needs a new human approval before it can spend model tokens.
     const resetsApproval =
       data.title !== undefined || data.description !== undefined || data.sourceUrl !== undefined;
-    const rows = await db
-      .update(schema.topics)
-      .set({
-        ...data,
-        status: resetsApproval ? "idea" : data.status,
-        updatedAt: new Date(),
-        revision: sql`${schema.topics.revision} + 1`,
-      })
-      .where(
-        and(
-          eq(schema.topics.orgId, orgId),
-          eq(schema.topics.brandId, brandId),
-          eq(schema.topics.id, id),
-        ),
-      )
-      .returning(COLUMNS);
-    if (!rows[0]) throw notFound("topic_not_found", "Topic not found");
-    return rows[0];
+    return db.transaction(async (tx) => {
+      // Serialize planning metadata edits with the automatic and manual planners.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [topic] = await tx
+        .select({ plannedDate: schema.topics.plannedDate, priority: schema.topics.priority })
+        .from(schema.topics)
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.id, id),
+          ),
+        )
+        .for("update");
+      if (!topic) throw notFound("topic_not_found", "Topic not found");
+      const planningChanged =
+        (data.plannedDate !== undefined && data.plannedDate !== topic.plannedDate) ||
+        (data.priority !== undefined && data.priority !== topic.priority);
+      if (planningChanged) {
+        const [linked] = await tx
+          .select({ id: schema.calendarSlots.id })
+          .from(schema.calendarSlots)
+          .where(
+            and(
+              eq(schema.calendarSlots.orgId, orgId),
+              eq(schema.calendarSlots.brandId, brandId),
+              eq(schema.calendarSlots.topicId, id),
+            ),
+          )
+          .limit(1);
+        if (linked)
+          throw conflict(
+            "calendar_topic_already_planned",
+            "Remove the calendar slot before changing this topic's date or priority. Create a new topic if the slot has already started",
+          );
+      }
+      const [updated] = await tx
+        .update(schema.topics)
+        .set({
+          ...data,
+          status: resetsApproval ? "idea" : data.status,
+          updatedAt: new Date(),
+          revision: sql`${schema.topics.revision} + 1`,
+        })
+        .where(
+          and(
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+            eq(schema.topics.id, id),
+          ),
+        )
+        .returning(COLUMNS);
+      if (!updated) throw new Error("Locked topic was not updated");
+      return updated;
+    });
   }
 
   async delete(orgId: string, brandId: string, id: string) {

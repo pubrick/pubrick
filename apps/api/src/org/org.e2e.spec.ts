@@ -1,4 +1,5 @@
-import { Controller, Get, type INestApplication, UseGuards } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
+import { Controller, Get, type INestApplication, Post, UseGuards } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
 import { and, eq } from "drizzle-orm";
@@ -21,14 +22,51 @@ describe.skipIf(!url)("org scoping e2e", () => {
 
     const { AppModule } = await import("../app.module");
     const { ActiveOrgGuard } = await import("./active-org.guard");
+    const { BrandScope } = await import("./brand-scope.decorator");
     const { OrgId } = await import("./org-id.decorator");
 
     @Controller("org-probe")
     @UseGuards(ActiveOrgGuard)
     class OrgProbeController {
       @Get()
+      @BrandScope({ kind: "org", roles: "member" })
       probe(@OrgId() orgId: string): { orgId: string } {
         return { orgId };
+      }
+
+      @Get("unscoped")
+      unscoped(): { exposed: boolean } {
+        return { exposed: true };
+      }
+
+      @Get("brand/:brandId")
+      @BrandScope({ kind: "brand", source: "param" })
+      brand(): { allowed: boolean } {
+        return { allowed: true };
+      }
+
+      @Get("query")
+      @BrandScope({ kind: "brand", source: "query" })
+      query(): { allowed: boolean } {
+        return { allowed: true };
+      }
+
+      @Post("body")
+      @BrandScope({ kind: "brand", source: "body" })
+      body(): { allowed: boolean } {
+        return { allowed: true };
+      }
+
+      @Get("manager/:brandId")
+      @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+      manager(): { allowed: boolean } {
+        return { allowed: true };
+      }
+
+      @Get("topic/:id")
+      @BrandScope({ kind: "resource", resource: "topic" })
+      topic(): { allowed: boolean } {
+        return { allowed: true };
       }
     }
 
@@ -126,6 +164,74 @@ describe.skipIf(!url)("org scoping e2e", () => {
       .expect(200);
     const probe = await agent.get("/api/org-probe").expect(200);
     expect(probe.body.orgId).toBe(orgId);
+  });
+
+  it("requires route scope and hides brands and ID-only resources without an explicit grant", async () => {
+    const owner = await signUpAgent();
+    const orgId = await createOrg(owner, "scope-owner");
+    await owner
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: orgId })
+      .expect(200);
+    const member = await signUpAgent();
+    const memberSession = await member.get("/api/auth/get-session").expect(200);
+    const memberUserId = memberSession.body.user.id as string;
+    const memberId = randomUUID();
+    const { db, pool } = createDb(url as string);
+    try {
+      await db.insert(schema.member).values({
+        id: memberId,
+        organizationId: orgId,
+        userId: memberUserId,
+        role: "member",
+      });
+      await member
+        .post("/api/auth/organization/set-active")
+        .send({ organizationId: orgId })
+        .expect(200);
+      const [allowedBrand, hiddenBrand] = await db
+        .insert(schema.brands)
+        .values([
+          { orgId, name: "Granted brand" },
+          { orgId, name: "Hidden brand" },
+        ])
+        .returning({ id: schema.brands.id });
+      if (!allowedBrand || !hiddenBrand) throw new Error("Brand fixtures were not inserted");
+      const [topic] = await db
+        .insert(schema.topics)
+        .values({ orgId, brandId: allowedBrand.id, title: "Scoped topic" })
+        .returning({ id: schema.topics.id });
+      if (!topic) throw new Error("Topic fixture was not inserted");
+
+      await owner.get("/api/org-probe/unscoped").expect(403);
+      await member.get(`/api/org-probe/brand/${allowedBrand.id}`).expect(404);
+      await member.get(`/api/org-probe/query?brandId=${allowedBrand.id}`).expect(404);
+      await member.post("/api/org-probe/body").send({ brandId: allowedBrand.id }).expect(404);
+      await member.get(`/api/org-probe/topic/${topic.id}`).expect(404);
+      await member.get(`/api/org-probe/manager/${allowedBrand.id}`).expect(403);
+      await owner.get("/api/org-probe/brand/malformed").expect(400);
+      await owner.get("/api/org-probe/query?brandId=malformed").expect(400);
+      await owner
+        .post("/api/org-probe/body")
+        .send({ brandId: [allowedBrand.id] })
+        .expect(400);
+      await owner.get(`/api/org-probe/brand/${randomUUID()}`).expect(404);
+
+      await db.insert(schema.brandAccess).values({
+        orgId,
+        brandId: allowedBrand.id,
+        memberId,
+      });
+      await member.get(`/api/org-probe/brand/${allowedBrand.id}`).expect(200);
+      await member.get(`/api/org-probe/query?brandId=${allowedBrand.id}`).expect(200);
+      await member.post("/api/org-probe/body").send({ brandId: allowedBrand.id }).expect(201);
+      await member.get(`/api/org-probe/topic/${topic.id}`).expect(200);
+      await member.get(`/api/org-probe/brand/${hiddenBrand.id}`).expect(404);
+      await member.get(`/api/org-probe/manager/${allowedBrand.id}`).expect(403);
+      await owner.get(`/api/org-probe/manager/${hiddenBrand.id}`).expect(200);
+    } finally {
+      await pool.end();
+    }
   });
 
   it("401s without a session", async () => {
