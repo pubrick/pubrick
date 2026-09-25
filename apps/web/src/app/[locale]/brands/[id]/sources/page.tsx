@@ -128,15 +128,22 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     if (score === null) url.searchParams.delete(NEWS_RELEVANCE_PARAM);
     else url.searchParams.set(NEWS_RELEVANCE_PARAM, String(score));
     window.history.replaceState(window.history.state, "", url);
+    loadVersion.current++;
     setItems(null);
     setMinScorePercent(score);
   }, []);
 
   useEffect(() => {
-    const restoreFromUrl = () => setMinScorePercent(relevanceFromUrl(id));
+    const restoreFromUrl = () => {
+      const score = relevanceFromUrl(id);
+      if (score === minScorePercent) return;
+      loadVersion.current++;
+      setItems(null);
+      setMinScorePercent(score);
+    };
     window.addEventListener("popstate", restoreFromUrl);
     return () => window.removeEventListener("popstate", restoreFromUrl);
-  }, [id]);
+  }, [id, minScorePercent]);
 
   useEffect(() => {
     if (renderedBrandId.current === id) return;

@@ -717,6 +717,56 @@ describe("watched sources page", () => {
     expect(new URLSearchParams(window.location.search).get("view")).toBe("compact");
   });
 
+  it("hides stories from the previous threshold while back navigation reloads", async () => {
+    window.history.replaceState({}, "", "?news_relevance=75");
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    const oldItem = {
+      id: ITEM_ID,
+      brandId: BRAND_ID,
+      sourceId: SOURCE_ID,
+      title: "Previously filtered story",
+      summary: "Earlier result",
+      url: "https://example.com/previous",
+      publishedAt: null,
+      createdAt: "2026-09-23T12:00:00.000Z",
+    };
+    const newItem = {
+      ...oldItem,
+      id: "12912ad4-8693-42f6-8286-80f7b9004ac5",
+      title: "Restored threshold story",
+      url: "https://example.com/restored",
+    };
+    install([oldItem]);
+    const fallbackFetch = vi.mocked(fetch).getMockImplementation();
+    let resolveNewItems: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (
+        url.includes("/api/sources/items?") &&
+        new URL(url, "http://localhost").searchParams.get("minScorePercent") === "40"
+      ) {
+        return new Promise<Response>((resolve) => {
+          resolveNewItems = resolve;
+        });
+      }
+      if (!fallbackFetch) throw new Error("Fetch fixture missing");
+      return fallbackFetch(input, init);
+    });
+
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText(oldItem.title)).toBeVisible();
+
+    window.history.replaceState({}, "", "?news_relevance=40");
+    await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("40");
+    expect(screen.queryByText(oldItem.title)).not.toBeInTheDocument();
+    await waitFor(() => expect(resolveNewItems).toBeDefined());
+    expect(screen.queryByText(newItem.title)).not.toBeInTheDocument();
+
+    await act(async () => resolveNewItems?.(response(200, [newItem])));
+    expect(await screen.findByText(newItem.title)).toBeVisible();
+  });
+
   it("clears a selected source after that source is removed", async () => {
     const source = { id: SOURCE_ID, name: "Journal", kind: "rss", isActive: true };
     const calls = install([], [source]);
