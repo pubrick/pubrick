@@ -803,6 +803,14 @@ const ADAPTATION_COLUMNS = {
   )`,
 };
 
+// A queue card needs the delivery verdict, but never the frozen missing reply.
+// Keep its projection narrow: the list is polled and can contain 200 channels.
+const { partialTelegram: _detailOnly, ...ADAPTATION_LIST_COLUMNS } = ADAPTATION_COLUMNS;
+type AdaptationListRow = Omit<
+  Awaited<ReturnType<ContentRepository["adaptationsFor"]>>[number],
+  "partialTelegram"
+>;
+
 /**
  * The columns `get` needs to answer "which sentences are still the AI's" —
  * which level a version belongs to, its text, and whether that text is a whole
@@ -1099,12 +1107,10 @@ export class ContentRepository {
    * put a thousand statements in front of every other request in the process.
    * Wall time was never the complaint (110 ms warm, measured); the pool was.
    *
-   * `ADAPTATION_COLUMNS` VERBATIM, which is the point rather than a
-   * convenience: `deliveryOutcome` and `externalUrl` are `sql` templates with
-   * exactly one definition each, read by this list, by `get` and by
-   * `updateAdaptation`'s RETURNING, and a verdict the three could answer
-   * differently is the defect that field exists to prevent (see its own
-   * docstring, and CLAUDE.md's "one provenance question, two references").
+   * The same verdict columns as the item detail, minus `partialTelegram`:
+   * its frozen missing reply belongs on the authenticated detail screen, not
+   * on every queue card. `deliveryOutcome` and `externalUrl` keep their one SQL
+   * definition in `ADAPTATION_COLUMNS`.
    * Their correlated subqueries still run once per adaptation ROW; what this
    * removes is the round TRIP per item.
    *
@@ -1115,13 +1121,11 @@ export class ContentRepository {
   private async adaptationsForMany(
     orgId: string,
     contentItemIds: string[],
-  ): Promise<Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>> {
-    const byItem = new Map<string, Awaited<ReturnType<ContentRepository["adaptationsFor"]>>>(
-      contentItemIds.map((id) => [id, []]),
-    );
+  ): Promise<Map<string, AdaptationListRow[]>> {
+    const byItem = new Map<string, AdaptationListRow[]>(contentItemIds.map((id) => [id, []]));
     if (contentItemIds.length === 0) return byItem;
     const rows = await db
-      .select(ADAPTATION_COLUMNS)
+      .select(ADAPTATION_LIST_COLUMNS)
       .from(schema.adaptations)
       .where(
         and(
