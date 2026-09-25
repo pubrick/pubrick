@@ -339,5 +339,51 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
       .from(schema.relevanceBatches)
       .where(eq(schema.relevanceBatches.id, hiddenBatch.id));
     expect(hiddenProgress).toEqual({ status: "partial", skipped: 1 });
+
+    // The editor may dismiss an item after claim while its paid model call runs.
+    // The late verdict must not overwrite the hidden story's saved state.
+    await db
+      .update(schema.newsItems)
+      .set({ dismissedAt: null })
+      .where(eq(schema.newsItems.id, fifth));
+    const [lateBatch] = await db
+      .insert(schema.relevanceBatches)
+      .values({ orgId, brandId: brand.id, days: 7, selectedCount: 1 })
+      .returning({ id: schema.relevanceBatches.id });
+    if (!lateBatch) throw new Error("late batch fixture");
+    await db.insert(schema.relevanceBatchItems).values({
+      orgId,
+      brandId: brand.id,
+      batchId: lateBatch.id,
+      itemId: fifth,
+    });
+    expect(await repo.claimBatch(orgId, brand.id, lateBatch.id, fifth)).toMatchObject({
+      title: "Story 5",
+    });
+    await db
+      .update(schema.newsItems)
+      .set({ dismissedAt: new Date() })
+      .where(eq(schema.newsItems.id, fifth));
+    await repo.finishBatch(orgId, brand.id, lateBatch.id, fifth, {
+      kind: "scored",
+      score: 0.1,
+      feedbackDelta: 0,
+      reason: "Late verdict",
+      urgency: "evergreen",
+    });
+    const [lateStory] = await db
+      .select({ score: schema.newsItems.relevanceScore, reason: schema.newsItems.relevanceReason })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, fifth));
+    expect(lateStory).toEqual({ score: 0.7, reason: "Old verdict" });
+    const [lateProgress] = await db
+      .select({
+        status: schema.relevanceBatches.status,
+        updated: schema.relevanceBatches.updatedCount,
+        skipped: schema.relevanceBatches.skippedCount,
+      })
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, lateBatch.id));
+    expect(lateProgress).toEqual({ status: "partial", updated: 0, skipped: 1 });
   });
 });

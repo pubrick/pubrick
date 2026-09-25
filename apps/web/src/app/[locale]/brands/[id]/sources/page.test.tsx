@@ -7,6 +7,8 @@ import {
 } from "@pubrick/shared";
 import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
 import { navigationState, routerMock } from "@/test/next-navigation.stub";
@@ -38,6 +40,26 @@ describe("watched sources page", () => {
   });
 
   afterEach(() => window.history.replaceState({}, "", "/"));
+
+  it("server-renders the dismissed URL state without accessing window", () => {
+    navigationState.searchParams = new URLSearchParams("news_view=dismissed");
+    const browserWindow = window;
+    const resolvedParams = Object.assign(Promise.resolve({ id: BRAND_ID }), {
+      status: "fulfilled" as const,
+      value: { id: BRAND_ID },
+    });
+    try {
+      vi.stubGlobal("window", undefined);
+      const html = renderToString(
+        <NextIntlClientProvider locale="en" messages={en}>
+          <SourcesPage params={resolvedParams} />
+        </NextIntlClientProvider>,
+      );
+      expect(html).toContain('value="dismissed" selected=""');
+    } finally {
+      vi.stubGlobal("window", browserWindow);
+    }
+  });
 
   function install(
     items: unknown[] = [],

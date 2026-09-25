@@ -75,7 +75,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
-  const [view, setView] = useState<"active" | "dismissed">(() => viewFromUrl(id));
+  const [view, setView] = useState<"active" | "dismissed">(() =>
+    urlSearchParams.get(NEWS_VIEW_PARAM) === "dismissed" ? "dismissed" : "active",
+  );
   const [minScorePercent, setMinScorePercent] = useState<number | null>(() =>
     parseRelevance(id, urlSearchParams.get(NEWS_RELEVANCE_PARAM)),
   );

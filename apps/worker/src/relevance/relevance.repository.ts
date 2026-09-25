@@ -222,6 +222,7 @@ export class RelevanceRepository {
               eq(schema.newsItems.orgId, orgId),
               eq(schema.newsItems.brandId, brandId),
               eq(schema.newsItems.id, itemId),
+              isNull(schema.newsItems.dismissedAt),
             ),
           )
           .returning({ id: schema.newsItems.id });
