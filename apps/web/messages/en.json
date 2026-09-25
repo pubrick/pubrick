@@ -161,7 +161,7 @@
     "rerank": "Update rankings",
     "rerankContinue": "Continue updating rankings",
     "reranking": "Updating rankings…",
-    "rerankHint": "Apply saved editor feedback to scored stories from the last 30 days, 50 at a time. No AI calls or usage charges. The original AI scores stay unchanged.",
+    "rerankHint": "Apply saved editor feedback to scored stories from the last 30 days, 50 at a time. No AI calls or usage charges. Saved AI match scores stay unchanged.",
     "feedbackSaved": "Feedback saved. Update rankings to apply it to recent stories.",
     "rerankMore": "Checked {processed} stories; {changed} rankings changed. Continue to check more.",
     "rerankDone": "Checked {processed} stories; {changed} rankings changed. All recent stories are up to date.",
