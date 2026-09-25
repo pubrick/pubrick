@@ -168,7 +168,7 @@ export async function admitPaidReplyAttempt(
         .from(schema.paidReplyAnalysisAttempts)
         .where(eq(schema.paidReplyAnalysisAttempts.admissionId, activeLegacy.id))
         .limit(1);
-      if (!older || older.status !== "queued") return { status: "blocked", reason: "in_progress" };
+      if (older?.status !== "queued") return { status: "blocked", reason: "in_progress" };
       await tx
         .update(schema.paidReplyAnalysisAttempts)
         .set({

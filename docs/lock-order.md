@@ -126,6 +126,20 @@ locked. Opt-out therefore wins before a final write or waits for it; neither
 path can hold the config while waiting for a target that deletion already
 holds. The Telegram network read remains outside the transaction.
 
+The new paid-reply admission function locks the organization `FOR NO KEY
+UPDATE` before the brand, then asks its caller to lock the live target chain
+and verify the saved sample version. Only then does it lock the organization
+and brand paid settings, inspect an existing attempt/admission, count the
+rolling hour and local-day spend, and insert one admission, attempt and queue
+job in the same short transaction. The Google `countTokens` preflight happens
+before this transaction; no model request runs under its locks. Source target
+locks follow source → story. Publication target locks follow adaptation →
+channel → item → receipt → sample. A queued older attempt may be canceled
+while holding this parent-first chain; a dispatching attempt prevents another
+claim. Queue insertion is last, so failure rolls back the money reservation
+without removing the free sample. The worker must take this same order before
+moving a queued attempt to dispatching and before writing a result.
+
 Paid comment analysis admission has a short organization-scoped transaction:
 it locks `organization FOR NO KEY UPDATE`, expires any stale active admission
 for the target, counts the previous rolling hour's admissions across source
@@ -141,6 +155,9 @@ call. Publication analysis also checks the collection request timestamp and
 locks organization, brand, adaptation, channel, item, receipt, then sample.
 Source analysis locks organization, brand, source, then news item before saving;
 it discards a result if the worker replaced that item's reply sample.
+These older synchronous manual routes still use their legacy admission path;
+they must move to the shared sample-version claim before automatic paid
+dispatch is enabled.
 
 Referenced from `apps/api/src/channels/channels.repository.ts`,
 `apps/api/src/brands/brands.repository.ts`,
