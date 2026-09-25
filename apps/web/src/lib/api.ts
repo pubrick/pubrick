@@ -198,6 +198,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   topic_not_found: "topic_not_found",
   news_item_not_found: "news_item_not_found",
   topic_not_approved: "topic_not_approved",
+  topic_changed: "topic_changed",
   topic_suggestions_cooldown: "topic_suggestions_cooldown",
   topic_planning_disabled: "topic_planning_disabled",
   topic_planning_cooldown: "topic_planning_cooldown",
