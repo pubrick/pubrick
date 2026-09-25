@@ -9,6 +9,8 @@ import {
 } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
+  type AcceptedClaimCorrectionDto,
+  type AcceptedClaimCorrectionListDto,
   ADAPTATION_STATUSES,
   type AdaptationProposal,
   type AdaptationStatus,
@@ -17,6 +19,9 @@ import {
   type ApiErrorCode,
   adaptationLimit,
   allSentencesAi,
+  type ClaimCorrectionProposalDto,
+  type ClaimCorrectionRequest,
+  type ClaimReviewClaim,
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
   COVER_SUPPORTED_PLATFORMS,
@@ -68,6 +73,8 @@ import { badRequest, conflict, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { ClaimCorrectionCaller } from "./claim-correction.caller";
+import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
 import { assertImagesFitBody } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
@@ -388,6 +395,76 @@ const DRAFT_REVISION_COLUMNS = {
   proposal: schema.draftRevisionProposals.proposal,
   reason: schema.draftRevisionProposals.reason,
 };
+
+const CLAIM_CORRECTION_COLUMNS = {
+  id: schema.claimCorrectionProposals.id,
+  contentItemId: schema.claimCorrectionProposals.contentItemId,
+  reviewId: schema.claimCorrectionProposals.reviewId,
+  claimIndex: schema.claimCorrectionProposals.claimIndex,
+  sourceBody: schema.claimCorrectionProposals.sourceBody,
+  sourceBodyHash: schema.claimCorrectionProposals.sourceBodyHash,
+  claim: schema.claimCorrectionProposals.claim,
+  replacement: schema.claimCorrectionProposals.replacement,
+  reason: schema.claimCorrectionProposals.reason,
+  evidence: schema.claimCorrectionProposals.evidence,
+  createdAt: schema.claimCorrectionProposals.createdAt,
+};
+
+const ACCEPTED_CORRECTION_COLUMNS = {
+  id: schema.acceptedClaimCorrections.id,
+  contentItemId: schema.acceptedClaimCorrections.contentItemId,
+  reviewId: schema.acceptedClaimCorrections.reviewId,
+  fragmentVersionId: schema.acceptedClaimCorrections.fragmentVersionId,
+  claimIndex: schema.acceptedClaimCorrections.claimIndex,
+  sourceBodyHash: schema.acceptedClaimCorrections.sourceBodyHash,
+  claim: schema.acceptedClaimCorrections.claim,
+  replacement: schema.acceptedClaimCorrections.replacement,
+  reason: schema.acceptedClaimCorrections.reason,
+  evidence: schema.acceptedClaimCorrections.evidence,
+  acceptedAt: schema.acceptedClaimCorrections.acceptedAt,
+};
+
+function acceptedCorrectionDto(row: {
+  id: string;
+  contentItemId: string;
+  reviewId: string;
+  fragmentVersionId: string;
+  claimIndex: number;
+  sourceBodyHash: string;
+  claim: string;
+  replacement: string;
+  reason: string;
+  evidence: ClaimReviewClaim["evidence"];
+  acceptedAt: Date;
+}): AcceptedClaimCorrectionDto {
+  return { ...row, acceptedAt: row.acceptedAt.toISOString() };
+}
+
+function claimCorrectionDto(row: {
+  id: string;
+  contentItemId: string;
+  reviewId: string;
+  claimIndex: number;
+  sourceBody: string;
+  claim: string;
+  replacement: string;
+  reason: string;
+  evidence: ClaimReviewClaim["evidence"];
+  createdAt: Date;
+}): ClaimCorrectionProposalDto {
+  return {
+    id: row.id,
+    contentItemId: row.contentItemId,
+    reviewId: row.reviewId,
+    claimIndex: row.claimIndex,
+    sourceBody: row.sourceBody,
+    claim: row.claim,
+    replacement: row.replacement,
+    reason: row.reason,
+    evidence: row.evidence,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 const ADAPTATION_PROPOSAL_COLUMNS = {
   id: schema.adaptationProposals.id,
@@ -1099,6 +1176,7 @@ export class ContentRepository {
     private readonly refiner: RefineCaller,
     private readonly readapter: ReadaptCaller,
     private readonly draftReviser: DraftRevisionCaller,
+    private readonly claimCorrector: ClaimCorrectionCaller,
   ) {}
 
   /**
@@ -2374,6 +2452,426 @@ export class ContentRepository {
       throw notFound("draft_revision_proposal_not_found", "That rewrite is no longer staged");
   }
 
+  /** Return the single staged correction, including its source body for a visible diff. */
+  async claimCorrection(orgId: string, id: string): Promise<ClaimCorrectionProposalDto | null> {
+    const [item] = await db
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    if (!item) throw notFound("content_not_found", "Post not found");
+    const [row] = await db
+      .select(CLAIM_CORRECTION_COLUMNS)
+      .from(schema.claimCorrectionProposals)
+      .where(
+        and(
+          eq(schema.claimCorrectionProposals.orgId, orgId),
+          eq(schema.claimCorrectionProposals.contentItemId, id),
+        ),
+      )
+      .limit(1);
+    return row ? claimCorrectionDto(row) : null;
+  }
+
+  /** Newest accepted corrections first; a receipt ID is an opaque item-scoped cursor. */
+  async acceptedClaimCorrections(
+    orgId: string,
+    id: string,
+    cursor?: string,
+  ): Promise<AcceptedClaimCorrectionListDto> {
+    const [item] = await db
+      .select({ id: schema.contentItems.id })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    if (!item) throw notFound("content_not_found", "Post not found");
+    const [before] = cursor
+      ? await db
+          .select({ id: schema.acceptedClaimCorrections.id })
+          .from(schema.acceptedClaimCorrections)
+          .where(
+            and(
+              eq(schema.acceptedClaimCorrections.orgId, orgId),
+              eq(schema.acceptedClaimCorrections.contentItemId, id),
+              eq(schema.acceptedClaimCorrections.id, cursor),
+            ),
+          )
+          .limit(1)
+      : [undefined];
+    if (cursor && !before) throw badRequest("invalid_request", "Unknown correction cursor");
+    const page = await db
+      .select(ACCEPTED_CORRECTION_COLUMNS)
+      .from(schema.acceptedClaimCorrections)
+      .where(
+        and(
+          eq(schema.acceptedClaimCorrections.orgId, orgId),
+          eq(schema.acceptedClaimCorrections.contentItemId, id),
+          before
+            ? sql<boolean>`(${schema.acceptedClaimCorrections.acceptedAt}, ${schema.acceptedClaimCorrections.id}) < (
+          SELECT cursor_receipt.accepted_at, cursor_receipt.id
+          FROM accepted_claim_corrections AS cursor_receipt
+          WHERE cursor_receipt.id = ${before.id}
+            AND cursor_receipt.org_id = ${orgId}
+            AND cursor_receipt.content_item_id = ${id}
+        )`
+            : undefined,
+        ),
+      )
+      .orderBy(
+        desc(schema.acceptedClaimCorrections.acceptedAt),
+        desc(schema.acceptedClaimCorrections.id),
+      )
+      .limit(21);
+    return {
+      rows: page.slice(0, 20).map(acceptedCorrectionDto),
+      nextCursor: page.length > 20 ? (page[19]?.id ?? null) : null,
+    };
+  }
+
+  /** Spend only after the exact saved body and an evidence conflict qualify. */
+  async proposeClaimCorrection(
+    orgId: string,
+    id: string,
+    request: ClaimCorrectionRequest,
+  ): Promise<ClaimCorrectionProposalDto> {
+    const item = await this.refinableItem(orgId, id);
+    if (item.status === "partially_published" || item.body !== request.expectedBody) {
+      throw conflict(
+        "claim_correction_stale",
+        "This draft changed or has already been published; reload it before proposing a correction",
+      );
+    }
+    const [review] = await db
+      .select({
+        id: schema.claimReviews.id,
+        bodyHash: schema.claimReviews.bodyHash,
+        status: schema.claimReviews.status,
+        claims: schema.claimReviews.claims,
+      })
+      .from(schema.claimReviews)
+      .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+      .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
+      .limit(1);
+    const hash = createHash("sha256").update(item.body, "utf8").digest("hex");
+    if (review?.id !== request.reviewId || review.status !== "ready" || review.bodyHash !== hash) {
+      throw conflict(
+        "claim_correction_stale",
+        "This evidence review is no longer ready for the saved draft",
+      );
+    }
+    const selected = review.claims[request.claimIndex];
+    if (
+      selected?.outcome !== "evidence_conflicts" ||
+      selected.claim.length === 0 ||
+      selected.claim.length > 1_000 ||
+      !selected.evidence.some(
+        (entry) => entry.snippet.trim().length > 0 && entry.url.length <= 2_048,
+      )
+    ) {
+      throw conflict(
+        "claim_correction_ineligible",
+        "Select a conflicting claim with cited search evidence",
+      );
+    }
+    const start = item.body.indexOf(selected.claim);
+    if (start < 0 || item.body.indexOf(selected.claim, start + 1) !== -1) {
+      throw conflict(
+        "claim_correction_ineligible",
+        "The exact claim must occur once in the saved draft",
+      );
+    }
+    const aiRows = await db
+      .select({ body: schema.contentVersions.body, scope: schema.contentVersions.scope })
+      .from(schema.contentVersions)
+      .where(
+        and(
+          eq(schema.contentVersions.orgId, orgId),
+          eq(schema.contentVersions.contentItemId, id),
+          isNull(schema.contentVersions.adaptationId),
+          eq(schema.contentVersions.origin, "ai"),
+        ),
+      );
+    if (!aiRows.some((row) => row.scope === "full"))
+      throw conflict("claim_correction_ineligible", "AI corrections require a generated draft");
+    // A sentinel probes the same provenance rule Accept uses. It catches the
+    // impossible case where replacing only this quote would absorb human text
+    // that sits outside the quote. The actual model reply is checked again at
+    // Accept, since its sentence boundaries and duplicate text can differ.
+    const sentinel = `Correction ${hash.slice(0, 16)}.`;
+    const preflight = planRefineAccept({
+      body: item.body,
+      start,
+      end: start + selected.claim.length,
+      proposal: sentinel,
+      aiRows,
+    });
+    if (!preflight.ok && preflight.reason === "would_launder") {
+      throw conflict(
+        "claim_correction_ineligible",
+        "Select the entire human-authored sentence before requesting an AI correction",
+      );
+    }
+    if (await this.overEditorAiBudget(orgId)) {
+      throw conflict(
+        "claim_correction_limit_reached",
+        "This organization's hourly editor AI allowance is spent",
+      );
+    }
+    const credential = await this.refineCredential(orgId, "claim_correction");
+    const evidence = selected.evidence
+      .filter((entry) => entry.snippet.trim().length > 0 && entry.url.length <= 2_048)
+      .slice(0, 3);
+    if (evidence.length === 0)
+      throw conflict("claim_correction_ineligible", "No usable citation remains for this claim");
+    const outcome = await this.claimCorrector.run({
+      credential,
+      brand: await this.brandFor(orgId, item.brandId),
+      input: {
+        claim: selected.claim,
+        before: item.body.slice(Math.max(0, start - 1_000), start),
+        after: item.body.slice(
+          start + selected.claim.length,
+          start + selected.claim.length + 1_000,
+        ),
+        evidence: evidence.map((entry) => ({
+          title: entry.title.slice(0, 200),
+          url: entry.url,
+          snippet: entry.snippet.slice(0, 500),
+        })),
+      },
+    });
+    await this.recordEditorUsage(orgId, id, outcome.usage);
+    if (!outcome.ok) {
+      throw conflict(
+        outcome.failure === "timed_out" ? "claim_correction_timed_out" : "claim_correction_failed",
+        "The model could not propose a correction; the draft was not changed",
+      );
+    }
+    const replacement = normalizeNewlines(outcome.replacement);
+    if (replacement.trim().length === 0 || outcome.reason.trim().length === 0) {
+      throw conflict(
+        "claim_correction_failed",
+        "The model returned an empty correction; the draft was not changed",
+      );
+    }
+    if (
+      replacement === selected.claim ||
+      item.body.length - selected.claim.length + replacement.length > MAX_BODY_LENGTH
+    ) {
+      throw conflict(
+        "claim_correction_ineligible",
+        "The suggested correction cannot be applied to this draft",
+      );
+    }
+    return db.transaction(async (tx) => {
+      const current = await this.requireEditableItem(tx, orgId, id);
+      if (current.body !== request.expectedBody || current.status === "partially_published") {
+        throw conflict(
+          "claim_correction_stale",
+          "The draft changed while the model was answering; review it again",
+        );
+      }
+      const [currentReview] = await tx
+        .select({
+          id: schema.claimReviews.id,
+          bodyHash: schema.claimReviews.bodyHash,
+          status: schema.claimReviews.status,
+          claims: schema.claimReviews.claims,
+        })
+        .from(schema.claimReviews)
+        .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+        .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
+        .for("share")
+        .limit(1);
+      if (
+        currentReview?.id !== request.reviewId ||
+        currentReview.status !== "ready" ||
+        currentReview.bodyHash !== hash ||
+        JSON.stringify(currentReview.claims[request.claimIndex]) !== JSON.stringify(selected)
+      ) {
+        throw conflict(
+          "claim_correction_stale",
+          "The evidence review changed while the model was answering",
+        );
+      }
+      await tx
+        .delete(schema.claimCorrectionProposals)
+        .where(
+          and(
+            eq(schema.claimCorrectionProposals.orgId, orgId),
+            eq(schema.claimCorrectionProposals.contentItemId, id),
+          ),
+        );
+      const [row] = await tx
+        .insert(schema.claimCorrectionProposals)
+        .values({
+          orgId,
+          contentItemId: id,
+          reviewId: request.reviewId,
+          claimIndex: request.claimIndex,
+          sourceBody: item.body,
+          sourceBodyHash: hash,
+          claim: selected.claim,
+          replacement,
+          reason: outcome.reason,
+          evidence,
+        })
+        .returning(CLAIM_CORRECTION_COLUMNS);
+      if (!row) throw new Error("Claim correction proposal was not staged");
+      return claimCorrectionDto(row);
+    });
+  }
+
+  /** Accept one exact source quote under the item's write lock. */
+  async acceptClaimCorrection(orgId: string, id: string, proposalId: string) {
+    await db.transaction(async (tx) => {
+      const item = await this.requireEditableItem(tx, orgId, id);
+      if (item.status === "partially_published") {
+        throw conflict(
+          "claim_correction_stale",
+          "This post has already been published to a channel",
+        );
+      }
+      const [proposal] = await tx
+        .select(CLAIM_CORRECTION_COLUMNS)
+        .from(schema.claimCorrectionProposals)
+        .where(
+          and(
+            eq(schema.claimCorrectionProposals.orgId, orgId),
+            eq(schema.claimCorrectionProposals.contentItemId, id),
+            eq(schema.claimCorrectionProposals.id, proposalId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!proposal)
+        throw notFound("claim_correction_not_found", "That correction is no longer staged");
+      if (
+        item.body !== proposal.sourceBody ||
+        createHash("sha256").update(item.body, "utf8").digest("hex") !== proposal.sourceBodyHash
+      ) {
+        throw conflict(
+          "claim_correction_stale",
+          "The saved draft changed; discard this correction and check again",
+        );
+      }
+      const [review] = await tx
+        .select({
+          id: schema.claimReviews.id,
+          bodyHash: schema.claimReviews.bodyHash,
+          status: schema.claimReviews.status,
+          claims: schema.claimReviews.claims,
+        })
+        .from(schema.claimReviews)
+        .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.contentItemId, id)))
+        .orderBy(desc(schema.claimReviews.createdAt), desc(schema.claimReviews.id))
+        .limit(1);
+      const claim = review?.claims[proposal.claimIndex];
+      if (
+        review?.id !== proposal.reviewId ||
+        review.status !== "ready" ||
+        review.bodyHash !== proposal.sourceBodyHash ||
+        !claim ||
+        claim.outcome !== "evidence_conflicts" ||
+        claim.claim !== proposal.claim
+      ) {
+        throw conflict(
+          "claim_correction_stale",
+          "The evidence review changed; check this draft again",
+        );
+      }
+      const start = item.body.indexOf(proposal.claim);
+      if (start < 0 || item.body.indexOf(proposal.claim, start + 1) !== -1) {
+        throw conflict(
+          "claim_correction_stale",
+          "The source claim is no longer unique in this draft",
+        );
+      }
+      const aiRows = await tx
+        .select({ body: schema.contentVersions.body })
+        .from(schema.contentVersions)
+        .where(
+          and(
+            eq(schema.contentVersions.orgId, orgId),
+            eq(schema.contentVersions.contentItemId, id),
+            isNull(schema.contentVersions.adaptationId),
+            eq(schema.contentVersions.origin, "ai"),
+          ),
+        );
+      const plan = planRefineAccept({
+        body: item.body,
+        start,
+        end: start + proposal.claim.length,
+        proposal: proposal.replacement,
+        aiRows,
+      });
+      if (!plan.ok || "unchanged" in plan) {
+        throw conflict(
+          "claim_correction_ineligible",
+          "This correction cannot be applied to the saved draft",
+        );
+      }
+      await assertImagesFitBody(tx, orgId, id, plan.mergedBody);
+      await tx
+        .update(schema.contentItems)
+        .set({
+          body: plan.mergedBody,
+          richBody: null,
+          status: "draft",
+        })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+      const [fragment] = await tx
+        .insert(schema.contentVersions)
+        .values({
+          orgId,
+          contentItemId: id,
+          adaptationId: null,
+          body: plan.fragmentBody,
+          origin: "ai",
+          scope: "fragment",
+          unitDelta: plan.unitDelta,
+          createdBy: null,
+        })
+        .returning({ id: schema.contentVersions.id });
+      if (!fragment) throw new Error("Claim correction fragment was not recorded");
+      await tx.insert(schema.acceptedClaimCorrections).values({
+        orgId,
+        contentItemId: id,
+        reviewId: proposal.reviewId,
+        fragmentVersionId: fragment.id,
+        claimIndex: proposal.claimIndex,
+        sourceBodyHash: proposal.sourceBodyHash,
+        claim: proposal.claim,
+        replacement: proposal.replacement,
+        reason: proposal.reason,
+        evidence: proposal.evidence,
+      });
+      await tx
+        .delete(schema.claimCorrectionProposals)
+        .where(eq(schema.claimCorrectionProposals.id, proposal.id));
+      await tx.delete(schema.refineProposals).where(eq(schema.refineProposals.contentItemId, id));
+      await tx
+        .delete(schema.draftRevisionProposals)
+        .where(eq(schema.draftRevisionProposals.contentItemId, id));
+    });
+    return this.get(orgId, id);
+  }
+
+  async discardClaimCorrection(orgId: string, id: string, proposalId: string): Promise<void> {
+    const deleted = await db
+      .delete(schema.claimCorrectionProposals)
+      .where(
+        and(
+          eq(schema.claimCorrectionProposals.orgId, orgId),
+          eq(schema.claimCorrectionProposals.contentItemId, id),
+          eq(schema.claimCorrectionProposals.id, proposalId),
+        ),
+      )
+      .returning({ id: schema.claimCorrectionProposals.id });
+    if (deleted.length === 0)
+      throw notFound("claim_correction_not_found", "That correction is no longer staged");
+  }
+
   /**
    * The item a refine is about — read WITHOUT a lock, and refused on exactly
    * the same predicate `requireEditableItem` refuses on.
@@ -2493,7 +2991,12 @@ export class ContentRepository {
       .where(
         and(
           eq(schema.usageLedger.orgId, orgId),
-          inArray(schema.usageLedger.step, [REFINE_STEP, "readapt", DRAFT_REVISION_STEP]),
+          inArray(schema.usageLedger.step, [
+            REFINE_STEP,
+            "readapt",
+            DRAFT_REVISION_STEP,
+            CLAIM_CORRECTION_STEP,
+          ]),
           sql`${schema.usageLedger.createdAt} > now() - ${REFINE_BUDGET_WINDOW}`,
         ),
       );
@@ -2523,7 +3026,7 @@ export class ContentRepository {
    */
   private async refineCredential(
     orgId: string,
-    action: "refine" | "readapt" | "draft_revision" = "refine",
+    action: "refine" | "readapt" | "draft_revision" | "claim_correction" = "refine",
   ): Promise<AiCredential> {
     let credential: AiCredential | undefined;
     try {
@@ -2540,7 +3043,9 @@ export class ContentRepository {
           ? "refine_failed"
           : action === "readapt"
             ? "readapt_failed"
-            : "draft_revision_failed",
+            : action === "draft_revision"
+              ? "draft_revision_failed"
+              : "claim_correction_failed",
         REFINE_FAILURE_MESSAGE.failed,
       );
     }
@@ -2550,7 +3055,9 @@ export class ContentRepository {
           ? "refine_no_credential"
           : action === "readapt"
             ? "readapt_no_credential"
-            : "draft_revision_no_credential",
+            : action === "draft_revision"
+              ? "draft_revision_no_credential"
+              : "claim_correction_no_credential",
         "This organization has no AI provider key stored; add one in Settings",
       );
     }
