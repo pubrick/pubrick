@@ -334,6 +334,20 @@ Migrations apply on boot; back up the `pgdata` and `media` volumes before major
 upgrades. Keep them together: post cover references live in Postgres and image
 bytes live in `media` (see [Media library](media-library.md)).
 
+The topic format upgrade (migration 0081) adds three `NOT VALID` checks for
+topic formats and editorial SEO keywords. They reject invalid new writes as
+soon as the upgrade commits. Existing rows receive safe defaults, so the
+startup migration does not scan every topic or calendar slot under its schema
+lock. To mark the checks validated later, run these statements individually in
+a database session during a quieter period, outside Pubrick's startup
+migration transaction:
+
+```sql
+ALTER TABLE calendar_slots VALIDATE CONSTRAINT calendar_slots_seo_keywords_check;
+ALTER TABLE topics VALIDATE CONSTRAINT topics_content_type_check;
+ALTER TABLE topics VALIDATE CONSTRAINT topics_seo_keywords_check;
+```
+
 ### Variables added since August 2026
 
 `docker compose up` refuses to start when a **required** variable is missing,

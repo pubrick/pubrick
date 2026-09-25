@@ -2907,6 +2907,33 @@ describe.skipIf(!url)("runMigrations", () => {
           seo_keywords: [],
         });
         expect(slot.rows[0]?.brief).toContain("Reviewed topic");
+        const constraints = await after.query<{ conname: string; convalidated: boolean }>(
+          "SELECT conname, convalidated FROM pg_constraint WHERE conname IN ('calendar_slots_seo_keywords_check', 'topics_content_type_check', 'topics_seo_keywords_check') ORDER BY conname",
+        );
+        expect(constraints.rows).toEqual([
+          { conname: "calendar_slots_seo_keywords_check", convalidated: false },
+          { conname: "topics_content_type_check", convalidated: false },
+          { conname: "topics_seo_keywords_check", convalidated: false },
+        ]);
+        expect(
+          await refusal(after, "UPDATE topics SET content_type = 'not_a_format' WHERE id = $1", [
+            topicId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE topics SET seo_keywords = '[\"term\"]'::jsonb WHERE id = $1",
+            [topicId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            after,
+            "UPDATE calendar_slots SET content_type = 'social_post', seo_keywords = '[\"term\"]'::jsonb WHERE id = $1",
+            [slotId],
+          ),
+        ).toBe(CHECK_VIOLATION);
       } finally {
         await after.end();
       }
