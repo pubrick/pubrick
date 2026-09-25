@@ -5,6 +5,10 @@ import {
   type OnModuleInit,
 } from "@nestjs/common";
 import {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
@@ -103,6 +107,9 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     // createQueue is idempotent and race-safe; the dead-letter queue must exist first.
     // Names/options come from @pubrick/shared so the worker cannot drift from them.
     await boss.createQueue(PUBLISH_DLQ);
+    await boss.createQueue(CLAIM_REVIEW_DLQ);
+    await boss.createQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
+    await boss.updateQueue(CLAIM_REVIEW_QUEUE, { ...CLAIM_REVIEW_QUEUE_OPTIONS });
     await boss.createQueue(RSS_POLL_QUEUE, { ...RSS_POLL_OPTIONS });
     await boss.createQueue(RELEVANCE_DLQ);
     await boss.createQueue(RELEVANCE_QUEUE, { ...RELEVANCE_QUEUE_OPTIONS });
@@ -142,6 +149,17 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       db: fromDrizzle(tx, sql),
     });
     return id !== null;
+  }
+
+  /** Queue and review row commit together; a retry would repeat paid calls. */
+  async enqueueClaimReview(tx: Tx, payload: ClaimReviewJob): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(CLAIM_REVIEW_QUEUE, payload, {
+      id: payload.reviewId,
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new ConflictException("Claim review is already queued");
   }
 
   async enqueueRelevance(tx: Tx, payload: RelevanceJob): Promise<boolean> {

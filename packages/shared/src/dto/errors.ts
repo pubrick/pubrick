@@ -85,6 +85,10 @@ export const API_ERROR_CODES = [
   // ── content: the row is gone ──────────────────────────────────────────────
   /** The post does not exist in this org (or no longer does). */
   "content_not_found",
+  "claim_review_body_changed",
+  "claim_review_not_editable",
+  "claim_review_no_search_key",
+  "claim_review_no_ai_key",
   "editorial_note_stale",
   "draft_revision_stale",
   "draft_revision_note_not_found",

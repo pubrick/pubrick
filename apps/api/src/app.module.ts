@@ -8,6 +8,7 @@ import { BrandAccessModule } from "./brand-access/brand-access.module";
 import { BrandsModule } from "./brands/brands.module";
 import { CalendarModule } from "./calendar/calendar.module";
 import { ChannelsModule } from "./channels/channels.module";
+import { ClaimReviewModule } from "./claim-review/claim-review.module";
 import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
@@ -40,6 +41,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     BrandsModule,
     CalendarModule,
     ChannelsModule,
+    ClaimReviewModule,
     ClientReviewModule,
     ContentModule,
     FeedsModule,

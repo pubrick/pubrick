@@ -7,6 +7,7 @@ export * from "./auth.js";
 export * from "./autopilot.js";
 export * from "./brand-access.js";
 export * from "./calendar.js";
+export * from "./claim-review.js";
 export * from "./client-review.js";
 export * from "./content.js";
 export * from "./content-images.js";

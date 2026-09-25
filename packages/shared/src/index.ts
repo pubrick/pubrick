@@ -47,6 +47,7 @@ export * from "./dto/brand-access.js";
 export * from "./dto/brands.js";
 export * from "./dto/calendar.js";
 export * from "./dto/channels.js";
+export * from "./dto/claim-review.js";
 export * from "./dto/client-review.js";
 export * from "./dto/content.js";
 export * from "./dto/content-images.js";
@@ -75,6 +76,10 @@ export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {
+  CLAIM_REVIEW_DLQ,
+  CLAIM_REVIEW_QUEUE,
+  CLAIM_REVIEW_QUEUE_OPTIONS,
+  type ClaimReviewJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,

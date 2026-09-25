@@ -2,6 +2,7 @@ import { SEARCH_REQUEST_STATUSES } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
+import { claimReviews } from "./claim-review.js";
 import { enumCheck } from "./enum-check.js";
 
 /** One private Search API credential per organization. */
@@ -25,8 +26,9 @@ export const searchRequests = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
-    /** Nullable until claim-review records are introduced in a later migration. */
-    claimReviewId: uuid("claim_review_id"),
+    claimReviewId: uuid("claim_review_id").references(() => claimReviews.id, {
+      onDelete: "set null",
+    }),
     status: text("status", { enum: SEARCH_REQUEST_STATUSES }).notNull().default("reserved"),
     errorCode: text("error_code"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

@@ -118,6 +118,9 @@ const ZONED_COLUMNS = [
   "calendar_slots.updated_at",
   "channels.created_at",
   "channels.updated_at",
+  "claim_reviews.completed_at",
+  "claim_reviews.created_at",
+  "claim_reviews.started_at",
   "client_review_links.created_at",
   "client_review_links.expires_at",
   "client_review_links.reviewed_at",
@@ -164,6 +167,9 @@ const ZONED_COLUMNS = [
   "publications.asserted_at",
   "publications.created_at",
   "refine_proposals.created_at",
+  "search_credentials.updated_at",
+  "search_requests.completed_at",
+  "search_requests.created_at",
   "telegram_login_attempts.created_at",
   "telegram_login_attempts.expires_at",
   "telegram_login_attempts.last_begin_at",
@@ -389,6 +395,12 @@ const NON_ENUM_CHECKS = [
   "analysis_admissions_target_kind_check",
   "analysis_admissions_unrecorded_calls_check",
   "publication_comment_analyses_sample_size_check",
+  // 0071–0072: search and advisory review records arrive after the historical seed.
+  "search_requests_status_check",
+  "search_requests_result_check",
+  "claim_reviews_status_check",
+  "claim_reviews_body_hash_check",
+  "claim_reviews_error_code_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */

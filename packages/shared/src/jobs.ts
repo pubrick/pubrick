@@ -285,6 +285,16 @@ export const PUBLISH_MAX_LATENESS_HOURS_DEFAULT = 6;
 /** Queue the api enqueues generation runs to and the worker consumes. */
 export const GENERATE_QUEUE = "generate";
 
+/** Explicit, advisory review of the exact saved article body. */
+export const CLAIM_REVIEW_QUEUE = "claim-review";
+export const CLAIM_REVIEW_DLQ = "claim-review-dlq";
+export const CLAIM_REVIEW_QUEUE_OPTIONS = {
+  retryLimit: 0,
+  expireInSeconds: 600,
+  deadLetter: CLAIM_REVIEW_DLQ,
+} as const;
+export type ClaimReviewJob = { orgId: string; reviewId: string };
+
 /** Dead-letter queue for generation jobs whose retries were exhausted. */
 export const GENERATE_DLQ = "generate-dlq";
 

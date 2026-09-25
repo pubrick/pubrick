@@ -498,6 +498,13 @@
       "when": 1790296561807,
       "tag": "0071_new_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1790296947755,
+      "tag": "0072_spicy_maddog",
+      "breakpoints": true
     }
   ]
 }
