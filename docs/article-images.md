@@ -43,6 +43,19 @@ image kind, paragraph bounds, unique positions, and the editing state. The
 database ties each slot to an item and media asset of the same organization
 and brand. A media asset in a slot cannot be deleted until detached.
 
+Saved slots also support a local, unmetered crop. The editor frames the image
+with `react-easy-crop` (MIT); Pubrick sends the pixel rectangle to
+`POST /api/content/:id/images/:slotId/crop` with `expectedRevision` and
+`sourceMediaId`. The API checks the active organization, item and brand,
+editing state, current slot revision, original image identity, and crop bounds.
+It uses Sharp to write a new normalized JPEG and updates the slot in the same
+database transaction. A failed request removes the new file. Cancel makes no
+request. The original stays in the brand media library; the cropped result
+keeps the slot's placement, alternative text, and caption, increments the image
+revision, and requires explicit image review before approval. The editor can
+revise the alternative text if the crop changes what it describes. Cropping
+an approved or published item is refused. No Gemini call or usage charge occurs.
+
 For a saved slot, `POST /api/content/:id/images/:slotId/regenerate` with
 `{ "expectedRevision": 0, "expectedBody": "…" }` creates one metered Gemini
 variation from the current image and saved article context. The server checks

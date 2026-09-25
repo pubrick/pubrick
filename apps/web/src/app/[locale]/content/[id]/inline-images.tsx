@@ -3,12 +3,14 @@
 import type { MediaAssetDto } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Area } from "react-easy-crop";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { ImageCropDialog } from "./image-crop-dialog";
 
 type ImageSlot = {
   id?: string;
@@ -75,6 +77,7 @@ export function InlineImages({
   const [hasGoogleKey, setHasGoogleKey] = useState(false);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
   const [regeneratingSlotId, setRegeneratingSlotId] = useState<string | null>(null);
+  const [cropTarget, setCropTarget] = useState<{ slotId: string; mediaId: string } | null>(null);
   const [prompt, setPrompt] = useState("");
   const [sourceMediaId, setSourceMediaId] = useState<string | null>(null);
   const [newMediaId, setNewMediaId] = useState<string | null>(null);
@@ -261,6 +264,41 @@ export function InlineImages({
     } finally {
       setBusy(false);
       setRegeneratingSlotId(null);
+    }
+  }
+
+  async function cropImage(area: Area) {
+    if (!cropTarget || busy || dirty || stale || bodyStale || bodyHasUnsavedChanges) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api<ImageState>(
+        `/api/content/${itemId}/images/${cropTarget.slotId}/crop`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expectedRevision: revision,
+            sourceMediaId: cropTarget.mediaId,
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+          }),
+        },
+      );
+      setSlots(saved.images);
+      setRevision(saved.revision);
+      setReviewedSlots(new Set());
+      setDirty(false);
+      setCropTarget(null);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "content_images_changed") {
+        setStale(true);
+        setCropTarget(null);
+      }
+      setError(errorMessage(cause, t("cropFailed"), te));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -515,6 +553,18 @@ export function InlineImages({
                             {regeneratingSlotId === slot.id ? t("regenerating") : t("regenerate")}
                           </Button>
                         )}
+                        {slot.id && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={busy || dirty || stale || bodyStale || bodyHasUnsavedChanges}
+                            onClick={() =>
+                              setCropTarget({ slotId: slot.id as string, mediaId: slot.mediaId })
+                            }
+                          >
+                            {t("crop")}
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="secondary"
@@ -722,6 +772,15 @@ export function InlineImages({
             </Button>
           )}
         </section>
+      )}
+      {cropTarget && (
+        <ImageCropDialog
+          key={cropTarget.slotId}
+          mediaId={cropTarget.mediaId}
+          busy={busy}
+          onCancel={() => setCropTarget(null)}
+          onSave={(area) => void cropImage(area)}
+        />
       )}
     </Card>
   );
