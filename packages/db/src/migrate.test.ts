@@ -1251,6 +1251,137 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("purges frozen paid prompts on source, publication, and brand deletion without losing claims", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('purge_org', 'Purge', 'purge-org')",
+        );
+        const brandId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO brands (org_id, name) VALUES ('purge_org', 'Brand') RETURNING id",
+          )
+        ).rows[0]?.id;
+        const sourceId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_sources (org_id, brand_id, name, url) VALUES ('purge_org', $1, 'Feed', 'https://example.com/feed') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const newsItemId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO news_items (org_id, brand_id, source_id, title, url) VALUES ('purge_org', $1, $2, 'Story', 'https://example.com/story') RETURNING id",
+            [brandId, sourceId],
+          )
+        ).rows[0]?.id;
+        const channelId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('purge_org', $1, 'telegram', 'Channel', 'blob') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const contentId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO content_items (org_id, brand_id, body, status, origin) VALUES ('purge_org', $1, 'Body', 'draft', 'ai') RETURNING id",
+            [brandId],
+          )
+        ).rows[0]?.id;
+        const adaptationId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO adaptations (org_id, content_item_id, channel_id, status, origin) VALUES ('purge_org', $1, $2, 'pending', 'ai') RETURNING id",
+            [contentId, channelId],
+          )
+        ).rows[0]?.id;
+        const publicationId = (
+          await pool.query<{ id: string }>(
+            "INSERT INTO publications (org_id, adaptation_id, channel_id, status) VALUES ('purge_org', $1, $2, 'failed') RETURNING id",
+            [adaptationId, channelId],
+          )
+        ).rows[0]?.id;
+        const detachedTargetId = (
+          await pool.query<{ id: string }>("SELECT gen_random_uuid() AS id")
+        ).rows[0]?.id;
+
+        const addAttempt = async (targetKind: string, targetId: string, status: string) => {
+          const admissionId = (
+            await pool.query<{ id: string }>(
+              "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('purge_org', $1, $2, now(), now() + interval '2 minutes') RETURNING id",
+              [targetKind, targetId],
+            )
+          ).rows[0]?.id;
+          return (
+            await pool.query<{ id: string }>(
+              `INSERT INTO paid_reply_analysis_attempts
+                (org_id, brand_id, target_kind, target_id, sample_version, admission_id,
+                 origin, status, prompt_digest, prompt_encrypted, sample_size, model_id,
+                 price_window, org_settings_revision, brand_threshold_revision,
+                 admission_local_date, admission_timezone, day_start_utc, day_end_utc,
+                 reserved_max_usd, dispatch_started_at, completed_at)
+               VALUES ('purge_org', $1, $2, $3, gen_random_uuid(), $4,
+                 'manual', $5, repeat('a', 64), 'encrypted-prompt', 1, 'gemini-3.7-flash',
+                 '2026', 0, 0, '2026-09-25', 'UTC', '2026-09-25T00:00:00Z',
+                 '2026-09-26T00:00:00Z', 0.01,
+                 CASE WHEN $5 = 'dispatching' THEN now() END,
+                 CASE WHEN $5 = 'ready' THEN now() END)
+               RETURNING id`,
+              [brandId, targetKind, targetId, admissionId, status],
+            )
+          ).rows[0]?.id as string;
+        };
+        const sourceAttemptId = await addAttempt("source_comment", newsItemId as string, "queued");
+        const publicationAttemptId = await addAttempt(
+          "publication_comment",
+          publicationId as string,
+          "dispatching",
+        );
+        const brandAttemptId = await addAttempt(
+          "source_comment",
+          detachedTargetId as string,
+          "ready",
+        );
+
+        await pool.query("DELETE FROM news_items WHERE id = $1", [newsItemId]);
+        await pool.query("DELETE FROM publications WHERE id = $1", [publicationId]);
+        const canceled = await pool.query<{
+          id: string;
+          status: string;
+          prompt_encrypted: string | null;
+          failure_code: string | null;
+          completed_at: Date | null;
+        }>(
+          "SELECT id, status, prompt_encrypted, failure_code, completed_at FROM paid_reply_analysis_attempts WHERE id IN ($1, $2) ORDER BY id",
+          [sourceAttemptId, publicationAttemptId],
+        );
+        expect(canceled.rows).toHaveLength(2);
+        expect(
+          canceled.rows.every(
+            (row) =>
+              row.status === "canceled" &&
+              row.prompt_encrypted === null &&
+              row.failure_code === "target_deleted" &&
+              row.completed_at instanceof Date,
+          ),
+        ).toBe(true);
+        await pool.query("DELETE FROM brands WHERE id = $1", [brandId]);
+        expect(
+          (
+            await pool.query(
+              "SELECT status, prompt_encrypted, prompt_digest FROM paid_reply_analysis_attempts WHERE id = $1",
+              [brandAttemptId],
+            )
+          ).rows,
+        ).toEqual([{ status: "ready", prompt_encrypted: null, prompt_digest: "a".repeat(64) }]);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
   beforeAll(readZonelessAsUtc);
 
   it("applies migrations and enables pgvector", async () => {
