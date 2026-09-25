@@ -7,6 +7,9 @@ import type { SuggestionsRepository } from "./suggestions.repository";
 const job = { orgId: "org-1", brandId: "brand-1", requestId: "request-1" };
 const newsId = "11111111-1111-4111-8111-111111111111";
 const input = {
+  origin: "manual" as const,
+  attempt: 1,
+  localDate: null,
   brand: {
     name: "Kettle",
     description: "Coffee tools",
@@ -64,18 +67,24 @@ describe("SuggestionsService", () => {
       complete: vi.fn().mockResolvedValue(1),
       failed: vi.fn().mockResolvedValue(undefined),
       recordUsage: vi.fn().mockResolvedValue(undefined),
+      recordEmbeddingUsage: vi.fn().mockResolvedValue(undefined),
+      recentBlocked: vi.fn().mockResolvedValue({ titles: [], state: "[]" }),
+      googleKey: vi.fn().mockResolvedValue("google-key"),
+      isActive: vi.fn().mockResolvedValue(true),
       recoverStaleAutomatic: vi.fn().mockResolvedValue(false),
       heartbeatAutomatic: vi.fn().mockResolvedValue(undefined),
     };
     const credentials = {
       credential: vi.fn().mockResolvedValue({ provider: "google", apiKey: "secret" }),
     };
+    const embedBatch = vi.fn().mockResolvedValue({ embeddings: [], tokens: 0, tokensKnown: true });
     const service = new Service(
       repo as unknown as SuggestionsRepository,
       credentials as unknown as GenerateRepository,
       () => model,
+      embedBatch,
     );
-    return { service, repo, credentials, calls };
+    return { service, repo, credentials, calls, embedBatch };
   }
 
   it("uses reviewed topics and scored news as untrusted material, meters one call, and creates only ideas", async () => {
@@ -97,6 +106,8 @@ describe("SuggestionsService", () => {
       job.requestId,
       [suggestion],
       [{ id: newsId, url: "https://example.com/rule" }],
+      1,
+      { titles: [], state: "[]" },
     );
     expect(repo.failed).not.toHaveBeenCalled();
   });
@@ -106,7 +117,13 @@ describe("SuggestionsService", () => {
     credentials.credential.mockResolvedValue(undefined);
     await service.handle(job);
     expect(calls).toHaveLength(0);
-    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "no_api_key");
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "no_api_key",
+      1,
+    );
     expect(repo.recordUsage).not.toHaveBeenCalled();
   });
 
@@ -121,7 +138,13 @@ describe("SuggestionsService", () => {
     );
     await expect(service.handle(job)).rejects.toThrow();
     expect(repo.recordUsage).toHaveBeenCalledOnce();
-    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
     expect(repo.complete).not.toHaveBeenCalled();
   });
 
@@ -137,7 +160,13 @@ describe("SuggestionsService", () => {
     repo.claim.mockResolvedValue({ ...input, origin: "automatic" });
     await service.handle(job);
     expect(repo.recordUsage).toHaveBeenCalledOnce();
-    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
   });
 
   it("uses the stored brand-local day and makes no schema repair call automatically", async () => {
@@ -147,7 +176,13 @@ describe("SuggestionsService", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.user).toContain("TODAY: 2026-01-02");
     expect(repo.recordUsage).toHaveBeenCalledOnce();
-    expect(repo.failed).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId, "model_failed");
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
   });
 
   it("checks stale automatic recovery when a redelivery cannot claim another call", async () => {
@@ -156,5 +191,193 @@ describe("SuggestionsService", () => {
     await service.handle(job);
     expect(repo.recoverStaleAutomatic).toHaveBeenCalledWith(job.orgId, job.brandId, job.requestId);
     expect(calls).toHaveLength(0);
+  });
+
+  it("suppresses semantic variants of reviewer-blocked titles and meters the embedding batch", async () => {
+    const blocked = "Practical cafe coffee extraction guide";
+    const suggestions = [
+      {
+        title: "A practical guide to cafe coffee extraction",
+        description: "Repeat",
+        newsItemId: null,
+      },
+      { title: "Staff rota planning", description: "Different", newsItemId: null },
+    ];
+    const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions }));
+    repo.recentBlocked.mockResolvedValue({ titles: [blocked], state: "blocked-state" });
+    const same = Array(768)
+      .fill(0)
+      .map((_, index) => (index === 0 ? 1 : 0));
+    const different = Array(768)
+      .fill(0)
+      .map((_, index) => (index === 1 ? 1 : 0));
+    embedBatch.mockResolvedValue({
+      embeddings: [same, different, same],
+      tokens: 24,
+      tokensKnown: true,
+    });
+    await service.handle(job);
+    expect(embedBatch).toHaveBeenCalledWith("google-key", [
+      suggestions[0]?.title,
+      suggestions[1]?.title,
+      blocked,
+    ]);
+    expect(repo.recordEmbeddingUsage).toHaveBeenCalledWith(
+      job.orgId,
+      24,
+      expect.any(Number),
+      "ok",
+      "completed",
+    );
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [suggestions[1]],
+      [{ id: newsId, url: "https://example.com/rule" }],
+      1,
+      { titles: [blocked], state: "blocked-state" },
+    );
+  });
+
+  it("refuses blocked-title overflow before generation or paid embeddings", async () => {
+    const { service, repo, calls, embedBatch } = harness("{}");
+    repo.recentBlocked.mockResolvedValue(null);
+    await service.handle(job);
+    expect(calls).toHaveLength(0);
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
+  });
+
+  it("does not reset the semantic budget on manual queue redelivery", async () => {
+    const { service, repo, calls, embedBatch } = harness("{}");
+    repo.claim.mockResolvedValue({ ...input, attempt: 2 });
+    repo.recentBlocked.mockResolvedValue({ titles: ["Blocked angle"], state: "state" });
+    await service.handle(job);
+    expect(calls).toHaveLength(0);
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      2,
+    );
+  });
+
+  it("finishes a blocked manual request after a transient generation failure without a paid retry", async () => {
+    const { service, repo, embedBatch } = harness(
+      new APICallError({
+        message: "busy",
+        url: "https://example.invalid",
+        requestBodyValues: {},
+        statusCode: 503,
+      }),
+    );
+    repo.recentBlocked.mockResolvedValue({ titles: ["Blocked angle"], state: "state" });
+    await service.handle(job);
+    expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
+  });
+
+  it("compares every admitted blocker across the three-call budget", async () => {
+    const suggestion = { title: "Last blocked angle", description: "Brief", newsItemId: null };
+    const blockers = Array.from({ length: 20 }, (_, index) => `Blocked angle ${index}`);
+    const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions: [suggestion] }));
+    repo.recentBlocked.mockResolvedValue({ titles: blockers, state: "all-blockers" });
+    const near = Array(768).fill(1);
+    const far = Array(768)
+      .fill(0)
+      .map((_, index) => (index === 0 ? 1 : 0));
+    embedBatch.mockImplementation(async (_key: string, texts: string[]) => ({
+      embeddings: texts.map((title) =>
+        title === suggestion.title || title === blockers[19] ? near : far,
+      ),
+      tokens: texts.length,
+      tokensKnown: true,
+    }));
+    await service.handle(job);
+    expect(embedBatch).toHaveBeenCalledTimes(3);
+    expect(repo.recordEmbeddingUsage).toHaveBeenCalledTimes(3);
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [],
+      [{ id: newsId, url: "https://example.com/rule" }],
+      1,
+      { titles: blockers, state: "all-blockers" },
+    );
+  });
+
+  it("does not save a paid semantic result when its ledger write fails", async () => {
+    const suggestion = { title: "Coffee guide", description: "Brief", newsItemId: null };
+    const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions: [suggestion] }));
+    repo.recentBlocked.mockResolvedValue({ titles: ["Blocked coffee guide"], state: "state" });
+    embedBatch.mockResolvedValue({
+      embeddings: [Array(768).fill(1), Array(768).fill(1)],
+      tokens: 8,
+      tokensKnown: true,
+    });
+    repo.recordEmbeddingUsage.mockRejectedValue(new Error("ledger unavailable"));
+    await service.handle(job);
+    expect(repo.complete).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
+  });
+
+  it("does not save suggestions after a generation usage-ledger failure", async () => {
+    const suggestion = { title: "Coffee guide", description: "Brief", newsItemId: null };
+    const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions: [suggestion] }));
+    repo.recordUsage.mockRejectedValue(new Error("ledger unavailable"));
+    await service.handle(job);
+    expect(repo.complete).not.toHaveBeenCalled();
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "model_failed",
+      1,
+    );
+  });
+
+  it("does not buy embeddings for automatic suggestions", async () => {
+    const suggestion = { title: "Coffee guide", description: "Brief", newsItemId: null };
+    const { service, repo, embedBatch, calls } = harness(
+      JSON.stringify({ suggestions: [suggestion] }),
+    );
+    repo.claim.mockResolvedValue({ ...input, origin: "automatic" });
+    await service.handle(job);
+    expect(calls).toHaveLength(1);
+    expect(repo.recentBlocked).not.toHaveBeenCalled();
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [suggestion],
+      [{ id: newsId, url: "https://example.com/rule" }],
+      1,
+      undefined,
+    );
   });
 });

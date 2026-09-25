@@ -36,6 +36,9 @@ after the normal 30-minute request cooldown.
 Suggested topics remain **Idea**. An editor reviews and approves them before
 generation, and chooses dates and channels through the calendar's reviewed bulk
 planning form. This setting creates no calendar slots, drafts, or publications.
+To preserve the one-call daily budget, automatic suggestions skip exact normalized
+title repeats but do not run the paid semantic blocked-topic check used by manual
+requests; paraphrased blocked ideas can still appear for editor review.
 The generation spend threshold below covers generation runs; topic suggestion
 calls are recorded separately in the organization usage ledger.
 
