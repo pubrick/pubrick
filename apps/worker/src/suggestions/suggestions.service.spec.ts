@@ -323,6 +323,38 @@ describe("SuggestionsService", () => {
     );
   });
 
+  it.each(["candidate", "blocker"] as const)(
+    "fails safely after metering an all-zero %s embedding",
+    async (zeroSide) => {
+      const suggestion = { title: "Coffee guide", description: "Brief", newsItemId: null };
+      const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions: [suggestion] }));
+      repo.recentBlocked.mockResolvedValue({ titles: ["Blocked coffee guide"], state: "state" });
+      const zero = Array(768).fill(0);
+      const nonzero = Array(768).fill(1);
+      embedBatch.mockResolvedValue({
+        embeddings: zeroSide === "candidate" ? [zero, nonzero] : [nonzero, zero],
+        tokens: 8,
+        tokensKnown: true,
+      });
+      await service.handle(job);
+      expect(repo.recordEmbeddingUsage).toHaveBeenCalledWith(
+        job.orgId,
+        8,
+        expect.any(Number),
+        "ok",
+        "completed",
+      );
+      expect(repo.complete).not.toHaveBeenCalled();
+      expect(repo.failed).toHaveBeenCalledWith(
+        job.orgId,
+        job.brandId,
+        job.requestId,
+        "model_failed",
+        1,
+      );
+    },
+  );
+
   it("does not save a paid semantic result when its ledger write fails", async () => {
     const suggestion = { title: "Coffee guide", description: "Brief", newsItemId: null };
     const { service, repo, embedBatch } = harness(JSON.stringify({ suggestions: [suggestion] }));
