@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
   type BrandCreate,
+  type BrandImportApply,
   type BrandUpdate,
   isLiveRunStatus,
   isOutstandingAdaptation,
@@ -84,6 +86,40 @@ export class BrandsRepository {
       .returning(PUBLIC_COLUMNS);
     if (rows.length === 0) throw notFound("brand_not_found", "Brand not found");
     return rows[0];
+  }
+
+  /** One explicit review action saves the profile and selected ideas together. */
+  async applyImport(orgId: string, id: string, reviewed: BrandImportApply) {
+    return db.transaction(async (tx) => {
+      const current = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
+        .for("update");
+      if (!current.length) throw notFound("brand_not_found", "Brand not found");
+      const [brand] = await tx
+        .update(schema.brands)
+        .set({
+          name: reviewed.name,
+          description: reviewed.description,
+          voice: reviewed.voice,
+          audience: reviewed.audience,
+          contentLanguage: reviewed.contentLanguage,
+        })
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
+        .returning(PUBLIC_COLUMNS);
+      if (!brand) throw new Error("Brand disappeared during import");
+      for (const title of new Set(reviewed.topics)) {
+        const suggestionKey = createHash("sha256")
+          .update(`brand-profile-import:${title.trim().toLocaleLowerCase("en")}`)
+          .digest("hex");
+        await tx
+          .insert(schema.topics)
+          .values({ orgId, brandId: id, title, suggestionKey, origin: "ai" })
+          .onConflictDoNothing();
+      }
+      return brand;
+    });
   }
 
   /**

@@ -397,6 +397,10 @@ export const API_ERROR_CODES = [
   "topic_planning_cooldown",
   "autopilot_trigger_cooldown",
   "brand_not_found",
+  "brand_import_no_google_key",
+  "brand_import_limit_reached",
+  "brand_import_failed",
+  "brand_import_unreadable",
   "knowledge_not_found",
   "knowledge_batch_owner_required",
   /** Generating for a brand that has nothing to publish to. */

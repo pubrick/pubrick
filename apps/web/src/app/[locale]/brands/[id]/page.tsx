@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
+import { BrandImport } from "./brand-import";
 
 type Channel = { id: string; platform: string; name: string; metricsAutoRefresh?: boolean };
 /**
@@ -503,6 +504,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           >
             {tb("profileEdit")}
           </Button>
+          {brand && <BrandImport brandId={id} onApplied={load} />}
         </div>
         <p className="mb-4 text-sm text-fg-secondary">{tb("descriptionHint")}</p>
         {brand === null ? (
