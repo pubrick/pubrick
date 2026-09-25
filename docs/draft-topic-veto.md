@@ -12,8 +12,10 @@ platform receipt is still eligible; an actual or uncertain delivery is not.
 in one transaction. It checks the active organization, brand, topic link,
 delivery state, and current draft status under ordered locks. A stale or
 unlinked item returns a coded refusal and neither change is committed. The
-topic receives the same blocked state, reason, timestamp, and revision change
-as the Topics screen. Existing calendar workers reject a stale or blocked
+topic receives the blocked state and the reason supplied with this decision.
+If it was already blocked, this action replaces the earlier reason while
+preserving its original block time; the revision advances only if the topic
+record changes. Existing calendar workers reject a stale or blocked
 topic before creating a run. Existing exact-title suppression uses the blocked
 topic; optional semantic suppression remains subject to its separate setting
 and metered embedding workflow.

@@ -5620,7 +5620,12 @@ export class ContentRepository {
       }
 
       const [topic] = await tx
-        .select({ id: schema.topics.id, blockedAt: schema.topics.blockedAt })
+        .select({
+          id: schema.topics.id,
+          blockedAt: schema.topics.blockedAt,
+          blockReason: schema.topics.blockReason,
+          status: schema.topics.status,
+        })
         .from(schema.topics)
         .where(
           and(
@@ -5699,13 +5704,15 @@ export class ContentRepository {
         );
       }
 
-      // Use the topic route's idempotent block semantics, including its
-      // revision and archived status. Both writes roll back on either failure.
-      if (!topic.blockedAt) {
+      // This compound decision records the reason the editor just supplied,
+      // even if another editor blocked the topic before archiving this draft.
+      // Preserve the original block time; increment the revision only when
+      // the topic's recorded decision actually changes.
+      if (!topic.blockedAt || topic.blockReason !== reason || topic.status !== "archived") {
         await tx
           .update(schema.topics)
           .set({
-            blockedAt: new Date(),
+            blockedAt: topic.blockedAt ?? new Date(),
             blockReason: reason,
             status: "archived",
             revision: sql`${schema.topics.revision} + 1`,
