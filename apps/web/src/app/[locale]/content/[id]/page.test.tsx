@@ -764,6 +764,21 @@ describe("approve with a schedule (Step 3)", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("hides the shortcut while a delivery remains unresolved", async () => {
+    const served = {
+      current: makeItem({
+        status: "failed",
+        adaptations: [makeAdaptation({ status: "failed", deliveryOutcome: "unknown" })],
+      }),
+    };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Content.status.failed);
+    expect(
+      screen.queryByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+    ).not.toBeInTheDocument();
+  });
+
   it("sends the chosen datetime-local value as an ISO scheduledAt", async () => {
     const served = { current: makeItem({ status: "draft" }) };
     const calls: Call[] = [];
