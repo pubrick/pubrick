@@ -230,6 +230,12 @@ export class ContentImagesRepository {
       if (!item) throw notFound("content_not_found", "Content item not found");
       this.assertEditable(item.status);
       if ((item.revision ?? 0) !== data.expectedRevision) this.changed();
+      if (item.body !== data.expectedBody) {
+        throw conflict(
+          "content_image_body_conflict",
+          "Post body changed in another editor; reload before regenerating its image",
+        );
+      }
       const [slot] = await tx
         .select({
           mediaId: schema.contentImageSlots.mediaId,

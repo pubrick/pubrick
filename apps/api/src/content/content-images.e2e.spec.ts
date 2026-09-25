@@ -409,7 +409,7 @@ describe.skipIf(!url)("article image slots e2e", () => {
     const slotId = saved.body.images[0].id;
     const result = await owner
       .post(`${uri}/${slotId}/regenerate`)
-      .send({ expectedRevision: saved.body.revision })
+      .send({ expectedRevision: saved.body.revision, expectedBody: item.body.body })
       .expect(200);
     expect(contentImagesStateSchema.safeParse(result.body).success).toBe(true);
     expect(result.body.revision).toBe(2);
@@ -462,19 +462,66 @@ describe.skipIf(!url)("article image slots e2e", () => {
     const regenerateUri = `${uri}/${slotId}/regenerate`;
     await owner
       .post(regenerateUri)
-      .send({ expectedRevision: 1, prompt: "Use this untrusted client prompt" })
+      .send({
+        expectedRevision: 1,
+        expectedBody: item.body.body,
+        prompt: "Use this untrusted client prompt",
+      })
       .expect(400);
-    await stranger.post(regenerateUri).send({ expectedRevision: 1 }).expect(404);
-    const stale = await owner.post(regenerateUri).send({ expectedRevision: 0 }).expect(409);
+    await stranger
+      .post(regenerateUri)
+      .send({ expectedRevision: 1, expectedBody: item.body.body })
+      .expect(404);
+    const stale = await owner
+      .post(regenerateUri)
+      .send({ expectedRevision: 0, expectedBody: item.body.body })
+      .expect(409);
     expect(stale.body.code).toBe("content_images_changed");
-    await owner.post(`${uri}/${randomUUID()}/regenerate`).send({ expectedRevision: 1 }).expect(404);
+    await owner
+      .post(`${uri}/${randomUUID()}/regenerate`)
+      .send({ expectedRevision: 1, expectedBody: item.body.body })
+      .expect(404);
     await direct.db
       .update(schema.contentItems)
       .set({ status: "approved" })
       .where(eq(schema.contentItems.id, item.body.id));
-    const pinned = await owner.post(regenerateUri).send({ expectedRevision: 1 }).expect(409);
+    const pinned = await owner
+      .post(regenerateUri)
+      .send({ expectedRevision: 1, expectedBody: item.body.body })
+      .expect(409);
     expect(pinned.body.code).toBe("content_media_pinned");
     expect(modelCall).not.toHaveBeenCalled();
+  });
+
+  it("refuses a changed body with the same image revision before billing Gemini", async () => {
+    const owner = await agent();
+    const brand = await owner.post("/api/brands").send({ name: "Edited article" }).expect(201);
+    const item = await post(owner, brand.body.id);
+    const image = await upload(owner, brand.body.id);
+    await owner
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-google-key" })
+      .expect(200);
+    const uri = `/api/content/${item.body.id}/images`;
+    const saved = await owner
+      .put(uri)
+      .send({
+        expectedRevision: 0,
+        images: [{ mediaId: image.body.id, afterParagraph: 0, alt: "Original" }],
+      })
+      .expect(200);
+    await direct.db
+      .update(schema.contentItems)
+      .set({ body: "First paragraph edited.\n\nSecond.\n\nThird." })
+      .where(eq(schema.contentItems.id, item.body.id));
+    expect((await owner.get(uri).expect(200)).body.revision).toBe(saved.body.revision);
+    const refused = await owner
+      .post(`${uri}/${saved.body.images[0].id}/regenerate`)
+      .send({ expectedRevision: saved.body.revision, expectedBody: item.body.body })
+      .expect(409);
+    expect(refused.body.code).toBe("content_image_body_conflict");
+    expect(modelCall).not.toHaveBeenCalled();
+    expect((await owner.get(uri).expect(200)).body).toEqual(saved.body);
   });
 
   it("keeps a paid image in the library when another editor replaces its slot", async () => {
@@ -510,7 +557,7 @@ describe.skipIf(!url)("article image slots e2e", () => {
     });
     const pending = owner
       .post(`${uri}/${saved.body.images[0].id}/regenerate`)
-      .send({ expectedRevision: 1 })
+      .send({ expectedRevision: 1, expectedBody: item.body.body })
       .then((response) => response);
     await callStarted;
     const winner = await owner

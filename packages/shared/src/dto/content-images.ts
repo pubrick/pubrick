@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_BODY_LENGTH } from "./content.js";
 
 export const MAX_CONTENT_IMAGES = 5;
 
@@ -36,6 +37,7 @@ export type ContentImagesReplace = z.infer<typeof contentImagesReplaceSchema>;
 /** The server derives the prompt and source from the selected slot. */
 export const contentImageRegenerateSchema = z.strictObject({
   expectedRevision: z.number().int().nonnegative(),
+  expectedBody: z.string().max(MAX_BODY_LENGTH),
 });
 export type ContentImageRegenerate = z.infer<typeof contentImageRegenerateSchema>;
 
