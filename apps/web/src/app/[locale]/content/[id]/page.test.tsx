@@ -1557,7 +1557,7 @@ describe("per-channel override (Step 6)", () => {
     expect(within(preview).getByText(en.Publish.reviewPreviewUnsaved)).toBeVisible();
   });
 
-  it("previews a Telegram cover's caption and reply under the reviewed 4096-character limit", async () => {
+  it("previews a Telegram cover's caption and replies under the reviewed 12000-character limit", async () => {
     const served = {
       current: makeItem({
         coverMediaId: "cover-1",
@@ -1574,17 +1574,23 @@ describe("per-channel override (Step 6)", () => {
       within(preview).getByRole("img", { name: en.Publish.reviewPreviewCoverAlt }),
     ).toHaveAttribute("src", "/api/media/cover-1/file");
     const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
-    expect(counterFor(field)).toHaveTextContent("1024 / 4096");
+    expect(counterFor(field)).toHaveTextContent("1024 / 12000");
     expect(within(preview).queryByRole("alert")).toBeNull();
 
     fireEvent.change(field, { target: { value: "a".repeat(1025) } });
     expect(within(preview).getByText(en.Publish.reviewPreviewPhotoCaption)).toBeVisible();
     expect(within(preview).getByText(en.Publish.reviewPreviewPhotoReply)).toBeVisible();
     expect(within(preview).queryByRole("alert")).toBeNull();
-    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+    expect(counterFor(field)).toHaveTextContent("1025 / 12000");
 
-    fireEvent.change(field, { target: { value: "a".repeat(4097) } });
-    expect(within(preview).getByRole("alert")).toHaveTextContent("4096");
+    fireEvent.change(field, { target: { value: "a".repeat(12000) } });
+    expect(within(preview).queryByRole("alert")).toBeNull();
+    expect(within(preview).getAllByText("a".repeat(4096))).toHaveLength(2);
+    expect(within(preview).getByText("a".repeat(2784))).toBeVisible();
+    expect(field).toHaveAttribute("maxlength", "12000");
+
+    fireEvent.change(field, { target: { value: "a".repeat(12001) } });
+    expect(within(preview).getByRole("alert")).toHaveTextContent("12000");
   });
 
   it("previews a VK video without applying Telegram's caption limit", async () => {
@@ -1607,7 +1613,45 @@ describe("per-channel override (Step 6)", () => {
     expect(within(preview).queryByRole("alert")).toBeNull();
   });
 
-  it("keeps Telegram's 4096-character text limit without a cover and marks published copy as local", async () => {
+  it("shows Telegram's video caption limit while retaining room to edit an existing override", async () => {
+    const served = {
+      current: makeItem({
+        videoMediaId: "video-1",
+        adaptations: [makeAdaptation({ body: "v".repeat(1025) })],
+      }),
+    };
+    installBaseHandlers(served, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
+    expect(counterFor(field)).toHaveTextContent("1025 / 1024");
+    expect(field).toHaveAttribute("maxlength", "12000");
+    expect(within(preview).getByRole("alert")).toHaveTextContent("1024");
+  });
+
+  it("does not show an invented Telegram send plan for an unpaired surrogate", async () => {
+    installBaseHandlers({ current: makeItem({ adaptations: [makeAdaptation()] }) }, []);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const preview = await screen.findByRole("region", {
+      name: en.Publish.reviewPreviewFor.replace("{channel}", "Telegram · Main channel"),
+    });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Override for Telegram · Main channel" }),
+      {
+        target: { value: "hello\ud800" },
+      },
+    );
+    expect(within(preview).getByRole("alert")).toHaveTextContent(
+      en.Publish.reviewPreviewCannotSplit,
+    );
+    expect(within(preview).queryByText(en.Publish.reviewPreviewTelegramFirstMessage)).toBeNull();
+  });
+
+  it("allows a long text-only Telegram post and marks published copy as local", async () => {
     const served = {
       current: makeItem({
         adaptations: [makeAdaptation({ body: "a".repeat(1025), status: "published" })],
@@ -1623,7 +1667,11 @@ describe("per-channel override (Step 6)", () => {
     expect(within(preview).queryByRole("alert")).toBeNull();
     expect(within(preview).getByText(en.Publish.reviewPreviewPublishedNote)).toBeVisible();
     const field = screen.getByRole("textbox", { name: "Override for Telegram · Main channel" });
-    expect(counterFor(field)).toHaveTextContent("1025 / 4096");
+    expect(counterFor(field)).toHaveTextContent("1025 / 12000");
+    fireEvent.change(field, { target: { value: "b".repeat(10000) } });
+    expect(within(preview).getByText(en.Publish.reviewPreviewTelegramFirstMessage)).toBeVisible();
+    expect(within(preview).getByText("b".repeat(1808))).toBeVisible();
+    expect(within(preview).queryByRole("alert")).toBeNull();
   });
 
   it("shows translated preview text without a Telegram cover for a VK channel", async () => {
@@ -2074,8 +2122,8 @@ describe("the provenance lens (provenance-lens design §5)", () => {
 });
 
 /**
- * The counter (provenance-lens design §6): the denominator is the smaller of the platform's
- * limit and `MAX_BODY_LENGTH`, and `maxLength` does NOT drop with it.
+ * The counter (provenance-lens design §6): the denominator is the shared
+ * channel limit, while the editing cap does not drop to a short platform limit.
  */
 describe("the per-channel counter (provenance-lens design §6)", () => {
   const xChannel: Channel = { id: "chx", platform: "x", name: "Announcements" };
@@ -2103,9 +2151,9 @@ describe("the per-channel counter (provenance-lens design §6)", () => {
       en.Publish.overridePlaceholder,
     ) as HTMLTextAreaElement[];
 
-    // X enforces 280 and telegram 4096 — one `/ 4096` for both is the lie.
+    // X enforces 280 and Telegram allows 12000; neither borrows the master limit.
     expect(counterFor(forX as HTMLElement)).toHaveTextContent("0 / 280");
-    expect(counterFor(forTelegram as HTMLElement)).toHaveTextContent("0 / 4096");
+    expect(counterFor(forTelegram as HTMLElement)).toHaveTextContent("0 / 12000");
     // The master body has no platform, so it keeps what the API can store.
     expect(counterFor(screen.getByLabelText(en.Publish.bodyLabel))).toHaveTextContent("11 / 4096");
   });

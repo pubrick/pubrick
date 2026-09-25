@@ -26,7 +26,8 @@ export function channelLabel(platform: string, name: string): string {
 
 /**
  * How long an adaptation for this platform may be — the counter's denominator,
- * `min(platform limit, MAX_BODY_LENGTH)` (provenance-lens design §6).
+ * the shared platform rule (provenance-lens design §6). Telegram adaptations
+ * may be longer than the 4096-character master; other channel bodies may not.
  *
  * The formula is `@pubrick/shared`'s, and is the same one the adapter in
  * `@pubrick/ai` generates against: showing `/ 4096` for an X channel the model
@@ -35,8 +36,8 @@ export function channelLabel(platform: string, name: string): string {
  * briefly: `@pubrick/ai` is server-only, so the browser cannot import it, and
  * the shared home for the rule was held by another change at the time.)
  *
- * **This is display only.** The `maxLength` attribute stays at
- * `MAX_BODY_LENGTH`: an existing override already longer than the platform
+ * **This is display only.** The `maxLength` attribute stays at the largest
+ * channel body bound: an existing override already longer than the platform
  * limit must stay editable, and a hard cap below its length would make it
  * permanently unfixable — the human could read the text and never shorten it.
  * Over-limit is shown, never enforced here; see the provenance-lens design's §6.

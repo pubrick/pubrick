@@ -45,9 +45,11 @@ describe("adaptationLimit", () => {
     expect(adaptationLimit("dzen")).toBe(MAX_BODY_LENGTH);
   });
 
-  it("is min(platform limit, MAX_BODY_LENGTH) for every platform there is", () => {
+  it("uses the long Telegram adaptation cap and the master cap for other platforms", () => {
     for (const [platform, limit] of Object.entries(PLATFORM_MAX_TEXT_LENGTH)) {
-      expect(adaptationLimit(platform)).toBe(Math.min(limit, MAX_BODY_LENGTH));
+      expect(adaptationLimit(platform)).toBe(
+        Math.min(limit, platform === "telegram" ? 12_000 : MAX_BODY_LENGTH),
+      );
     }
   });
 
