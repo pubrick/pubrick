@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { seoKeywordsSchema } from "./runs.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 export const TOPIC_STATUSES = ["idea", "approved", "archived"] as const;
@@ -67,13 +68,20 @@ export const topicUpdateSchema = z.object({
 });
 export type TopicUpdate = z.infer<typeof topicUpdateSchema>;
 
-export const topicRunSchema = z.object({
-  channelIds: z
-    .array(z.string().uuid())
-    .min(1)
-    .max(20)
-    .refine((ids) => new Set(ids).size === ids.length, { message: "Channel IDs must be unique" }),
-});
+export const topicRunSchema = z
+  .object({
+    contentType: z.enum(["social_post", "expert_article"]).optional(),
+    seoKeywords: seoKeywordsSchema.optional(),
+    channelIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(20)
+      .refine((ids) => new Set(ids).size === ids.length, { message: "Channel IDs must be unique" }),
+  })
+  .refine((value) => !value.seoKeywords || value.contentType === "expert_article", {
+    message: "SEO keywords require the expert article format",
+    path: ["seoKeywords"],
+  });
 export type TopicRun = z.infer<typeof topicRunSchema>;
 
 export const topicDtoSchema = z.object({

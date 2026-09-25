@@ -174,6 +174,23 @@ export const INLINE_IMAGE_CONTENT_TYPES = [
   "educational",
 ] as const satisfies readonly ContentType[];
 export const MAX_AUTO_INLINE_IMAGES = 2;
+/** Editorial terms supplied by a person, not measured search-volume data. */
+export const MAX_SEO_KEYWORDS = 8;
+export const MAX_SEO_KEYWORD_LENGTH = 60;
+export const seoKeywordsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .min(2)
+      .max(MAX_SEO_KEYWORD_LENGTH)
+      .refine((term) => !hasNulByte(term), { message: NO_NUL_BYTE_MESSAGE }),
+  )
+  .min(1)
+  .max(MAX_SEO_KEYWORDS)
+  .refine((terms) => new Set(terms.map((term) => term.toLowerCase())).size === terms.length, {
+    message: "SEO keywords must be distinct",
+  });
 
 export function supportsInlineImages(contentType: ContentType | undefined): boolean {
   return INLINE_IMAGE_CONTENT_TYPES.some((type) => type === contentType);
@@ -250,6 +267,8 @@ export const runCreateSchema = z
     generateInlineImages: z.boolean().optional(),
     /** Copy this brand's recent editorial notes into the run only when requested. */
     useEditorialFeedback: z.boolean().optional(),
+    /** One optional metered editorial pass for an expert article. */
+    seoKeywords: seoKeywordsSchema.optional(),
     /**
      * No longer `.min(1)`: a run asked for from pasted material has nothing to
      * put here, and the brief keeps its own meaning beside one — what to do
@@ -348,6 +367,10 @@ export const runCreateSchema = z
   .refine((v) => !v.generateInlineImages || supportsInlineImages(v.contentType), {
     message: "inline images require an article format",
     path: ["generateInlineImages"],
+  })
+  .refine((v) => !v.seoKeywords || v.contentType === "expert_article", {
+    message: "SEO keywords require the expert article format",
+    path: ["seoKeywords"],
   });
 export type RunCreate = z.infer<typeof runCreateSchema>;
 
@@ -468,6 +491,7 @@ const briefRunInputBaseSchema = z.object({
   /** Optional for rows created before editorial feedback was available. */
   useEditorialFeedback: z.boolean().optional(),
   editorialFeedback: runEditorialFeedbackSchema.optional(),
+  seoKeywords: seoKeywordsSchema.optional(),
   text: z.string().min(1),
   channelIds: z.array(z.string().uuid()).min(1),
 });
@@ -500,6 +524,7 @@ export const sourceRunInputSchema = z.object({
   /** Optional for rows created before editorial feedback was available. */
   useEditorialFeedback: z.boolean().optional(),
   editorialFeedback: runEditorialFeedbackSchema.optional(),
+  seoKeywords: seoKeywordsSchema.optional(),
   /**
    * What the person typed, if anything — instructions about the material, not a
    * second thing to work from.
@@ -570,7 +595,7 @@ export type RunInput = z.infer<typeof runInputSchema>;
  *
  * The queue strip polls that list every five seconds and reads three things
  * off it: the brief, the kind and the host (`stripLabel`, `sourceHost`). The
- * material and editorial note snapshot it never reads stay in the detail
+ * material, editorial note snapshot, and SEO phrases it never reads stay in the detail
  * receipt. The material used to arrive anyway, all 8 000 characters of it,
  * for every open run. `MAX_CONCURRENT_RUNS` does not bound that set:
  * the cap counts `queued | running`, while a failed or cancelled run stays
@@ -588,7 +613,7 @@ export type RunInput = z.infer<typeof runInputSchema>;
  * asks for one run.
  */
 export const briefRunListInputSchema = briefRunInputBaseSchema
-  .omit({ editorialFeedback: true })
+  .omit({ editorialFeedback: true, seoKeywords: true })
   .refine((v) => !contentTypeRequiresMaterial(v.contentType), {
     message: "this format requires source material",
     path: ["contentType"],
@@ -596,6 +621,7 @@ export const briefRunListInputSchema = briefRunInputBaseSchema
 export const sourceRunListInputSchema = sourceRunInputSchema.omit({
   material: true,
   editorialFeedback: true,
+  seoKeywords: true,
 });
 export type SourceRunListInput = z.infer<typeof sourceRunListInputSchema>;
 

@@ -76,6 +76,33 @@ beforeEach(() => {
 });
 
 describe("the step checklist", () => {
+  it("shows reviewed SEO input and says when the optional pass used the writer draft", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        input: {
+          kind: "brief",
+          text: "Explain the evidence",
+          channelIds: [CHANNEL_A],
+          contentType: "expert_article",
+          seoKeywords: ["practical guide"],
+        },
+        steps: {
+          seo_polish: {
+            status: "succeeded",
+            output: { body: "Writer draft", result: "unavailable" },
+          },
+        },
+      }),
+    });
+    await renderRun();
+    expect(await screen.findByText("practical guide")).toBeInTheDocument();
+    const rows = screen.getAllByRole("listitem");
+    const seo = rows.find((row) => row.textContent?.startsWith(en.Runs.step.seo_polish));
+    expect(seo).toHaveTextContent(en.Runs.stepState.unavailable);
+    expect(seo).toHaveTextContent(en.Runs.seoUnavailable);
+  });
   it("shows an optional cover failure without hiding the completed text draft", async () => {
     installHandlers({
       current: makeRun({

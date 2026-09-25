@@ -18,8 +18,10 @@ import {
   redactSecrets,
   resolveModel,
   runFailureOf,
+  SEO_POLISH,
   type Step,
   type StepAttribution,
+  seoPolishSchema,
   type UsageRecord,
   WRITER,
   withRunFailure,
@@ -114,6 +116,15 @@ const TERMINAL_WRITE_MAX_ATTEMPTS = 3;
 const EVERY_CHANNEL_DELETED: RunFailure = "every_channel_deleted";
 const EVERY_CHANNEL_DELETED_DETAIL =
   "every channel this run was started for has since been deleted";
+/** Fail-soft only for errors the model-call boundary can attribute to the optional call. */
+const SEO_FALLBACK_FAILURES: ReadonlySet<RunFailure> = new Set([
+  "invalid_key",
+  "model_not_found",
+  "no_structured_output",
+  "provider_refused",
+  "rate_limited",
+  "timed_out",
+]);
 
 /**
  * The org's decrypted key, carried from where it is loaded to where a failure is
@@ -185,6 +196,10 @@ const coverOutputSchema = z.object({
 });
 
 const inlineImageOutputSchema = coverOutputSchema;
+const seoCheckpointSchema = z.object({
+  body: seoPolishSchema.shape.body,
+  result: z.enum(["polished", "unavailable"]),
+});
 @Injectable()
 export class GenerateService {
   private readonly logger = new Logger(GenerateService.name);
@@ -326,7 +341,7 @@ export class GenerateService {
     }
   }
 
-  /** The five roles, in order, resuming past whatever already has a checkpoint. */
+  /** The default five roles, with optional SEO polish before editing. */
   private async execute(
     run: ClaimedRun,
     fence: string,
@@ -539,7 +554,42 @@ export class GenerateService {
     const draft = await this.runStep(state, WRITER, { research });
     if (draft === STOPPED) return STOPPED;
 
-    const edited = await this.runStep(state, EDITOR, { research, body: draft.body });
+    let editorialBody = draft.body;
+    if (input.contentType === "expert_article" && input.seoKeywords?.length) {
+      const seoStep: Step<
+        { body: string; keywords: string[] },
+        z.infer<typeof seoCheckpointSchema>,
+        RunStepContext
+      > = {
+        name: SEO_POLISH.name,
+        schema: seoCheckpointSchema,
+        run: async (ctx, request) => {
+          try {
+            const polished = await SEO_POLISH.run(ctx, request);
+            return { body: polished.body, result: "polished" };
+          } catch (error) {
+            // An optional rewrite must not lose the writer draft. Only errors
+            // classified by the model-call boundary are safe to fall back from:
+            // an unknown coding or storage error still follows the normal run
+            // failure path rather than being hidden as a provider outage.
+            const failure = runFailureOf(error);
+            if (!failure || !SEO_FALLBACK_FAILURES.has(failure)) throw error;
+            this.logger.warn(
+              `SEO polish unavailable for run ${state.runId} (${failure}); retaining writer draft`,
+            );
+            return { body: request.body, result: "unavailable" };
+          }
+        },
+      };
+      const seo = await this.runStep(state, seoStep, {
+        body: draft.body,
+        keywords: input.seoKeywords,
+      });
+      if (seo === STOPPED) return STOPPED;
+      editorialBody = seo.body;
+    }
+
+    const edited = await this.runStep(state, EDITOR, { research, body: editorialBody });
     if (edited === STOPPED) return STOPPED;
 
     // The claims list rides with the draft in the run's own checkpoint map; this

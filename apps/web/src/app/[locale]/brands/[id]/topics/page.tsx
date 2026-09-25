@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  seoKeywordsSchema,
   type TopicDto,
   type TopicSuggestionRequestDto,
   topicCreateSchema,
@@ -19,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Menu } from "@/components/ui/menu";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -54,6 +56,9 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const [toDelete, setToDelete] = useState<TopicDto | null>(null);
   const [toRun, setToRun] = useState<TopicDto | null>(null);
   const [selectedChannels, setSelectedChannels] = useState<Set<string>>(new Set());
+  const [runFormat, setRunFormat] = useState<"social_post" | "expert_article">("social_post");
+  const [runSeoKeywordsText, setRunSeoKeywordsText] = useState("");
+  const [runSeoOpen, setRunSeoOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -212,17 +217,33 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   function openRun(topic: TopicDto) {
     setToRun(topic);
     setSelectedChannels(new Set());
+    setRunFormat("social_post");
+    setRunSeoKeywordsText("");
+    setRunSeoOpen(false);
     setDialogError(null);
   }
 
   async function generate() {
     if (!toRun || selectedChannels.size === 0) return;
+    const seoKeywords = runSeoKeywordsText
+      .split(/\r?\n/)
+      .map((term) => term.trim())
+      .filter(Boolean);
+    if (runSeoKeywordsText.trim() && !seoKeywordsSchema.safeParse(seoKeywords).success) {
+      setDialogError(t("seoKeywordsInvalid"));
+      setRunSeoOpen(true);
+      return;
+    }
     setBusy(true);
     setDialogError(null);
     try {
       const run = await api<Run>(`/api/topics/${toRun.id}/run?brandId=${id}`, {
         method: "POST",
-        body: JSON.stringify({ channelIds: [...selectedChannels] }),
+        body: JSON.stringify({
+          channelIds: [...selectedChannels],
+          ...(runFormat === "expert_article" && { contentType: runFormat }),
+          ...(seoKeywords.length && { seoKeywords }),
+        }),
       });
       router.push(`/${locale}/content/runs/${run.id}`);
     } catch (err) {
@@ -540,6 +561,37 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
           </p>
         )}
         <p className="mb-3 text-sm text-fg-secondary">{t("runHint")}</p>
+        <Select
+          id="topic-run-format"
+          label={t("runFormat")}
+          value={runFormat}
+          onChange={(event) => {
+            const selected = event.target.value as "social_post" | "expert_article";
+            setRunFormat(selected);
+            if (selected !== "expert_article") setRunSeoKeywordsText("");
+          }}
+          className="mb-3"
+        >
+          <option value="social_post">{t("socialPost")}</option>
+          <option value="expert_article">{t("expertArticle")}</option>
+        </Select>
+        {runFormat === "expert_article" && (
+          <Advanced
+            label={t("seoOptions")}
+            dirty={Boolean(runSeoKeywordsText.trim())}
+            open={runSeoOpen}
+            onOpenChange={setRunSeoOpen}
+          >
+            <Textarea
+              label={t("seoKeywordsLabel")}
+              value={runSeoKeywordsText}
+              onChange={(event) => setRunSeoKeywordsText(event.target.value)}
+              rows={3}
+              placeholder={t("seoKeywordsPlaceholder")}
+            />
+            <p className="mt-2 text-sm text-fg-tertiary">{t("seoKeywordsHint")}</p>
+          </Advanced>
+        )}
         {channels.length === 0 ? (
           <p className="text-sm text-fg-secondary">{t("noChannels")}</p>
         ) : (

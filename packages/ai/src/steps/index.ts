@@ -1,9 +1,10 @@
 /**
- * The five roles a generation run plays, in order: researcher, writer, editor,
- * fact-checker, adapter (once per channel).
+ * The default roles are researcher, writer, editor, fact-checker, and adapter
+ * (once per channel). An expert article with reviewed keywords adds SEO polish
+ * between writer and editor.
  *
  * Each is a `Step` with the checkpoint key the run stores it under —
- * `researcher | writer | editor | factcheck`, or `adapter:<channelId>` — a zod
+ * `researcher | writer | seo_polish | editor | factcheck`, or `adapter:<channelId>` — a zod
  * output schema, and a `run` that makes exactly one metered model call through
  * `generateStructured`. Steps never touch the SDK directly: the prompt boundary
  * (`prompt.ts`) and the metering both live on that path.
@@ -54,6 +55,12 @@ export {
  */
 export { defineStep, type Material } from "./prompt.js";
 export { RESEARCHER, type ResearchOutput, researchSchema } from "./researcher.js";
+export {
+  SEO_POLISH,
+  type SeoPolishInput,
+  type SeoPolishOutput,
+  seoPolishSchema,
+} from "./seo-polish.js";
 export type {
   RunStepContext,
   Step,

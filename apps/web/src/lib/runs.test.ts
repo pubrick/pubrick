@@ -68,6 +68,30 @@ describe("isTerminalRunStatus", () => {
 });
 
 describe("runStepStates", () => {
+  it("shows the opted-in SEO pass and its visible fallback", () => {
+    const input = {
+      kind: "brief" as const,
+      text: "Explain the evidence",
+      channelIds: [CH_A],
+      contentType: "expert_article" as const,
+      seoKeywords: ["practical guide"],
+    };
+    expect(
+      stateOf(makeRun({ input, status: "running", currentStep: "seo_polish" }), "seo_polish"),
+    ).toBe("active");
+    expect(
+      stateOf(
+        makeRun({
+          input,
+          status: "succeeded",
+          steps: {
+            seo_polish: { status: "succeeded", output: { body: "Draft", result: "unavailable" } },
+          },
+        }),
+        "seo_polish",
+      ),
+    ).toBe("unavailable");
+  });
   it("shows five steps, all waiting, for a run that has not started", () => {
     const states = runStepStates(makeRun());
     expect(states.map((s) => s.key)).toEqual([

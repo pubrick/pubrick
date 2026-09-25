@@ -255,6 +255,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
         );
       case "editor":
         return <StepLines lines={changeLines(runEditorChanges(run))} empty={t("changesEmpty")} />;
+      case "seo_polish":
+        return step.state === "unavailable" ? (
+          <p className="mt-2 text-sm text-fg-secondary">{t("seoUnavailable")}</p>
+        ) : null;
       case "cover": {
         const checkpoint = run.steps.cover;
         if (checkpoint?.status !== "succeeded") return null;
@@ -337,6 +341,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                   {t(`contentType.${run.input.contentType ?? "social_post"}`)}
                 </p>
               </RunField>
+              {run.input.seoKeywords && run.input.seoKeywords.length > 0 && (
+                <RunField label={t("seoKeywordsLabel")}>
+                  <p className="whitespace-pre-wrap text-sm text-fg">
+                    {run.input.seoKeywords.join("\n")}
+                  </p>
+                </RunField>
+              )}
               {run.input.kind === "source" && run.input.text === null ? (
                 /*
                   Not an empty "Brief" block. A label with nothing under it reads

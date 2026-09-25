@@ -12,6 +12,7 @@ import {
   MAX_SOURCE_URL_LENGTH,
   runCreateSchema,
   type SourceExtractionResponse,
+  seoKeywordsSchema,
   sourceExtractionRequestSchema,
   supportsInlineImages,
 } from "@pubrick/shared";
@@ -57,6 +58,8 @@ export default function NewContentPage() {
   const [generateCover, setGenerateCover] = useState(false);
   const [generateInlineImages, setGenerateInlineImages] = useState(false);
   const [useEditorialFeedback, setUseEditorialFeedback] = useState(false);
+  const [seoKeywordsText, setSeoKeywordsText] = useState("");
+  const [seoOptionsOpen, setSeoOptionsOpen] = useState(false);
   const [material, setMaterial] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourcePreview, setSourcePreview] = useState<SourceExtractionResponse | null>(null);
@@ -98,6 +101,11 @@ export default function NewContentPage() {
   const hasBrief = brief.trim() !== "";
   const hasMaterial = material.trim() !== "";
   const hasSourceUrl = sourceUrl.trim() !== "";
+  const hasSeoKeywords = seoKeywordsText.trim() !== "";
+  const seoKeywords = seoKeywordsText
+    .split(/\r?\n/)
+    .map((term) => term.trim())
+    .filter(Boolean);
 
   /**
    * "IS GENERATE ON THIS SCREEN" — the condition that RENDERS the button, read
@@ -215,6 +223,11 @@ export default function NewContentPage() {
   // before onFormSubmit fires, exactly as if the button sat inside the form.
   async function createContent() {
     setError(null);
+    if (hasSeoKeywords) {
+      setError(t("seoKeywordsCreate"));
+      setSeoOptionsOpen(true);
+      return;
+    }
     // THE SOURCE SECTION IS NOT PART OF A MANUAL POST. `contentCreateSchema`
     // has no `material` and no `sourceUrl`, so this path would create a post
     // from the typed body, drop BOTH of the things the person put in that
@@ -290,6 +303,11 @@ export default function NewContentPage() {
       setError(t("generateInlineImagesUnsupported"));
       return;
     }
+    if (hasSeoKeywords && !seoKeywordsSchema.safeParse(seoKeywords).success) {
+      setError(t("seoKeywordsInvalid"));
+      setSeoOptionsOpen(true);
+      return;
+    }
     if (sourcePreview) {
       setError(t("sourcePreviewNeedsUse"));
       setSourceOpen(true);
@@ -349,6 +367,7 @@ export default function NewContentPage() {
           ...(generateCover && { generateCover: true }),
           ...(generateInlineImages && { generateInlineImages: true }),
           ...(useEditorialFeedback && { useEditorialFeedback: true }),
+          ...(hasSeoKeywords && { seoKeywords }),
           ...(hasBrief && { brief }),
           ...(hasMaterial && { material }),
           ...(hasSourceUrl && { sourceUrl }),
@@ -455,6 +474,7 @@ export default function NewContentPage() {
                   const selected = event.target.value as ContentType;
                   setContentType(selected);
                   if (!supportsInlineImages(selected)) setGenerateInlineImages(false);
+                  if (selected !== "expert_article") setSeoKeywordsText("");
                   if (contentTypeRequiresMaterial(selected)) setSourceOpen(true);
                 }}
                 className="min-h-11"
@@ -465,6 +485,27 @@ export default function NewContentPage() {
                   </option>
                 ))}
               </Select>
+            )}
+            {canGenerate && contentType === "expert_article" && (
+              <Advanced
+                label={t("seoOptions")}
+                dirty={hasSeoKeywords}
+                open={seoOptionsOpen}
+                onOpenChange={setSeoOptionsOpen}
+              >
+                <Textarea
+                  id="seoKeywords"
+                  label={t("seoKeywordsLabel")}
+                  value={seoKeywordsText}
+                  onChange={(event) => setSeoKeywordsText(event.target.value)}
+                  placeholder={t("seoKeywordsPlaceholder")}
+                  rows={3}
+                  aria-describedby="seo-keywords-hint"
+                />
+                <p id="seo-keywords-hint" className="mt-2 text-sm text-fg-tertiary">
+                  {t("seoKeywordsHint")}
+                </p>
+              </Advanced>
             )}
             {canGenerate && (
               <div className="rounded-control border border-border px-3 py-3">

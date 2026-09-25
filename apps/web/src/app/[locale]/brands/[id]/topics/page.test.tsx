@@ -92,6 +92,21 @@ describe("topic bank page", () => {
       method: "POST",
       body: { channelIds: [CHANNEL_ID] },
     });
+    await user.selectOptions(dialog.getByLabelText(en.Topics.runFormat), "expert_article");
+    await user.click(dialog.getByText(en.Topics.seoOptions));
+    await user.type(dialog.getByLabelText(en.Topics.seoKeywordsLabel), "local market hall");
+    await user.click(dialog.getByRole("button", { name: en.Topics.generate }));
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        url: expect.stringContaining(`/api/topics/${TOPIC_ID}/run?brandId=${BRAND_ID}`),
+        method: "POST",
+        body: {
+          channelIds: [CHANNEL_ID],
+          contentType: "expert_article",
+          seoKeywords: ["local market hall"],
+        },
+      }),
+    );
   });
 
   it("requests suggestions, shows queued feedback, and does not generate automatically", async () => {
