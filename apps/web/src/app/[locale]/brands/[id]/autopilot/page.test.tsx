@@ -60,6 +60,9 @@ describe("autopilot settings page", () => {
     const enabled = await screen.findByRole("checkbox", { name: /Enable scheduled generation/ });
     expect(enabled).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /Suggest topics daily/ })).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Filter blocked topic paraphrases/ }),
+    ).not.toBeChecked();
     await user.click(enabled);
     await user.click(screen.getByRole("checkbox", { name: /Main/ }));
     await user.click(screen.getByRole("button", { name: en.Autopilot.save }));
@@ -97,6 +100,36 @@ describe("autopilot settings page", () => {
       enabled: false,
       channelIds: [],
       autoSuggestTopics: true,
+    });
+  });
+
+  it("saves the paid semantic opt-in beneath daily suggestions with clear call costs", async () => {
+    const requests: Array<{ method: string; body: unknown }> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      requests.push({ method, body });
+      if (String(input).endsWith("/autopilot/history")) return response(200, []);
+      if (String(input).includes("/api/channels?")) return response(200, []);
+      if (method === "PUT") return response(200, body);
+      return response(200, autopilotDefaults);
+    });
+    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    const filter = await screen.findByRole("checkbox", {
+      name: /Filter blocked topic paraphrases/,
+    });
+    expect(filter).not.toBeChecked();
+    expect(screen.getByText(en.Autopilot.semanticFilterBlockedTopicsHint)).toHaveTextContent(
+      /up to 3 paid Google embedding calls on top of the one suggestion text call/,
+    );
+    await user.click(screen.getByRole("checkbox", { name: /Suggest topics daily/ }));
+    await user.click(filter);
+    await user.click(screen.getByRole("button", { name: en.Autopilot.save }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(en.Autopilot.saved));
+    expect(requests.find((entry) => entry.method === "PUT")?.body).toMatchObject({
+      autoSuggestTopics: true,
+      semanticFilterBlockedTopics: true,
     });
   });
 

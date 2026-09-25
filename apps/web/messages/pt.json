@@ -1589,6 +1589,8 @@
     "enabledHint": "Só são usados tópicos aprovados por você. Desative para impedir novas execuções.",
     "autoSuggestTopics": "Sugerir tópicos diariamente",
     "autoSuggestTopicsHint": "Após as 09:00 no fuso da marca, solicita até três ideias no máximo uma vez por dia local usando sua chave de IA configurada. Pula a solicitação se houver três ideias de IA pendentes ou nenhuma chave. As ideias precisam de aprovação.",
+    "semanticFilterBlockedTopics": "Filtrar paráfrases de tópicos bloqueados",
+    "semanticFilterBlockedTopicsHint": "Para sugestões diárias, compara novos títulos com os tópicos bloqueados nos últimos 90 dias (máximo de 20). Com 21 ou mais tópicos bloqueados, o pedido diário falha antes de gerar ideias. Se houver bloqueios, exige uma chave Google AI e adiciona até 3 chamadas pagas de embeddings do Google além da chamada de texto para sugestões. Estas chamadas ficam fora do limite de gastos de geração; o registo pode não conhecer o preço. Se a verificação falhar, nenhuma ideia é guardada.",
     "autoPlanTopics": "Planear automaticamente tópicos aprovados com data",
     "autoPlanTopicsHint": "A cada hora, coloca no calendário às 10:00 locais os tópicos aprovados com data prevista nos próximos 14 dias. Usa os canais selecionados e respeita o limite diário. Desativar impede novas entradas; remova as existentes separadamente. Os rascunhos continuam sujeitos a revisão humana.",
     "planningDailyLimit": "Entradas no calendário por dia",

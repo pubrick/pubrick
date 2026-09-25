@@ -157,7 +157,11 @@ describe("SuggestionsService", () => {
         statusCode: 503,
       }),
     );
-    repo.claim.mockResolvedValue({ ...input, origin: "automatic" });
+    repo.claim.mockResolvedValue({
+      ...input,
+      origin: "automatic",
+      semanticFilterBlockedTopics: false,
+    });
     await service.handle(job);
     expect(repo.recordUsage).toHaveBeenCalledOnce();
     expect(repo.failed).toHaveBeenCalledWith(
@@ -443,5 +447,131 @@ describe("SuggestionsService", () => {
       1,
       undefined,
     );
+  });
+
+  it("filters paraphrased daily blockers after explicit opt-in and retains unrelated ideas", async () => {
+    const suggestions = [
+      {
+        title: "How cafes can improve extraction",
+        description: "Blocked paraphrase",
+        newsItemId: null,
+      },
+      { title: "Staff rota planning", description: "Different angle", newsItemId: null },
+    ];
+    const { service, repo, embedBatch, calls } = harness(JSON.stringify({ suggestions }));
+    repo.claim.mockResolvedValue({
+      ...input,
+      origin: "automatic",
+      semanticFilterBlockedTopics: true,
+    });
+    repo.recentBlocked.mockResolvedValue({
+      titles: ["Cafe extraction guide"],
+      state: "blocked-state",
+    });
+    const near = Array(768)
+      .fill(0)
+      .map((_, index) => (index === 0 ? 1 : 0));
+    const far = Array(768)
+      .fill(0)
+      .map((_, index) => (index === 1 ? 1 : 0));
+    embedBatch.mockResolvedValue({ embeddings: [near, far, near], tokens: 24, tokensKnown: true });
+    await service.handle(job);
+    expect(calls).toHaveLength(1);
+    expect(embedBatch).toHaveBeenCalledOnce();
+    expect(repo.recordEmbeddingUsage).toHaveBeenCalledOnce();
+    expect(repo.recordEmbeddingUsage.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.complete.mock.invocationCallOrder[0] as number,
+    );
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [suggestions[1]],
+      [{ id: newsId, url: "https://example.com/rule" }],
+      1,
+      { titles: ["Cafe extraction guide"], state: "blocked-state" },
+    );
+  });
+
+  it("fails a opted-in daily request without a Google key before the text call", async () => {
+    const { service, repo, embedBatch, calls } = harness("{}");
+    repo.claim.mockResolvedValue({
+      ...input,
+      origin: "automatic",
+      semanticFilterBlockedTopics: true,
+    });
+    repo.recentBlocked.mockResolvedValue({ titles: ["Blocked angle"], state: "state" });
+    repo.googleKey.mockResolvedValue(undefined);
+    await service.handle(job);
+    expect(calls).toHaveLength(0);
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.complete).not.toHaveBeenCalled();
+    expect(repo.failed).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      "no_api_key",
+      1,
+    );
+  });
+
+  it.each(["provider", "ledger"] as const)(
+    "does not save opted-in daily ideas after a %s embedding failure",
+    async (failure) => {
+      const suggestion = { title: "Cafe angle", description: "Brief", newsItemId: null };
+      const { service, repo, embedBatch, calls } = harness(
+        JSON.stringify({ suggestions: [suggestion] }),
+      );
+      repo.claim.mockResolvedValue({
+        ...input,
+        origin: "automatic",
+        semanticFilterBlockedTopics: true,
+      });
+      repo.recentBlocked.mockResolvedValue({ titles: ["Blocked angle"], state: "state" });
+      if (failure === "provider") embedBatch.mockRejectedValue(new Error("provider unavailable"));
+      else {
+        const vector = Array(768).fill(1);
+        embedBatch.mockResolvedValue({
+          embeddings: [vector, vector],
+          tokens: 12,
+          tokensKnown: true,
+        });
+        repo.recordEmbeddingUsage.mockRejectedValue(new Error("ledger unavailable"));
+      }
+      await service.handle(job);
+      expect(calls).toHaveLength(1);
+      expect(repo.complete).not.toHaveBeenCalled();
+      expect(repo.failed).toHaveBeenCalledWith(
+        job.orgId,
+        job.brandId,
+        job.requestId,
+        "model_failed",
+        1,
+      );
+      if (failure === "provider")
+        expect(repo.recordEmbeddingUsage).toHaveBeenCalledWith(
+          job.orgId,
+          0,
+          expect.any(Number),
+          "errored",
+          expect.any(String),
+        );
+    },
+  );
+
+  it("never makes a second text or embedding call for opted-in automatic redelivery", async () => {
+    const { service, repo, embedBatch, calls } = harness("{}");
+    repo.claim.mockResolvedValueOnce({
+      ...input,
+      origin: "automatic",
+      semanticFilterBlockedTopics: true,
+    });
+    repo.recentBlocked.mockResolvedValue({ titles: [], state: "[]" });
+    await service.handle(job);
+    repo.claim.mockResolvedValueOnce(null);
+    await service.handle(job);
+    expect(calls).toHaveLength(1);
+    expect(embedBatch).not.toHaveBeenCalled();
+    expect(repo.recoverStaleAutomatic).toHaveBeenCalledOnce();
   });
 });

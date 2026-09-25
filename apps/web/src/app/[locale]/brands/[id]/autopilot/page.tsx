@@ -193,6 +193,20 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
                 <span className="mt-1 block text-fg-secondary">{t("autoSuggestTopicsHint")}</span>
               </span>
             </label>
+            <label className="-mt-3 flex items-start gap-3 pl-6 text-sm text-fg">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={current.semanticFilterBlockedTopics ?? false}
+                onChange={(event) => set("semanticFilterBlockedTopics", event.target.checked)}
+              />
+              <span>
+                <span className="font-medium">{t("semanticFilterBlockedTopics")}</span>
+                <span className="mt-1 block text-fg-secondary">
+                  {t("semanticFilterBlockedTopicsHint")}
+                </span>
+              </span>
+            </label>
             <label className="flex items-start gap-3 border-t border-border pt-5 text-sm text-fg">
               <input
                 type="checkbox"

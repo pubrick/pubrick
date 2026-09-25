@@ -11,6 +11,8 @@ export const autopilotConfigSchema = z
     enabled: z.boolean(),
     /** Optional on writes so older clients do not reset an existing opt-in. */
     autoSuggestTopics: z.boolean().optional(),
+    /** Optional on writes so older clients preserve the paid semantic-check opt-in. */
+    semanticFilterBlockedTopics: z.boolean().optional(),
     /** Optional on writes so older clients do not reset an existing opt-in. */
     autoPlanTopics: z.boolean().optional(),
     channelIds,
@@ -43,6 +45,7 @@ export type AutopilotConfig = z.infer<typeof autopilotConfigSchema>;
 export const autopilotDefaults: AutopilotConfig = {
   enabled: false,
   autoSuggestTopics: false,
+  semanticFilterBlockedTopics: false,
   autoPlanTopics: false,
   channelIds: [],
   timezone: "UTC",

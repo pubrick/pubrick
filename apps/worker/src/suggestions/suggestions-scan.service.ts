@@ -76,6 +76,7 @@ export class SuggestionsScanService {
       const [config] = await tx
         .select({
           autoSuggestTopics: schema.autopilotConfigs.autoSuggestTopics,
+          semanticFilterBlockedTopics: schema.autopilotConfigs.semanticFilterBlockedTopics,
           timezone: schema.autopilotConfigs.timezone,
         })
         .from(schema.autopilotConfigs)
@@ -177,7 +178,13 @@ export class SuggestionsScanService {
       }
       const [request] = await tx
         .insert(schema.topicSuggestionRequests)
-        .values({ orgId, brandId, origin: "automatic", localDate: clock.day })
+        .values({
+          orgId,
+          brandId,
+          origin: "automatic",
+          localDate: clock.day,
+          semanticFilterBlockedTopics: config.semanticFilterBlockedTopics,
+        })
         .returning({ id: schema.topicSuggestionRequests.id });
       if (!request) throw new Error("Daily topic suggestion request insert returned no id");
       const id = await boss.send(

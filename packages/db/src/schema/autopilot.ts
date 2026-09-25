@@ -34,6 +34,7 @@ export const autopilotConfigs = pgTable(
       .references(() => organization.id, { onDelete: "cascade" }),
     enabled: boolean("enabled").notNull().default(false),
     autoSuggestTopics: boolean("auto_suggest_topics").notNull().default(false),
+    semanticFilterBlockedTopics: boolean("semantic_filter_blocked_topics").notNull().default(false),
     autoPlanTopics: boolean("auto_plan_topics").notNull().default(false),
     /** First-party admission clock for the operator's rolling one-minute cooldown. */
     lastManualPlanAt: timestamp("last_manual_plan_at", { withTimezone: true }),

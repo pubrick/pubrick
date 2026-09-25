@@ -17,6 +17,7 @@ import { QueueService } from "../queue/queue.service";
 const CONFIG_COLUMNS = {
   enabled: schema.autopilotConfigs.enabled,
   autoSuggestTopics: schema.autopilotConfigs.autoSuggestTopics,
+  semanticFilterBlockedTopics: schema.autopilotConfigs.semanticFilterBlockedTopics,
   autoPlanTopics: schema.autopilotConfigs.autoPlanTopics,
   channelIds: schema.autopilotConfigs.channelIds,
   timezone: schema.autopilotConfigs.timezone,
@@ -107,6 +108,8 @@ export class AutopilotRepository {
       const effective = {
         ...config,
         autoSuggestTopics: config.autoSuggestTopics ?? prior?.autoSuggestTopics ?? false,
+        semanticFilterBlockedTopics:
+          config.semanticFilterBlockedTopics ?? prior?.semanticFilterBlockedTopics ?? false,
         autoPlanTopics: config.autoPlanTopics ?? prior?.autoPlanTopics ?? false,
         planningDailyLimit: config.planningDailyLimit ?? prior?.planningDailyLimit ?? 1,
       };
