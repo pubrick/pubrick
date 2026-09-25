@@ -124,6 +124,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   );
   const canManageAccess = activeMember?.role === "owner" || activeMember?.role === "admin";
+  // Existing members retain their channel and brand settings access. Editorial
+  // roles can inspect granted brands, while only managers control team access.
+  const canEditBrandSettings = canManageAccess || activeMember?.role === "member";
   const [brand, setBrand] = useState<Brand | null>(null);
   const [brandRemovalOpen, setBrandRemovalOpen] = useState(false);
   const [brandRemovalName, setBrandRemovalName] = useState("");
@@ -523,9 +526,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     <AppShell
       title={brand ? brand.name : <Skeleton lines={1} className="w-40" />}
       primaryAction={
-        <Button type="submit" form={FORM_ID} disabled={busy}>
-          {t("add")}
-        </Button>
+        canEditBrandSettings && (
+          <Button type="submit" form={FORM_ID} disabled={busy}>
+            {t("add")}
+          </Button>
+        )
       }
     >
       <div className="mb-5 flex flex-wrap gap-4 text-sm font-medium">
@@ -559,16 +564,20 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("profileTitle")}</h2>
-          <Button
-            size="sm"
-            variant="secondary"
-            type="button"
-            onClick={startProfileEditing}
-            disabled={!brand}
-          >
-            {tb("profileEdit")}
-          </Button>
-          {brand && <BrandImport brandId={id} onApplied={load} />}
+          {canEditBrandSettings && (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                type="button"
+                onClick={startProfileEditing}
+                disabled={!brand}
+              >
+                {tb("profileEdit")}
+              </Button>
+              {brand && <BrandImport brandId={id} onApplied={load} />}
+            </>
+          )}
         </div>
         <p className="mb-4 text-sm text-fg-secondary">{tb("descriptionHint")}</p>
         {brand === null ? (
@@ -602,15 +611,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("voiceTitle")}</h2>
-          <Button
-            size="sm"
-            variant="secondary"
-            type="button"
-            onClick={startVoiceEditing}
-            disabled={brand === null}
-          >
-            {tb("voiceEdit")}
-          </Button>
+          {canEditBrandSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              type="button"
+              onClick={startVoiceEditing}
+              disabled={brand === null}
+            >
+              {tb("voiceEdit")}
+            </Button>
+          )}
         </div>
         <p className="mb-4 text-sm text-fg-secondary">{tb("voiceHint")}</p>
         {brand === null ? (
@@ -644,15 +655,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("linksTitle")}</h2>
-          <Button
-            size="sm"
-            variant="secondary"
-            type="button"
-            onClick={startLinksEditing}
-            disabled={!brand}
-          >
-            {tb("linksEdit")}
-          </Button>
+          {canEditBrandSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              type="button"
+              onClick={startLinksEditing}
+              disabled={!brand}
+            >
+              {tb("linksEdit")}
+            </Button>
+          )}
         </div>
         <p className="text-sm text-fg-secondary">{tb("linksHint")}</p>
         {brand?.linkPolicy ? (
@@ -702,14 +715,16 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           <EmptyState
             title={t("empty")}
             action={
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                onClick={() => document.getElementById(NAME_INPUT_ID)?.focus()}
-              >
-                {t("emptyAddAction")}
-              </Button>
+              canEditBrandSettings && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => document.getElementById(NAME_INPUT_ID)?.focus()}
+                >
+                  {t("emptyAddAction")}
+                </Button>
+              )
             }
           />
         </Card>
@@ -762,30 +777,31 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 }
                 metaClassName="whitespace-normal"
                 trailing={
-                  <>
-                    {c.platform === "vk" && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={metricsBusy === c.id}
-                        onClick={() => toggleMetrics(c)}
-                        aria-label={
-                          c.metricsAutoRefresh ? t("autoMetricsDisable") : t("autoMetricsEnable")
-                        }
-                        title={t("autoMetricsHint")}
-                      >
-                        {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
+                  canEditBrandSettings && (
+                    <>
+                      {c.platform === "vk" && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={metricsBusy === c.id}
+                          onClick={() => toggleMetrics(c)}
+                          aria-label={
+                            c.metricsAutoRefresh ? t("autoMetricsDisable") : t("autoMetricsEnable")
+                          }
+                          title={t("autoMetricsHint")}
+                        >
+                          {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
+                        </Button>
+                      )}
+                      {!isManualPlatform(c.platform) && (
+                        <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
+                          {t("test")}
+                        </Button>
+                      )}
+                      <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
+                        {t("edit")}
                       </Button>
-                    )}
-                    {!isManualPlatform(c.platform) && (
-                      <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
-                        {t("test")}
-                      </Button>
-                    )}
-                    <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
-                      {t("edit")}
-                    </Button>
-                    {/* Deliberately a plain visible Button, not tucked behind
+                      {/* Deliberately a plain visible Button, not tucked behind
                         the Menu component: a page test looks this up directly
                         via getByRole("button", { name: /remove/i }) with no
                         prior click to open anything — putting it in a Menu
@@ -793,10 +809,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                         and stay hidden until the trigger opens) would break
                         that lookup. It opens the confirmation below; it is not
                         the delete. */}
-                    <Button size="sm" variant="danger" onClick={() => setPendingRemoval(c)}>
-                      {t("remove")}
-                    </Button>
-                  </>
+                      <Button size="sm" variant="danger" onClick={() => setPendingRemoval(c)}>
+                        {t("remove")}
+                      </Button>
+                    </>
+                  )
                 }
               />
             );
@@ -804,79 +821,83 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         </div>
       )}
 
-      <Card>
-        <form id={FORM_ID} onSubmit={addChannel} className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-3">
-            <Select
-              label={t("platformLabel")}
-              value={platform}
-              onChange={(e) => {
-                setPlatform(e.target.value as PlatformId);
-                // Drop the previous platform's values: leftover keys would be
-                // submitted and encrypted alongside (or instead of) the ones
-                // this platform needs.
-                setCreds({});
-              }}
-              className="min-w-[160px]"
-            >
-              {OFFERED_PLATFORMS.map((p) => (
-                <option key={p} value={p}>
-                  {platformName(p)}
-                </option>
-              ))}
-              {/* Named, and plainly marked as not yet deliverable. Disabled
+      {canEditBrandSettings && (
+        <Card>
+          <form id={FORM_ID} onSubmit={addChannel} className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-3">
+              <Select
+                label={t("platformLabel")}
+                value={platform}
+                onChange={(e) => {
+                  setPlatform(e.target.value as PlatformId);
+                  // Drop the previous platform's values: leftover keys would be
+                  // submitted and encrypted alongside (or instead of) the ones
+                  // this platform needs.
+                  setCreds({});
+                }}
+                className="min-w-[160px]"
+              >
+                {OFFERED_PLATFORMS.map((p) => (
+                  <option key={p} value={p}>
+                    {platformName(p)}
+                  </option>
+                ))}
+                {/* Named, and plainly marked as not yet deliverable. Disabled
                   rather than hidden: hiding them answers "does Pubrick support
                   a platform?" with silence, and this is the product that refuses to
                   overstate what it can do. The browser will not select a
                   disabled option, so the credential fields for one are
                   unreachable — and `POST /api/channels` refuses the same set
                   anyway, derived from the publisher registry. */}
-              {UNSUPPORTED_PLATFORMS.length > 0 && (
-                <optgroup label={t("platformUnsupported")}>
-                  {UNSUPPORTED_PLATFORMS.map((p) => (
-                    <option key={p} value={p} disabled>
-                      {platformName(p)}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </Select>
-            <Input
-              id={NAME_INPUT_ID}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              label={t("namePlaceholder")}
-              required
-              className="min-w-[200px] flex-1"
-            />
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {fields.map((f) => (
+                {UNSUPPORTED_PLATFORMS.length > 0 && (
+                  <optgroup label={t("platformUnsupported")}>
+                    {UNSUPPORTED_PLATFORMS.map((p) => (
+                      <option key={p} value={p} disabled>
+                        {platformName(p)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </Select>
               <Input
-                key={f}
-                type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
-                autoComplete="off"
-                value={creds[f] ?? ""}
-                onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
-                label={credentialFieldLabel(f)}
+                id={NAME_INPUT_ID}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                label={t("namePlaceholder")}
                 required
                 className="min-w-[200px] flex-1"
               />
-            ))}
-          </div>
-          {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
-          {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
-          {platform === "bluesky" && (
-            <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
-          )}
-          {platform === "mastodon" && (
-            <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
-          )}
-          {platform === "vc_ru" && <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>}
-        </form>
-      </Card>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {fields.map((f) => (
+                <Input
+                  key={f}
+                  type={NON_SECRET_FIELDS.has(f) ? "text" : "password"}
+                  autoComplete="off"
+                  value={creds[f] ?? ""}
+                  onChange={(e) => setCreds({ ...creds, [f]: e.target.value })}
+                  label={credentialFieldLabel(f)}
+                  required
+                  className="min-w-[200px] flex-1"
+                />
+              ))}
+            </div>
+            {platform === "vk" && <p className="text-sm text-fg-secondary">{t("vkTokenHint")}</p>}
+            {platform === "max" && <p className="text-sm text-fg-secondary">{t("maxTokenHint")}</p>}
+            {platform === "bluesky" && (
+              <p className="text-sm text-fg-secondary">{t("blueskyAppPasswordHint")}</p>
+            )}
+            {platform === "mastodon" && (
+              <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
+            )}
+            {platform === "vc_ru" && (
+              <p className="text-sm text-fg-secondary">{t("vcManualHint")}</p>
+            )}
+          </form>
+        </Card>
+      )}
 
-      <FeedSettings brandId={id} />
+      {canEditBrandSettings && <FeedSettings brandId={id} />}
 
       {canManageAccess && brand && (
         <Card className="mt-6">
@@ -899,7 +920,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       )}
 
       <Modal
-        open={brandRemovalOpen}
+        open={canManageAccess && brandRemovalOpen}
         onClose={closeBrandRemoval}
         title={tb("removeTitle")}
         footer={
@@ -943,7 +964,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={editing !== null}
+        open={canEditBrandSettings && editing !== null}
         onClose={closeEditor}
         title={t("editTitle")}
         footer={
@@ -1002,7 +1023,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={profileOpen}
+        open={canEditBrandSettings && profileOpen}
         onClose={closeProfileEditor}
         title={tb("profileTitle")}
         footer={
@@ -1040,7 +1061,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={voiceOpen}
+        open={canEditBrandSettings && voiceOpen}
         onClose={closeVoiceEditor}
         title={tb("voiceTitle")}
         footer={
@@ -1098,7 +1119,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={linksOpen}
+        open={canEditBrandSettings && linksOpen}
         onClose={closeLinksEditor}
         title={tb("linksTitle")}
         footer={
@@ -1175,7 +1196,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={pendingRemoval !== null}
+        open={canEditBrandSettings && pendingRemoval !== null}
         onClose={() => setPendingRemoval(null)}
         title={t("removeTitle")}
         footer={

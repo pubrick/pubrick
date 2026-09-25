@@ -49,6 +49,8 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const member = organization?.members?.find(
     (entry) => entry.userId === session?.user.id || entry.user?.id === session?.user.id,
   );
+  const role: string | undefined = member?.role;
+  const canEditKnowledge = role === "owner" || role === "admin" || role === "member";
   const canManageIndex = member?.role === "owner" || member?.role === "admin";
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -404,7 +406,10 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   }
 
   return (
-    <AppShell title={t("title")} primaryAction={<Button onClick={openAdd}>{t("add")}</Button>}>
+    <AppShell
+      title={t("title")}
+      primaryAction={canEditKnowledge && <Button onClick={openAdd}>{t("add")}</Button>}
+    >
       <div className="mb-6">
         <Link
           href={`/${locale}/brands/${brandId}`}
@@ -453,21 +458,25 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
             </p>
           )}
         </div>
-        <input
-          ref={csvInput}
-          type="file"
-          accept=".csv,text/csv"
-          className="hidden"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) void readCsv(file);
-            event.target.value = "";
-          }}
-        />
+        {canEditKnowledge && (
+          <input
+            ref={csvInput}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void readCsv(file);
+              event.target.value = "";
+            }}
+          />
+        )}
         <div className="mt-4 flex flex-wrap gap-3">
-          <Button variant="secondary" onClick={() => csvInput.current?.click()}>
-            {t("csvImport")}
-          </Button>
+          {canEditKnowledge && (
+            <Button variant="secondary" onClick={() => csvInput.current?.click()}>
+              {t("csvImport")}
+            </Button>
+          )}
           <Button
             variant="secondary"
             onClick={() => void exportCsv()}
@@ -476,7 +485,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
             {exporting ? t("csvExporting") : t("csvExport")}
           </Button>
         </div>
-        {entries?.some((entry) => entry.isActive && !entry.hasEmbedding) && (
+        {canEditKnowledge && entries?.some((entry) => entry.isActive && !entry.hasEmbedding) && (
           <div className="mt-4 rounded-xl border border-border bg-surface-raised p-4">
             <p className="text-sm text-fg-secondary">
               {t("batchIntro", {
@@ -527,9 +536,11 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           <EmptyState
             title={t("empty")}
             action={
-              <Button variant="secondary" onClick={openAdd}>
-                {t("add")}
-              </Button>
+              canEditKnowledge && (
+                <Button variant="secondary" onClick={openAdd}>
+                  {t("add")}
+                </Button>
+              )
             }
           />
         </Card>
@@ -563,25 +574,27 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
                   title={entry.title}
                   meta={`${categoryLabel(entry.category)} · ${entry.isActive ? t("active") : t("paused")} · ${entry.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}`}
                   trailing={
-                    <div className="flex max-w-full flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => index(entry)}
-                        disabled={indexing === entry.id}
-                      >
-                        {indexing === entry.id ? t("indexing") : t("index")}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
-                        {t("edit")}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
-                        {entry.isActive ? t("pause") : t("resume")}
-                      </Button>
-                      <Button size="sm" variant="danger" onClick={() => setPendingRemoval(entry)}>
-                        {t("remove")}
-                      </Button>
-                    </div>
+                    canEditKnowledge && (
+                      <div className="flex max-w-full flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => index(entry)}
+                          disabled={indexing === entry.id}
+                        >
+                          {indexing === entry.id ? t("indexing") : t("index")}
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
+                          {t("edit")}
+                        </Button>
+                        <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
+                          {entry.isActive ? t("pause") : t("resume")}
+                        </Button>
+                        <Button size="sm" variant="danger" onClick={() => setPendingRemoval(entry)}>
+                          {t("remove")}
+                        </Button>
+                      </div>
+                    )
                   }
                 />
               ))}
@@ -591,7 +604,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
       )}
 
       <Modal
-        open={editor !== null}
+        open={canEditKnowledge && editor !== null}
         onClose={closeEditor}
         title={editor === "add" ? t("addTitle") : t("editTitle")}
         footer={
@@ -661,7 +674,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
         </form>
       </Modal>
       <Modal
-        open={pendingRemoval !== null}
+        open={canEditKnowledge && pendingRemoval !== null}
         onClose={() => setPendingRemoval(null)}
         title={t("removeTitle")}
         footer={
@@ -680,7 +693,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
         </p>
       </Modal>
       <Modal
-        open={importPreview !== null}
+        open={canEditKnowledge && importPreview !== null}
         onClose={closeImport}
         title={t("csvPreviewTitle")}
         footer={

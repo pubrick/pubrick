@@ -1,5 +1,6 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor, within } from "@/test/render";
@@ -90,7 +91,60 @@ describe("brand publication results", () => {
   beforeEach(() => {
     signedInSession();
     vi.stubGlobal("fetch", vi.fn());
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+      isPending: false,
+    } as never);
   });
+
+  it.each(["author", "editor"])(
+    "shows %s results without rejected analytics actions",
+    async (role) => {
+      vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+        data: { id: "test-org", members: [{ userId: "test-user", role }] },
+        isPending: false,
+      } as never);
+      const fetcher = vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith("/telegram-connection")) return response({ connected: true });
+        if (url.endsWith("/comment-collection"))
+          return response({ enabled: false, updatedAt: null });
+        if (url.endsWith("/comment-analysis")) return response({ status: "not_analyzed" });
+        if (url.endsWith("/comments"))
+          return response({
+            status: "available",
+            checkedAt: timestamp,
+            requestedAt: timestamp,
+            canCollect: true,
+            errorCode: null,
+            comments: [],
+          });
+        if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+        if (url.includes("/api/analytics/brands/"))
+          return response({
+            ...telegramResults(),
+            posts: telegramResults().posts.map((post) =>
+              post.platform === "vk" ? { ...post, canRefresh: true } : post,
+            ),
+          });
+        return response({});
+      });
+
+      await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+      expect(await screen.findByText("VK story")).toBeVisible();
+      expect(screen.getByText(en.Analytics.autoRepliesOff)).toBeVisible();
+      expect(screen.queryByRole("button", { name: en.Analytics.autoRepliesEnable })).toBeNull();
+      expect(screen.queryByRole("button", { name: en.Analytics.refresh })).toBeNull();
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: en.Analytics.viewReplySample }));
+      const dialog = within(await screen.findByRole("dialog"));
+      expect(await dialog.findByText(en.Analytics.analysis_not_analyzed)).toBeVisible();
+      expect(dialog.queryByRole("button", { name: en.Analytics.collectReplies })).toBeNull();
+      expect(dialog.queryByRole("button", { name: en.Analytics.analyzeSample })).toBeNull();
+      expect(fetcher.mock.calls.every(([, init]) => !init || init.method === undefined)).toBe(true);
+    },
+  );
 
   it("distinguishes a measured zero from missing Telegram metrics and checks only the VK post", async () => {
     const calls: string[] = [];

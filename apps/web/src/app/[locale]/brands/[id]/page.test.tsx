@@ -34,10 +34,14 @@ const brand = { id: "b1", name: "Acme" };
 // AppShell (now wrapping this page) reads a session for its sidebar user
 // block; the aliased auth-client stub defaults to signed-out, so a page
 // whose own tests don't care about that content still opts in explicitly.
-// A single top-level beforeEach covers every describe below — each of them
-// has its own beforeEach for stubbing fetch, but none for the session.
+// Most existing interaction tests exercise manager actions, so they opt into
+// an admin membership here. Role-specific cases override that membership.
 beforeEach(() => {
   signedInSession();
+  vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+    data: { id: "test-org", members: [{ userId: "test-user", role: "admin" }] },
+    isPending: false,
+  } as never);
 });
 
 describe("VK automatic metrics setting", () => {
@@ -108,6 +112,72 @@ describe("brand access navigation", () => {
     await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
     expect(screen.queryByRole("link", { name: en.Brands.accessLink })).not.toBeInTheDocument();
   });
+});
+
+describe("brand settings for editorial roles", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it.each(["author", "editor"])(
+    "shows %s the brand details without manager controls",
+    async (role) => {
+      installHandlers([{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }]);
+      vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+        data: { id: "test-org", members: [{ userId: "test-user", role }] },
+        isPending: false,
+      } as never);
+
+      await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+      expect(await screen.findByText(en.Channels.health.unknown)).toBeVisible();
+      expect(screen.getAllByText("Acme").length).toBeGreaterThan(0);
+      expect(screen.getByRole("link", { name: en.Brands.knowledgeOpen })).toHaveAttribute(
+        "href",
+        "/en/brands/b1/knowledge",
+      );
+      expect(screen.getByRole("link", { name: en.Brands.topicsLink })).toHaveAttribute(
+        "href",
+        "/en/brands/b1/topics",
+      );
+      for (const label of [
+        en.Channels.add,
+        en.Channels.test,
+        en.Channels.edit,
+        en.Channels.remove,
+        en.Channels.autoMetricsEnable,
+        en.Brands.profileEdit,
+        en.Brands.voiceEdit,
+        en.Brands.linksEdit,
+      ]) {
+        expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+      }
+      expect(screen.queryByRole("link", { name: en.Brands.accessLink })).not.toBeInTheDocument();
+      expect(screen.queryByText(en.Feed.title)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("textbox", { name: en.Channels.namePlaceholder }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["owner", "admin", "member"])(
+    "keeps existing brand settings controls available to %s",
+    async (role) => {
+      installHandlers([{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }]);
+      vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+        data: { id: "test-org", members: [{ userId: "test-user", role }] },
+        isPending: false,
+      } as never);
+
+      await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+      expect(await screen.findByText(en.Channels.health.unknown)).toBeVisible();
+      expect(screen.getByRole("button", { name: en.Channels.add })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: en.Channels.autoMetricsEnable }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: en.Brands.profileEdit })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: en.Brands.voiceEdit })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: en.Brands.linksEdit })).toBeInTheDocument();
+      expect(screen.getByText(en.Feed.title)).toBeInTheDocument();
+    },
+  );
 });
 
 describe("brand removal", () => {

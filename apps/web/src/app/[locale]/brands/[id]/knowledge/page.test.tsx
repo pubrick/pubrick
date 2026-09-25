@@ -23,13 +23,85 @@ beforeEach(() => {
   vi.mocked(authClient.useActiveOrganization).mockImplementation(
     () =>
       ({
-        data: null,
+        data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
         isPending: false,
       }) as never,
   );
 });
 
 describe("brand knowledge screen", () => {
+  it.each(["author", "editor"])(
+    "shows %s saved knowledge without rejected actions",
+    async (role) => {
+      vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+        data: { id: "test-org", members: [{ userId: "test-user", role }] },
+        isPending: false,
+      } as never);
+      mockApi.mockImplementation(async (path) => {
+        if (String(path).startsWith("/api/knowledge?"))
+          return [
+            {
+              id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+              title: "Shared facts",
+              content: "Reviewable facts",
+              category: "product_info",
+              tags: [],
+              isActive: true,
+              hasEmbedding: false,
+            },
+          ] as never;
+        if (String(path).startsWith("/api/knowledge/auto-index?"))
+          return { enabled: false, lastAttemptAt: null } as never;
+        return {} as never;
+      });
+
+      await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+      expect(await screen.findByText("Shared facts")).toBeVisible();
+      expect(screen.getByText(en.Knowledge.autoIndexOff)).toBeVisible();
+      expect(screen.getByRole("button", { name: en.Knowledge.csvExport })).toBeInTheDocument();
+      for (const label of [
+        en.Knowledge.add,
+        en.Knowledge.csvImport,
+        en.Knowledge.batchAction,
+        en.Knowledge.index,
+        en.Knowledge.edit,
+        en.Knowledge.pause,
+        en.Knowledge.remove,
+      ]) {
+        expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+      }
+      expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps existing note controls for a workspace member", async () => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+      isPending: false,
+    } as never);
+    mockApi.mockImplementation(async (path) => {
+      if (String(path).startsWith("/api/knowledge?"))
+        return [
+          {
+            id: "7d761194-a149-4bba-bae9-76ab72e1eda7",
+            title: "Shared facts",
+            content: "Reviewable facts",
+            category: "product_info",
+            tags: [],
+            isActive: true,
+            hasEmbedding: false,
+          },
+        ] as never;
+      return {} as never;
+    });
+
+    await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
+    expect(await screen.findByText("Shared facts")).toBeVisible();
+    expect(screen.getByRole("button", { name: en.Knowledge.csvImport })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Knowledge.edit })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Knowledge.pause })).toBeInTheDocument();
+  });
+
   it("shows a custom category literally and filters notes for the selected brand", async () => {
     const notes = [
       {
