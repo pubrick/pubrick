@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import type { TelegramCommentsJob } from "@pubrick/shared";
 import type { ChannelComments } from "@pubrick/telegram";
+import type { PgBoss } from "pg-boss";
 import { TelegramReader, TelegramSourceError } from "../rss/telegram.reader";
 import { CommentsRepository } from "./comments.repository";
 
@@ -13,7 +14,27 @@ export class CommentsService {
     private readonly telegram: TelegramReader,
   ) {}
 
+  scanAuto(boss: PgBoss): Promise<number> {
+    return this.comments.scanAuto(boss);
+  }
+
   async handle(job: TelegramCommentsJob): Promise<void> {
+    if (job.kind === "news_auto") {
+      const item = await this.comments.eligibleAuto(job);
+      if (!item) return;
+      const session = await this.comments.session(job.orgId);
+      if (!session) return;
+      if (!(await this.comments.eligibleAuto(job))) return;
+      try {
+        const result = await this.telegram.comments(item.url, session);
+        await this.comments.saveAuto(job, item.url, result);
+      } catch (error) {
+        if (!(error instanceof TelegramSourceError)) throw error;
+        this.logger.warn(`Automatic comment check failed for story ${job.itemId}: ${error.code}`);
+        await this.comments.failAuto(job, item.url, error.code);
+      }
+      return;
+    }
     if (job.kind === "publication") {
       const publication = await this.comments.publication(
         job.orgId,

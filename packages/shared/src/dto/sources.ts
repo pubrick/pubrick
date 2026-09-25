@@ -127,6 +127,14 @@ export const newsSourceUpdateSchema = z.object({
 });
 export type NewsSourceUpdate = z.infer<typeof newsSourceUpdateSchema>;
 
+export const newsCommentCollectionUpdateSchema = z.strictObject({ enabled: z.boolean() });
+export type NewsCommentCollectionUpdate = z.infer<typeof newsCommentCollectionUpdateSchema>;
+export const newsCommentCollectionDtoSchema = z.object({
+  enabled: z.boolean(),
+  updatedAt: z.string().nullable(),
+});
+export type NewsCommentCollectionDto = z.infer<typeof newsCommentCollectionDtoSchema>;
+
 export const newsSourceDtoSchema = z.object({
   id: z.string().uuid(),
   brandId: z.string().uuid(),

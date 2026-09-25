@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TelegramSourceError } from "../rss/telegram.reader";
 import { CommentsService } from "./comments.service";
@@ -19,6 +21,10 @@ const publicationJob = {
 
 describe("CommentsService", () => {
   const repo = {
+    eligibleAuto: vi.fn(),
+    saveAuto: vi.fn(),
+    failAuto: vi.fn(),
+    scanAuto: vi.fn(),
     item: vi.fn(),
     publication: vi.fn(),
     session: vi.fn(),
@@ -33,12 +39,53 @@ describe("CommentsService", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     repo.item.mockResolvedValue(item);
+    repo.eligibleAuto.mockResolvedValue({ url: item.url });
     repo.publication.mockResolvedValue({ id: "publication-1", url: item.url });
     repo.session.mockResolvedValue("encrypted-session");
     repo.save.mockResolvedValue(undefined);
     repo.fail.mockResolvedValue(undefined);
     repo.savePublication.mockResolvedValue(undefined);
     repo.failPublication.mockResolvedValue(undefined);
+  });
+
+  const autoJob = {
+    kind: "news_auto" as const,
+    orgId: "org-1",
+    brandId: "brand-1",
+    itemId: "item-1",
+    revision: 3,
+  };
+
+  it("skips a revoked automatic job without Telegram or AI calls", async () => {
+    repo.eligibleAuto.mockResolvedValueOnce(null);
+    await service.handle(autoJob);
+    expect(repo.session).not.toHaveBeenCalled();
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.saveAuto).not.toHaveBeenCalled();
+  });
+
+  it("uses only the existing Telegram reader and fenced automatic save", async () => {
+    const sample = { status: "available", comments: [] };
+    telegram.comments.mockResolvedValueOnce(sample);
+    await service.handle(autoJob);
+    expect(telegram.comments).toHaveBeenCalledOnce();
+    expect(repo.saveAuto).toHaveBeenCalledWith(autoJob, item.url, sample);
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
+  it("keeps the automatic collection worker independent of paid AI analysis", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/comments/comments.service.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/@pubrick\/ai|Gemini|CommentAnalysis|commentAnalysis/i);
+  });
+
+  it("leaves an automatic story eligible when its Telegram session is absent", async () => {
+    repo.session.mockResolvedValueOnce(null);
+    await service.handle(autoJob);
+    expect(telegram.comments).not.toHaveBeenCalled();
+    expect(repo.failAuto).not.toHaveBeenCalled();
   });
 
   it("reads only the scoped item's workspace session and persists its bounded sample", async () => {

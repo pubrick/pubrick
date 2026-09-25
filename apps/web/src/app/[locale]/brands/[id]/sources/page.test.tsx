@@ -41,6 +41,7 @@ describe("watched sources page", () => {
     rerankResults: unknown[] = [],
   ) {
     const calls: { url: string; method: string; body: unknown }[] = [];
+    let autoEnabled = false;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -74,6 +75,13 @@ describe("watched sources page", () => {
       if (url.includes("/comments?")) return response(200, []);
       if (url.endsWith("/api/sources/telegram-connection"))
         return response(200, { connected: false });
+      if (url.includes("/api/sources/comment-collection?")) {
+        if (method === "PUT") autoEnabled = (body as { enabled: boolean }).enabled;
+        return response(200, {
+          enabled: autoEnabled,
+          updatedAt: autoEnabled ? new Date().toISOString() : null,
+        });
+      }
       if (url.includes("/api/sources?")) return response(200, sources);
       if (url.includes("/api/channels?"))
         return response(200, [{ id: CHANNEL_ID, name: "Updates", platform: "telegram" }]);
@@ -83,6 +91,29 @@ describe("watched sources page", () => {
     });
     return calls;
   }
+
+  it("confirms opt-in, explains free sampling limits, and keeps one primary action", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const enable = await screen.findByRole("button", { name: en.Sources.autoCommentsEnable });
+    expect(screen.getByText(en.Sources.autoCommentsLimits)).toBeInTheDocument();
+    expect(screen.getByText(en.Sources.autoCommentsDescription)).toBeInTheDocument();
+    await userEvent.click(enable);
+    const dialog = screen.getByRole("dialog", { name: en.Sources.autoCommentsConfirmTitle });
+    expect(
+      calls.filter((call) => call.url.includes("comment-collection") && call.method === "PUT"),
+    ).toHaveLength(0);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: en.Sources.autoCommentsEnable }),
+    );
+    expect(await screen.findByText(en.Sources.autoCommentsEnabled)).toBeInTheDocument();
+    expect(
+      calls
+        .filter((call) => call.url.includes("comment-collection") && call.method === "PUT")
+        .map((call) => call.body),
+    ).toEqual([{ enabled: true }]);
+    expect(screen.getByRole("button", { name: en.Sources.add })).toBeInTheDocument();
+  });
 
   it("shows the model score separately from an editor-adjusted ranking", async () => {
     install([

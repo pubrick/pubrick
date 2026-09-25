@@ -62,6 +62,64 @@ describe.skipIf(!url)("watched sources e2e", () => {
     return { agent, orgId: org.body.id };
   }
 
+  it("keeps automatic collection off by default and scopes opt-in to an authorized brand", async () => {
+    const { agent, orgId } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Collection" }).expect(201);
+    const route = `/api/sources/comment-collection?brandId=${brand.body.id}`;
+    expect((await agent.get(route).expect(200)).body).toEqual({ enabled: false, updatedAt: null });
+    await agent.put(route).send({ enabled: true, unexpected: true }).expect(400);
+    expect((await agent.put(route).send({ enabled: true }).expect(200)).body.enabled).toBe(true);
+    const db = (await import("../db")).db;
+    const [first] = await db
+      .select({ revision: schema.newsCommentCollectionConfigs.revision })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    expect(first?.revision).toBe(1);
+    const scannedAt = new Date("2026-09-25T01:00:00.000Z");
+    await db
+      .update(schema.newsCommentCollectionConfigs)
+      .set({ lastScannedAt: scannedAt })
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    await agent.put(route).send({ enabled: false }).expect(200);
+    await agent.put(route).send({ enabled: true }).expect(200);
+    const [last] = await db
+      .select({
+        revision: schema.newsCommentCollectionConfigs.revision,
+        lastScannedAt: schema.newsCommentCollectionConfigs.lastScannedAt,
+      })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(eq(schema.newsCommentCollectionConfigs.brandId, brand.body.id));
+    expect(last?.revision).toBe(3);
+    expect(last?.lastScannedAt).toEqual(scannedAt);
+    const other = await orgAgent();
+    await other.agent.get(route).expect(404);
+    await other.agent.put(route).send({ enabled: true }).expect(404);
+    const unconfigured = await agent
+      .post("/api/brands")
+      .send({ name: "Another collection" })
+      .expect(201);
+    await expect(
+      db
+        .insert(schema.newsCommentCollectionConfigs)
+        .values({ orgId: other.orgId, brandId: unconfigured.body.id, enabled: true }),
+    ).rejects.toMatchObject({ cause: { code: "23503" } });
+    const [membership] = await db
+      .select({ id: schema.member.id })
+      .from(schema.member)
+      .where(eq(schema.member.organizationId, orgId));
+    if (!membership) throw new Error("member fixture");
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(eq(schema.member.organizationId, orgId));
+    await agent.get(route).expect(404);
+    await db
+      .insert(schema.brandAccess)
+      .values({ orgId, brandId: brand.body.id, memberId: membership.id });
+    expect((await agent.get(route).expect(200)).body.enabled).toBe(true);
+    expect((await agent.put(route).send({ enabled: false }).expect(200)).body.enabled).toBe(false);
+  });
+
   it("adds only joined private broadcasts, rate limits atomically, and returns no invite or peer", async () => {
     const { agent, orgId } = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Private news" }).expect(201);

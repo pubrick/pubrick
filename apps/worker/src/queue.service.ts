@@ -1,5 +1,6 @@
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import {
+  AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE,
   CLAIM_REVIEW_DLQ,
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,
@@ -283,6 +284,11 @@ export class QueueService {
           if (job) await this.comments?.handle(job.data);
         },
       );
+      await boss.createQueue(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE);
+      await boss.schedule(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE, "0 * * * *");
+      await boss.work(AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.comments?.scanAuto(boss);
+      });
     }
 
     if (this.suggestions && names === DEFAULT_QUEUE_NAMES) {

@@ -145,6 +145,8 @@ const ZONED_COLUMNS = [
   "memorable_dates.updated_at",
   "news_comment_analyses.created_at",
   "news_comment_analyses.sample_checked_at",
+  "news_comment_collection_configs.last_scanned_at",
+  "news_comment_collection_configs.updated_at",
   "news_comments.created_at",
   "news_comments.published_at",
   "news_items.comments_checked_at",
@@ -311,6 +313,7 @@ const NON_ENUM_CHECKS = [
   // Added with the comment sample after the historical seed; worker persistence e2e
   // proves the database rejects an off-list status on a populated story.
   "news_items_comments_status_check",
+  "news_comment_collection_configs_revision_check",
   // Added after the pre-0009 seed; pinned by schema-invariants and source e2e tests.
   "news_sources_kind_check",
   // A private source always carries an encrypted channel peer, while public

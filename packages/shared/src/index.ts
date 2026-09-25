@@ -78,6 +78,7 @@ export * from "./dto/topics.js";
 export { parseEnv } from "./env.js";
 export { PermanentError, TransientError } from "./errors.js";
 export {
+  AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE,
   CLAIM_REVIEW_DLQ,
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,

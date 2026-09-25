@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -61,6 +62,30 @@ export const telegramSourceAccounts = pgTable("telegram_source_accounts", {
   /** Atomic organization-wide attempt gate; consumed before each MTProto lookup. */
   lastPrivateResolveAt: timestamp("last_private_resolve_at", { withTimezone: true }),
 });
+
+/** Brand opt-in for sampled public Telegram story replies. Revision fences queued work. */
+export const newsCommentCollectionConfigs = pgTable(
+  "news_comment_collection_configs",
+  {
+    brandId: uuid("brand_id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(false),
+    revision: integer("revision").notNull().default(0),
+    lastScannedAt: timestamp("last_scanned_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("news_comment_collection_configs_due_idx").on(t.enabled, t.lastScannedAt),
+    check("news_comment_collection_configs_revision_check", sql`${t.revision} >= 0`),
+    foreignKey({
+      name: "news_comment_collection_configs_brand_org_fk",
+      columns: [t.orgId, t.brandId],
+      foreignColumns: [brands.orgId, brands.id],
+    }).onDelete("cascade"),
+  ],
+);
 
 /** One short-lived login challenge per organization; sensitive fields are encrypted by the API. */
 export const telegramLoginAttempts = pgTable(

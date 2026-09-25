@@ -30,6 +30,7 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { AutoComments } from "./auto-comments";
 
 type Brand = { id: string; name: string };
 type Channel = { id: string; name: string; platform: string };
@@ -472,6 +473,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           </p>
         )}
       </Card>
+
+      <AutoComments brandId={id} telegramConnected={telegramConnected} />
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("watched")}</h2>
       <Card padded={false} className="mb-8">

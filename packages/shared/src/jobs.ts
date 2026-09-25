@@ -64,6 +64,7 @@ export const MANUAL_AUTOPILOT_QUEUE_OPTIONS = {
 export const RSS_SCAN_QUEUE = "rss-scan";
 export type RssPollJob = { orgId: string; sourceId: string };
 export const TELEGRAM_COMMENTS_QUEUE = "telegram-comments";
+export const AUTO_TELEGRAM_COMMENTS_SCAN_QUEUE = "telegram-comments-auto-scan";
 /** Opt-in, bounded VK publication metric refresh. No credentials in job data. */
 export const VK_METRICS_QUEUE = "vk-metrics";
 export const VK_METRICS_SCAN_QUEUE = "vk-metrics-scan";
@@ -85,6 +86,7 @@ export function vkMetricsJobOptions(publicationId: string, channelId: string) {
 /** Legacy news jobs omit `kind`; keep them readable until the queue drains. */
 export type TelegramCommentsJob =
   | { kind?: "news"; orgId: string; itemId: string }
+  | { kind: "news_auto"; orgId: string; brandId: string; itemId: string; revision: number }
   | {
       kind: "publication";
       orgId: string;

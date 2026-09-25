@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -16,6 +17,7 @@ import {
   type NewsRerankRequest,
   type NewsSourceCreate,
   type NewsSourceUpdate,
+  newsCommentCollectionUpdateSchema,
   newsItemListQuerySchema,
   newsRerankRequestSchema,
   newsSourceCreateSchema,
@@ -96,6 +98,22 @@ export class SourcesController {
   @BrandScope({ kind: "org", roles: "manager" })
   telegramConnection(@OrgId() orgId: string) {
     return this.sources.telegramConnection(orgId);
+  }
+
+  @Get("comment-collection")
+  @BrandScope({ kind: "brand", source: "query" })
+  commentCollection(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.sources.commentCollection(orgId, brandId);
+  }
+
+  @Put("comment-collection")
+  @BrandScope({ kind: "brand", source: "query" })
+  updateCommentCollection(
+    @OrgId() orgId: string,
+    @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Body(new ZodValidationPipe(newsCommentCollectionUpdateSchema)) body: { enabled: boolean },
+  ) {
+    return this.sources.updateCommentCollection(orgId, brandId, body.enabled);
   }
 
   @Get()

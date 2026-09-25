@@ -91,6 +91,46 @@ export class SourcesRepository {
     return { connected: rows.length > 0 };
   }
 
+  async commentCollection(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .select({
+        enabled: schema.newsCommentCollectionConfigs.enabled,
+        updatedAt: schema.newsCommentCollectionConfigs.updatedAt,
+      })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(
+        and(
+          eq(schema.newsCommentCollectionConfigs.orgId, orgId),
+          eq(schema.newsCommentCollectionConfigs.brandId, brandId),
+        ),
+      )
+      .limit(1);
+    return { enabled: row?.enabled ?? false, updatedAt: row?.updatedAt.toISOString() ?? null };
+  }
+
+  async updateCommentCollection(orgId: string, brandId: string, enabled: boolean) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .insert(schema.newsCommentCollectionConfigs)
+      .values({ orgId, brandId, enabled, revision: 1 })
+      .onConflictDoUpdate({
+        target: schema.newsCommentCollectionConfigs.brandId,
+        set: {
+          enabled,
+          revision: sql`${schema.newsCommentCollectionConfigs.revision} + 1`,
+          updatedAt: new Date(),
+        },
+        setWhere: eq(schema.newsCommentCollectionConfigs.orgId, orgId),
+      })
+      .returning({
+        enabled: schema.newsCommentCollectionConfigs.enabled,
+        updatedAt: schema.newsCommentCollectionConfigs.updatedAt,
+      });
+    if (!row) throw notFound("brand_not_found", "Brand not found");
+    return { enabled: row.enabled, updatedAt: row.updatedAt.toISOString() };
+  }
+
   async list(orgId: string, brandId: string) {
     await this.requireBrand(orgId, brandId);
     return db

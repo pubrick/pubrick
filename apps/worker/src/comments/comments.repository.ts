@@ -1,14 +1,254 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { isPublicTelegramPostUrl, type TelegramCommentsJob } from "@pubrick/shared";
+import {
+  isPublicTelegramPostUrl,
+  TELEGRAM_COMMENTS_QUEUE,
+  type TelegramCommentsJob,
+  telegramCommentsJobOptions,
+} from "@pubrick/shared";
 import type { ChannelComments } from "@pubrick/telegram";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type AutoJob = Extract<TelegramCommentsJob, { kind: "news_auto" }>;
+const MAX_BRANDS_PER_SCAN = 10;
+const MAX_ITEMS_PER_BRAND = 50;
+const publicStoryUrl = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/[1-9]\d*$/;
 
 @Injectable()
 export class CommentsRepository {
+  /** A fair page capped at 500 jobs per scan. All sends share the scan transaction. */
+  async scanAuto(boss: PgBoss): Promise<number> {
+    return db.transaction(async (tx) => {
+      const lock = await tx.execute<{ acquired: boolean }>(
+        sql`select pg_try_advisory_xact_lock(hashtext('news-comment-auto-scan')) as acquired`,
+      );
+      if (!lock.rows[0]?.acquired) return 0;
+      const configs = await tx
+        .select({
+          orgId: schema.newsCommentCollectionConfigs.orgId,
+          brandId: schema.newsCommentCollectionConfigs.brandId,
+          revision: schema.newsCommentCollectionConfigs.revision,
+        })
+        .from(schema.newsCommentCollectionConfigs)
+        .innerJoin(
+          schema.telegramSourceAccounts,
+          eq(schema.telegramSourceAccounts.orgId, schema.newsCommentCollectionConfigs.orgId),
+        )
+        .where(
+          and(
+            eq(schema.newsCommentCollectionConfigs.enabled, true),
+            or(
+              isNull(schema.newsCommentCollectionConfigs.lastScannedAt),
+              lte(
+                schema.newsCommentCollectionConfigs.lastScannedAt,
+                sql`now() - interval '1 hour'`,
+              ),
+            ),
+          ),
+        )
+        .orderBy(
+          sql`${schema.newsCommentCollectionConfigs.lastScannedAt} ASC NULLS FIRST`,
+          asc(schema.newsCommentCollectionConfigs.brandId),
+        )
+        .limit(MAX_BRANDS_PER_SCAN)
+        .for("update", { of: schema.newsCommentCollectionConfigs, skipLocked: true });
+      let queued = 0;
+      for (const config of configs) {
+        const items = await tx
+          .select({ id: schema.newsItems.id, url: schema.newsItems.url })
+          .from(schema.newsItems)
+          .innerJoin(
+            schema.newsSources,
+            and(
+              eq(schema.newsSources.id, schema.newsItems.sourceId),
+              eq(schema.newsSources.orgId, config.orgId),
+              eq(schema.newsSources.brandId, config.brandId),
+            ),
+          )
+          .where(
+            and(
+              eq(schema.newsItems.orgId, config.orgId),
+              eq(schema.newsItems.brandId, config.brandId),
+              eq(schema.newsSources.kind, "telegram"),
+              eq(schema.newsSources.isActive, true),
+              eq(schema.newsItems.relevanceStatus, "scored"),
+              gte(schema.newsItems.relevanceScore, 0.7),
+              lte(schema.newsItems.publishedAt, sql`now() - interval '6 hours'`),
+              isNull(schema.newsItems.commentsCheckedAt),
+              isNull(schema.newsItems.commentsStatus),
+              sql`${schema.newsItems.url} ~ '^https://t\\.me/[A-Za-z0-9_]{5,32}/[1-9][0-9]*$'`,
+            ),
+          )
+          .orderBy(asc(schema.newsItems.publishedAt), asc(schema.newsItems.id))
+          .limit(MAX_ITEMS_PER_BRAND);
+        for (const item of items) {
+          const sent = await boss.send(
+            TELEGRAM_COMMENTS_QUEUE,
+            {
+              kind: "news_auto",
+              orgId: config.orgId,
+              brandId: config.brandId,
+              itemId: item.id,
+              revision: config.revision,
+            } satisfies AutoJob,
+            {
+              ...telegramCommentsJobOptions(item.id, config.orgId),
+              db: fromDrizzle(tx, sql),
+            },
+          );
+          if (sent) queued++;
+        }
+        await tx
+          .update(schema.newsCommentCollectionConfigs)
+          .set({ lastScannedAt: new Date() })
+          .where(
+            and(
+              eq(schema.newsCommentCollectionConfigs.orgId, config.orgId),
+              eq(schema.newsCommentCollectionConfigs.brandId, config.brandId),
+            ),
+          );
+      }
+      return queued;
+    });
+  }
+
+  async eligibleAuto(job: AutoJob): Promise<{ url: string } | null> {
+    const [row] = await db
+      .select({ url: schema.newsItems.url })
+      .from(schema.newsItems)
+      .innerJoin(
+        schema.newsSources,
+        and(
+          eq(schema.newsSources.id, schema.newsItems.sourceId),
+          eq(schema.newsSources.orgId, job.orgId),
+          eq(schema.newsSources.brandId, job.brandId),
+        ),
+      )
+      .innerJoin(
+        schema.newsCommentCollectionConfigs,
+        and(
+          eq(schema.newsCommentCollectionConfigs.orgId, job.orgId),
+          eq(schema.newsCommentCollectionConfigs.brandId, job.brandId),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.newsItems.orgId, job.orgId),
+          eq(schema.newsItems.brandId, job.brandId),
+          eq(schema.newsItems.id, job.itemId),
+          eq(schema.newsCommentCollectionConfigs.enabled, true),
+          eq(schema.newsCommentCollectionConfigs.revision, job.revision),
+          eq(schema.newsSources.kind, "telegram"),
+          eq(schema.newsSources.isActive, true),
+          eq(schema.newsItems.relevanceStatus, "scored"),
+          gte(schema.newsItems.relevanceScore, 0.7),
+          lte(schema.newsItems.publishedAt, sql`now() - interval '6 hours'`),
+          isNull(schema.newsItems.commentsCheckedAt),
+          isNull(schema.newsItems.commentsStatus),
+        ),
+      )
+      .limit(1);
+    return row && publicStoryUrl.test(row.url) ? row : null;
+  }
+
+  /** Config lock serializes the final write with an owner's opt-out/update. */
+  private async lockAuto(tx: Tx, job: AutoJob, url: string) {
+    const [config] = await tx
+      .select({ revision: schema.newsCommentCollectionConfigs.revision })
+      .from(schema.newsCommentCollectionConfigs)
+      .where(
+        and(
+          eq(schema.newsCommentCollectionConfigs.orgId, job.orgId),
+          eq(schema.newsCommentCollectionConfigs.brandId, job.brandId),
+          eq(schema.newsCommentCollectionConfigs.enabled, true),
+          eq(schema.newsCommentCollectionConfigs.revision, job.revision),
+        ),
+      )
+      .limit(1)
+      .for("share");
+    if (!config) return null;
+    const [source] = await tx
+      .select({ id: schema.newsSources.id })
+      .from(schema.newsItems)
+      .innerJoin(
+        schema.newsSources,
+        and(
+          eq(schema.newsSources.id, schema.newsItems.sourceId),
+          eq(schema.newsSources.orgId, job.orgId),
+          eq(schema.newsSources.brandId, job.brandId),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.newsItems.id, job.itemId),
+          eq(schema.newsItems.orgId, job.orgId),
+          eq(schema.newsItems.brandId, job.brandId),
+          eq(schema.newsSources.kind, "telegram"),
+          eq(schema.newsSources.isActive, true),
+        ),
+      )
+      .limit(1)
+      .for("share", { of: schema.newsSources });
+    if (!source) return null;
+    const [item] = await tx
+      .select({ id: schema.newsItems.id })
+      .from(schema.newsItems)
+      .where(
+        and(
+          eq(schema.newsItems.id, job.itemId),
+          eq(schema.newsItems.orgId, job.orgId),
+          eq(schema.newsItems.brandId, job.brandId),
+          eq(schema.newsItems.url, url),
+          eq(schema.newsItems.relevanceStatus, "scored"),
+          gte(schema.newsItems.relevanceScore, 0.7),
+          lte(schema.newsItems.publishedAt, sql`now() - interval '6 hours'`),
+          isNull(schema.newsItems.commentsCheckedAt),
+          isNull(schema.newsItems.commentsStatus),
+        ),
+      )
+      .limit(1)
+      .for("update");
+    return item && publicStoryUrl.test(url) ? item : null;
+  }
+
+  async saveAuto(job: AutoJob, url: string, result: ChannelComments): Promise<void> {
+    await db.transaction(async (tx) => {
+      if (!(await this.lockAuto(tx, job, url))) return;
+      const comments = result.comments.slice(0, 50);
+      if (comments.length)
+        await tx.insert(schema.newsComments).values(
+          comments.map((comment) => ({
+            orgId: job.orgId,
+            brandId: job.brandId,
+            itemId: job.itemId,
+            telegramMessageId: comment.messageId,
+            body: comment.body,
+            publishedAt: comment.publishedAt,
+          })),
+        );
+      await tx
+        .update(schema.newsItems)
+        .set({
+          commentsStatus: result.status,
+          commentsCheckedAt: new Date(),
+          commentsErrorCode: null,
+        })
+        .where(and(eq(schema.newsItems.orgId, job.orgId), eq(schema.newsItems.id, job.itemId)));
+    });
+  }
+
+  async failAuto(job: AutoJob, url: string, code: string): Promise<void> {
+    await db.transaction(async (tx) => {
+      if (!(await this.lockAuto(tx, job, url))) return;
+      await tx
+        .update(schema.newsItems)
+        .set({ commentsStatus: "error", commentsCheckedAt: new Date(), commentsErrorCode: code })
+        .where(and(eq(schema.newsItems.orgId, job.orgId), eq(schema.newsItems.id, job.itemId)));
+    });
+  }
   /** Only a live publication with its original Telegram channel can be read. */
   async publication(orgId: string, brandId: string, publicationId: string) {
     const [row] = await db
