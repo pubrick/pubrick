@@ -54,3 +54,35 @@ export const claimReviewDtoSchema = z.strictObject({
   completedAt: z.iso.datetime().nullable(),
 });
 export type ClaimReviewDto = z.infer<typeof claimReviewDtoSchema>;
+
+/** Request a reviewable replacement for one claim in an exact saved body. */
+export const claimCorrectionRequestSchema = z.strictObject({
+  expectedBody: z.string().min(1).max(MAX_BODY_LENGTH),
+  reviewId: z.uuid(),
+  claimIndex: z.number().int().min(0),
+});
+export type ClaimCorrectionRequest = z.infer<typeof claimCorrectionRequestSchema>;
+
+/** Immutable proposed edit. Applying it is a separate editor action. */
+export const claimCorrectionProposalDtoSchema = z.strictObject({
+  id: z.uuid(),
+  contentItemId: z.uuid(),
+  reviewId: z.uuid(),
+  claimIndex: z.number().int().min(0),
+  sourceBody: z.string().min(1).max(MAX_BODY_LENGTH),
+  claim: z.string().min(1).max(1000).regex(/\S/),
+  replacement: z.string().min(1).max(1000).regex(/\S/),
+  reason: z.string().min(1).max(2000).regex(/\S/),
+  evidence: z
+    .array(
+      z.strictObject({
+        title: z.string().min(1).max(500).regex(/\S/),
+        url: z.url().max(2048),
+        snippet: z.string().min(1).max(2000).regex(/\S/),
+      }),
+    )
+    .min(1)
+    .max(5),
+  createdAt: z.iso.datetime(),
+});
+export type ClaimCorrectionProposalDto = z.infer<typeof claimCorrectionProposalDtoSchema>;
