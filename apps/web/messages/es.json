@@ -798,6 +798,30 @@
     "rejectCancelOutstanding": "Cancelar lo que aún no ha salido",
     "partlyLiveNothingToStop": "Parte de esta publicación ya está en directo y no queda nada en camino, así que no hay nada que detener. Corrige el texto y envía el resto, o déjala como está.",
     "editAfterDelivery": "El texto anterior ya salió a: {channels}. Al guardar se reemplaza la copia que se conserva aquí; lo que salió solo queda en el canal.",
+    "scheduledPreflight": {
+      "title": "Antes de la entrega",
+      "savedReady": "Comprobaciones guardadas sin incidencias",
+      "check": "Requiere revisión",
+      "intro": "Comprobaciones de solo lectura del contenido aprobado y sus canales programados. Revisa el canal más abajo y usa las acciones disponibles para corregir un problema.",
+      "bodyCount": "Texto guardado: {count}/{limit} caracteres",
+      "bodyUnknown": "Texto guardado: {count} caracteres; límite del canal no disponible",
+      "media": {
+        "text": "Solo texto",
+        "cover": "Portada seleccionada",
+        "video": "Vídeo seleccionado"
+      },
+      "scheduled": "La hora programada está en el futuro.",
+      "issue": {
+        "channel_unknown": "Los datos del canal no están disponibles. Recarga y comprueba el canal en los ajustes de la marca.",
+        "body_empty": "El texto guardado está vacío. Deshaz la aprobación o cancela la entrega y añade texto.",
+        "body_too_long": "El texto supera el límite actual del canal. Deshaz la aprobación o cancela la entrega y acórtalo.",
+        "media_unsupported": "El archivo adjunto seleccionado no se admite aquí. Deshaz la aprobación o cancela la entrega y cámbialo.",
+        "media_conflict": "Hay una portada y un vídeo seleccionados. Deshaz la aprobación o cancela la entrega y elige uno.",
+        "slot_overdue": "La hora programada falta o ya pasó. Recarga para confirmar el resultado y reprograma si sigue pendiente.",
+        "slot_due": "Ha llegado la hora programada; la entrega puede estar comenzando. Consulta Resultados más abajo."
+      },
+      "limits": "Un informe sin incidencias no confirma las credenciales del canal, el acceso al archivo ni la aceptación de la plataforma. La entrega aún puede fallar."
+    },
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — enlace no disponible",
     "markDelivered": "Marcar como entregado",

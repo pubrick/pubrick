@@ -798,6 +798,30 @@
     "rejectCancelOutstanding": "Cancel what has not gone out",
     "partlyLiveNothingToStop": "Part of this post is already live and nothing else is on its way, so there is nothing left to stop. Fix the text and send the rest, or leave it as it is.",
     "editAfterDelivery": "{channels} already received the previous text. Saving replaces the copy kept here; what went out survives only in the channel.",
+    "scheduledPreflight": {
+      "title": "Before delivery",
+      "savedReady": "Saved checks clear",
+      "check": "Needs a look",
+      "intro": "Read-only checks of the approved post and its scheduled channels. Review the channel below and use the available actions to correct an issue.",
+      "bodyCount": "Saved text: {count}/{limit} characters",
+      "bodyUnknown": "Saved text: {count} characters; channel limit unavailable",
+      "media": {
+        "text": "Text only",
+        "cover": "Cover selected",
+        "video": "Video selected"
+      },
+      "scheduled": "The slot is in the future.",
+      "issue": {
+        "channel_unknown": "Channel details are unavailable. Reload and check this channel in the brand settings.",
+        "body_empty": "Saved text is empty. Undo approval or cancel delivery, then add text.",
+        "body_too_long": "Saved text exceeds this channel's current limit. Undo approval or cancel delivery, then shorten it.",
+        "media_unsupported": "The selected attachment is unsupported here. Undo approval or cancel delivery, then change it.",
+        "media_conflict": "Both a cover and a video are selected. Undo approval or cancel delivery, then choose one.",
+        "slot_overdue": "The slot is missing or overdue. Reload to confirm the outcome, then reschedule if still waiting.",
+        "slot_due": "The slot has arrived; delivery may be starting. Check Results below."
+      },
+      "limits": "A clear report does not confirm channel credentials, file access, or platform acceptance. Delivery may still fail."
+    },
     "resultsTitle": "Results",
     "linkUnavailable": "published — link unavailable",
     "markDelivered": "Mark as delivered",

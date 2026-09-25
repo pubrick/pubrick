@@ -9,6 +9,7 @@ import type {
   RunInput,
 } from "@pubrick/shared";
 import {
+  adaptationLimit,
   adaptationRescheduleSchema,
   adaptationUpdateSchema,
   allSentencesAi,
@@ -364,6 +365,32 @@ describe("rich master integration", () => {
 });
 
 describe("rendering by adaptation status (Step 1)", () => {
+  it("shows saved preflight checks for an approved scheduled post, without offering another send", async () => {
+    const scheduledAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const item = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "scheduled", scheduledAt })],
+    });
+    const calls: Call[] = [];
+    installBaseHandlers({ current: item }, calls);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+
+    expect(
+      screen.getByRole("heading", { name: en.Publish.scheduledPreflight.title }),
+    ).toBeVisible();
+    expect(screen.getByText(en.Publish.scheduledPreflight.savedReady)).toBeVisible();
+    expect(
+      screen.getByText(
+        en.Publish.scheduledPreflight.bodyCount
+          .replace("{count}", "11")
+          .replace("{limit}", String(adaptationLimit("telegram"))),
+        { exact: false },
+      ),
+    ).toBeVisible();
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+  });
+
   it("renders a link to the platform post for a published adaptation with an https externalUrl", async () => {
     const item = makeItem({
       adaptations: [makeAdaptation({ status: "published", externalUrl: "https://t.me/main/42" })],

@@ -798,6 +798,30 @@
     "rejectCancelOutstanding": "Cancelar o que ainda não saiu",
     "partlyLiveNothingToStop": "Parte desta publicação já está no ar e nada mais está a caminho, portanto não há o que interromper. Corrija o texto e envie o resto, ou deixe como está.",
     "editAfterDelivery": "O texto anterior já saiu para: {channels}. Salvar substitui a cópia mantida aqui; o que saiu permanece apenas no canal.",
+    "scheduledPreflight": {
+      "title": "Antes da publicação",
+      "savedReady": "Verificações guardadas sem problemas",
+      "check": "Precisa de atenção",
+      "intro": "Verificações apenas de leitura do conteúdo aprovado e dos canais agendados. Reveja o canal abaixo e use as ações disponíveis para corrigir um problema.",
+      "bodyCount": "Texto guardado: {count}/{limit} caracteres",
+      "bodyUnknown": "Texto guardado: {count} caracteres; limite do canal indisponível",
+      "media": {
+        "text": "Só texto",
+        "cover": "Capa selecionada",
+        "video": "Vídeo selecionado"
+      },
+      "scheduled": "O horário agendado ainda está no futuro.",
+      "issue": {
+        "channel_unknown": "Os dados do canal estão indisponíveis. Atualize a página e confira o canal nas definições da marca.",
+        "body_empty": "O texto guardado está vazio. Desfaça a aprovação ou cancele a publicação e adicione texto.",
+        "body_too_long": "O texto excede o limite atual do canal. Desfaça a aprovação ou cancele a publicação e encurte-o.",
+        "media_unsupported": "O anexo selecionado não é suportado aqui. Desfaça a aprovação ou cancele a publicação e altere-o.",
+        "media_conflict": "Há uma capa e um vídeo selecionados. Desfaça a aprovação ou cancele a publicação e escolha apenas um.",
+        "slot_overdue": "O horário está em falta ou atrasado. Atualize para confirmar o resultado e reagende se ainda estiver pendente.",
+        "slot_due": "O horário chegou; a publicação pode estar a começar. Consulte os Resultados abaixo."
+      },
+      "limits": "Um relatório sem problemas não confirma as credenciais do canal, o acesso ao ficheiro nem a aceitação pela plataforma. A publicação ainda pode falhar."
+    },
     "resultsTitle": "Resultados",
     "linkUnavailable": "publicado — link indisponível",
     "markDelivered": "Marcar como entregue",

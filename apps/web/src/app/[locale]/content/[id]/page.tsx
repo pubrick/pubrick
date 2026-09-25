@@ -64,6 +64,7 @@ import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
 import { RichMasterEditor } from "./rich-master-editor";
 import { hasRichApiSupport, richDocumentFromPlainText } from "./rich-master-flow";
+import { ScheduledPreflight } from "./scheduled-preflight";
 import { SourceStrip } from "./source-strip";
 import { buildVcPackage } from "./vc-package";
 import { VersionHistory } from "./version-history";
@@ -2488,6 +2489,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       >
         <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
       </Modal>
+
+      {item.status === "approved" &&
+        item.adaptations.some((adaptation) => adaptation.status === "scheduled") && (
+          <ScheduledPreflight item={item} channels={channels} channelLabel={channelLabel} />
+        )}
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("resultsTitle")}</h2>
       <ul>

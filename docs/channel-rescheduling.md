@@ -12,6 +12,20 @@ section. The **Reschedule** action is secondary to publishing and appears only
 on a scheduled adaptation. The form shows the browser's local time and sends
 ISO timestamps to the API. Save and Cancel leave other channels alone.
 
+An approved post with at least one scheduled channel also shows **Before
+delivery** on its detail screen. This read-only report uses the already loaded,
+organization-scoped post and channel data. Per scheduled channel it displays
+the saved text length against the current platform limit (including Telegram's
+video caption limit), the selected attachment type and whether that type is
+supported, and whether the slot is future, due within the shared dispatch
+window, or overdue. Missing channel data is explicitly unknown. It makes no
+extra request, writes nothing, and never approves, cancels, or sends a post.
+The report reflects the current browser snapshot; after an overdue warning,
+reload to confirm the outcome before changing the schedule. Passing these
+checks does not verify credentials, file access, or platform acceptance;
+the actual delivery still decides the outcome. AI quality scores and similarity are
+not delivery facts and are not part of this report.
+
 `POST /api/content/:id/adaptations/:adaptationId/reschedule` accepts
 `{ "expectedScheduledAt": "...", "scheduledAt": "..." }`. Both values are ISO
 instants. The expected value is the time the reviewer saw; a changed value
