@@ -74,6 +74,7 @@ export {
   promptRevisionUsageDtoSchema,
   promptRoleSchema,
 } from "./dto/prompts.js";
+export * from "./dto/role-templates.js";
 export * from "./dto/runs.js";
 export * from "./dto/search-credentials.js";
 export * from "./dto/source-extraction.js";
