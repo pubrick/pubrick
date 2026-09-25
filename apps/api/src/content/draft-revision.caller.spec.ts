@@ -34,6 +34,7 @@ describe("whole-draft model boundary", () => {
           {
             type: "text" as const,
             text: JSON.stringify({
+              title: "A clearer title",
               text: "A revised whole post.",
               reason: "Made the opening clearer.",
             }),
@@ -50,11 +51,13 @@ describe("whole-draft model boundary", () => {
     const outcome = await new ScriptedCaller(model).run({
       credential,
       brand,
+      title: "Original title",
       body: "The original whole post.",
       instruction: "Make the opening clearer.",
     });
     expect(outcome).toMatchObject({
       ok: true,
+      title: "A clearer title",
       text: "A revised whole post.",
       reason: "Made the opening clearer.",
     });

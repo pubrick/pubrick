@@ -37,19 +37,28 @@ provider key and shares the editor's rolling hourly model-call allowance with
 selection refinement and channel re-adaptation. Every physical model call is
 recorded in `usage_ledger`, including billed failures.
 
-The model returns a complete master-body suggestion and a short reason. The API
-stores one pending proposal against the exact saved source body; the editor
-shows the source and suggestion side by side. Reloading keeps the proposal.
-Accept checks the saved body again under a row lock, while Discard only removes
-the proposal. A changed draft blocks Accept without losing the paid suggestion.
+The model returns a complete title and master-body suggestion with a short
+reason. The API stores one pending proposal against the exact saved title and
+body; the editor shows both fields before and after side by side. Reloading
+keeps the proposal. Accept checks the saved title and body again under a row
+lock, while Discard only removes the proposal. A changed title or body blocks
+Accept without losing the paid suggestion.
 An approved or published post cannot be revised; a partly published post cannot
 be reset to a draft while a channel is already live.
 
-Accept updates only the master body. It returns a rejected or failed item to
+Accept updates the title and master body together. It returns a rejected or failed item to
 draft and requires the normal approval flow again. Any client approval link for
 the earlier text becomes stale because its snapshot no longer matches. Existing
 per-channel overrides remain visible and must be reviewed or adapted separately
 before approval; accepting a master rewrite does not claim to have rewritten
-channel copy. The accepted AI text is recorded as a provenance `fragment` with
-the measured sentence-count delta, preserving the single original AI full
-anchor and the human publication gate.
+channel copy. The accepted AI change is recorded as provenance without crediting
+unchanged body sentences to the model; a title-only change records an empty
+fragment with the new title. The original AI full anchor and human publication
+gate remain in place. This action does not regenerate images, add a summary
+field, or verify factual claims. Image regeneration and claim review remain
+separate, explicitly metered editor actions.
+
+Proposals staged before title snapshots were introduced have no saved title
+anchor. A proposal for a currently titled draft is treated as stale and can
+be discarded; Pubrick does not guess what title the reviewer originally saw.
+An untitled legacy proposal can still be accepted without changing its title.

@@ -15,6 +15,7 @@ import { ApiError, api, apiPage, apiVoid, errorMessage } from "@/lib/api";
 /** A paid whole-draft suggestion never changes saved text until Accept. */
 export function DraftRevision({
   itemId,
+  currentTitle,
   currentBody,
   draftBody,
   eligible,
@@ -22,11 +23,12 @@ export function DraftRevision({
   onAccepted,
 }: {
   itemId: string;
+  currentTitle: string | null;
   currentBody: string;
   draftBody: string;
   eligible: boolean;
   staged: DraftRevisionProposal | null;
-  onAccepted: (body: string) => Promise<void>;
+  onAccepted: (body: string, title: string | null) => Promise<void>;
 }) {
   const t = useTranslations("DraftRevision");
   const te = useTranslations("Errors");
@@ -41,7 +43,9 @@ export function DraftRevision({
   const [notice, setNotice] = useState<string | null>(null);
   const base = `/api/content/${itemId}`;
   const dirty = draftBody !== currentBody;
-  const moved = proposal !== null && proposal.sourceBody !== currentBody;
+  const moved =
+    proposal !== null &&
+    (proposal.sourceBody !== currentBody || proposal.sourceTitle !== currentTitle);
 
   useEffect(() => setProposal(staged ?? null), [staged]);
 
@@ -72,6 +76,7 @@ export function DraftRevision({
     setNotice(null);
     try {
       const request = draftRevisionRequestSchema.parse({
+        expectedTitle: currentTitle,
         expectedBody: currentBody,
         ...(mode === "instruction" ? { instruction } : { noteId }),
       });
@@ -93,12 +98,15 @@ export function DraftRevision({
     setBusy(true);
     setError(null);
     try {
-      const updated = await api<{ body: string }>(`${base}/draft-revision/${proposal.id}/accept`, {
-        method: "POST",
-      });
+      const updated = await api<{ title: string | null; body: string }>(
+        `${base}/draft-revision/${proposal.id}/accept`,
+        {
+          method: "POST",
+        },
+      );
       setProposal(null);
       setNotice(t("accepted"));
-      await onAccepted(updated.body);
+      await onAccepted(updated.body, updated.title);
     } catch (err) {
       setError(errorMessage(err, t("error"), te));
     } finally {
@@ -212,12 +220,22 @@ export function DraftRevision({
           <div className="mt-3 grid gap-3 md:grid-cols-2">
             <div>
               <h4 className="text-sm font-medium text-fg">{t("before")}</h4>
+              <p className="mt-2 text-xs font-medium text-fg-tertiary">{t("titleLabel")}</p>
+              <p className="mt-1 break-words text-sm font-medium text-fg-secondary">
+                {proposal.sourceTitle || t("noTitle")}
+              </p>
+              <p className="mt-3 text-xs font-medium text-fg-tertiary">{t("bodyLabel")}</p>
               <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg-secondary">
                 {proposal.sourceBody}
               </p>
             </div>
             <div>
               <h4 className="text-sm font-medium text-fg">{t("after")}</h4>
+              <p className="mt-2 text-xs font-medium text-fg-tertiary">{t("titleLabel")}</p>
+              <p className="mt-1 break-words text-sm font-medium text-fg">
+                {proposal.proposedTitle || t("noTitle")}
+              </p>
+              <p className="mt-3 text-xs font-medium text-fg-tertiary">{t("bodyLabel")}</p>
               <p className="mt-1 whitespace-pre-wrap break-words text-sm text-fg">
                 {proposal.proposal}
               </p>

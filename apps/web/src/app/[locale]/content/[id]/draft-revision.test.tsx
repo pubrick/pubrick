@@ -16,8 +16,10 @@ vi.mock("@/lib/api", async (original) => {
 
 const proposal = {
   id: "01b3ccf6-1535-469d-9f87-dc15f589f893",
+  sourceTitle: "Old headline",
   sourceBody: "First fact. Second fact.",
   instruction: "Make this flow better.",
+  proposedTitle: "Clearer headline",
   proposal: "First fact leads into the second fact.",
   reason: "Connected the facts.",
 };
@@ -34,10 +36,14 @@ beforeEach(() => {
 describe("whole-draft revision", () => {
   it("sends an exact saved snapshot, compares both versions, and accepts explicitly", async () => {
     const accepted = vi.fn().mockResolvedValue(undefined);
-    mockApi.mockResolvedValueOnce(proposal).mockResolvedValueOnce({ body: proposal.proposal });
+    mockApi.mockResolvedValueOnce(proposal).mockResolvedValueOnce({
+      title: proposal.proposedTitle,
+      body: proposal.proposal,
+    });
     render(
       <DraftRevision
         itemId="item-1"
+        currentTitle={proposal.sourceTitle}
         currentBody={proposal.sourceBody}
         draftBody={proposal.sourceBody}
         eligible
@@ -54,13 +60,21 @@ describe("whole-draft revision", () => {
     expect(first?.[0]).toBe("/api/content/item-1/draft-revision");
     expect(first?.[1]?.method).toBe("POST");
     const body = JSON.parse(first?.[1]?.body as string);
-    expect(body).toEqual({ expectedBody: proposal.sourceBody, instruction: proposal.instruction });
+    expect(body).toEqual({
+      expectedTitle: proposal.sourceTitle,
+      expectedBody: proposal.sourceBody,
+      instruction: proposal.instruction,
+    });
     expect(draftRevisionRequestSchema.parse(body)).toEqual(body);
     expect(screen.getByText(proposal.sourceBody)).toBeInTheDocument();
     expect(screen.getByText(proposal.proposal)).toBeInTheDocument();
+    expect(screen.getByText(proposal.sourceTitle)).toBeInTheDocument();
+    expect(screen.getByText(proposal.proposedTitle)).toBeInTheDocument();
     expect(accepted).not.toHaveBeenCalled();
     await userEvent.setup().click(screen.getByRole("button", { name: "Accept" }));
-    await waitFor(() => expect(accepted).toHaveBeenCalledWith(proposal.proposal));
+    await waitFor(() =>
+      expect(accepted).toHaveBeenCalledWith(proposal.proposal, proposal.proposedTitle),
+    );
     expect(mockApi.mock.calls[1]?.[0]).toBe(
       `/api/content/item-1/draft-revision/${proposal.id}/accept`,
     );
@@ -79,6 +93,7 @@ describe("whole-draft revision", () => {
     render(
       <DraftRevision
         itemId="item-1"
+        currentTitle={proposal.sourceTitle}
         currentBody="Changed draft."
         draftBody="Changed draft."
         eligible
@@ -95,8 +110,30 @@ describe("whole-draft revision", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Suggest rewrite" }));
     await waitFor(() => expect(mockApi).toHaveBeenCalledOnce());
     const body = JSON.parse(mockApi.mock.calls[0]?.[1]?.body as string);
-    expect(body).toEqual({ expectedBody: "Changed draft.", noteId: note.id });
+    expect(body).toEqual({
+      expectedTitle: proposal.sourceTitle,
+      expectedBody: "Changed draft.",
+      noteId: note.id,
+    });
     expect(draftRevisionRequestSchema.parse(body)).toEqual(body);
+  });
+
+  it("holds Accept when only the saved title changes", () => {
+    render(
+      <DraftRevision
+        itemId="item-1"
+        currentTitle="A title changed by another editor"
+        currentBody={proposal.sourceBody}
+        draftBody={proposal.sourceBody}
+        eligible
+        staged={proposal}
+        onAccepted={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Accept" })).toBeDisabled();
+    expect(
+      screen.getByText("The saved title or text changed. Discard this suggestion and ask again."),
+    ).toBeInTheDocument();
   });
 
   it("keeps the provider refusal in the reader's language", async () => {
@@ -107,6 +144,7 @@ describe("whole-draft revision", () => {
     render(
       <DraftRevision
         itemId="item-1"
+        currentTitle={proposal.sourceTitle}
         currentBody={proposal.sourceBody}
         draftBody={proposal.sourceBody}
         eligible

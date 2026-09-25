@@ -14,8 +14,10 @@ export const draftRevisionProposals = pgTable(
       .notNull()
       .references(() => contentItems.id, { onDelete: "cascade" }),
     sourceBody: text("source_body").notNull(),
+    sourceTitle: text("source_title"),
     instruction: text("instruction").notNull(),
     proposal: text("proposal").notNull(),
+    proposedTitle: text("proposed_title"),
     reason: text("reason").notNull(),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

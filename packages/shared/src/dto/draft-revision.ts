@@ -16,6 +16,11 @@ export const draftRevisionRequestSchema = z
       .string()
       .transform(normalizeNewlines)
       .pipe(z.string().min(1).max(MAX_BODY_LENGTH)),
+    expectedTitle: z
+      .string()
+      .max(300)
+      .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE)
+      .nullable(),
     instruction: instruction.optional(),
     noteId: z.string().uuid().optional(),
   })
@@ -27,8 +32,10 @@ export type DraftRevisionRequest = z.infer<typeof draftRevisionRequestSchema>;
 export const draftRevisionProposalSchema = z.object({
   id: z.string().uuid(),
   sourceBody: z.string(),
+  sourceTitle: z.string().nullable(),
   instruction: z.string(),
   proposal: z.string(),
+  proposedTitle: z.string().nullable(),
   reason: z.string(),
 });
 export type DraftRevisionProposal = z.infer<typeof draftRevisionProposalSchema>;

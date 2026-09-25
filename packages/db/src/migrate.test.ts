@@ -4337,4 +4337,63 @@ describe.skipIf(!url)("runMigrations", () => {
       await fresh.drop();
     }
   });
+
+  it("0104 preserves staged body rewrites while adding nullable title snapshots", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0104_heavy_dexter_bennett");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let proposalId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('draft_title_upgrade', 'Draft title upgrade', 'draft-title-upgrade')",
+        );
+        const brand = await old.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('draft_title_upgrade', 'Brand') RETURNING id",
+        );
+        const item = await old.query<{ id: string }>(
+          "INSERT INTO content_items (org_id, brand_id, title, body) VALUES ('draft_title_upgrade', $1, 'Original title', 'Original body.') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        const proposal = await old.query<{ id: string }>(
+          `INSERT INTO draft_revision_proposals
+             (org_id, content_item_id, source_body, instruction, proposal, reason)
+           VALUES ('draft_title_upgrade', $1, 'Original body.', 'Tighten', 'Revised body.', 'Tighter')
+           RETURNING id`,
+          [item.rows[0]?.id],
+        );
+        proposalId = proposal.rows[0]?.id as string;
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+      const upgraded = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const result = await upgraded.query<{
+          source_body: string;
+          proposal: string;
+          source_title: string | null;
+          proposed_title: string | null;
+        }>(
+          "SELECT source_body, proposal, source_title, proposed_title FROM draft_revision_proposals WHERE id = $1",
+          [proposalId],
+        );
+        expect(result.rows).toEqual([
+          {
+            source_body: "Original body.",
+            proposal: "Revised body.",
+            source_title: null,
+            proposed_title: null,
+          },
+        ]);
+      } finally {
+        await upgraded.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
 });

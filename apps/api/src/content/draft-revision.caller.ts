@@ -3,10 +3,15 @@ import { type AiCredential, resolveModel, type StepBrand, type StepUsageSink } f
 import { draftRevisionStep } from "./draft-revision.step";
 import {
   classifyRefineFailure,
-  type RefineOutcome,
+  type RefineFailure,
   type RefineUsage,
   refineCallContext,
 } from "./refine.caller";
+
+export type DraftRevisionOutcome = { usage: RefineUsage[] } & (
+  | { ok: true; title: string | null; text: string; reason: string }
+  | { ok: false; failure: RefineFailure }
+);
 
 /** The provider boundary; e2e tests replace only buildModel. */
 @Injectable()
@@ -18,9 +23,10 @@ export class DraftRevisionCaller {
   async run(args: {
     credential: AiCredential;
     brand: StepBrand;
+    title: string | null;
     body: string;
     instruction: string;
-  }): Promise<RefineOutcome> {
+  }): Promise<DraftRevisionOutcome> {
     const usage: RefineUsage[] = [];
     const sink: StepUsageSink = (record, attribution) => {
       usage.push({ record, attribution });
@@ -33,9 +39,9 @@ export class DraftRevisionCaller {
           args.brand,
           sink,
         ),
-        { body: args.body, instruction: args.instruction },
+        { title: args.title, body: args.body, instruction: args.instruction },
       );
-      return { ok: true, text: output.text, reason: output.reason, usage };
+      return { ok: true, title: output.title, text: output.text, reason: output.reason, usage };
     } catch (error) {
       return { ok: false, failure: classifyRefineFailure(error), usage };
     }
