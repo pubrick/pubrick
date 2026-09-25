@@ -701,6 +701,21 @@
     "saveError": "The feed could not be updated."
   },
   "Publish": {
+    "richEditor": {
+      "label": "Formatted master draft",
+      "formatting": "Text formatting",
+      "bold": "Bold",
+      "italic": "Italic",
+      "heading2": "Heading 2",
+      "heading3": "Heading 3",
+      "bulletList": "Bulleted list",
+      "orderedList": "Numbered list",
+      "link": "Link",
+      "linkUrl": "Link URL",
+      "applyLink": "Apply link",
+      "cancel": "Cancel",
+      "invalidLink": "Enter an HTTP, HTTPS, or email link."
+    },
     "linkPolicyApplied": "Brand link policy was applied to this draft for {website}. Bare homepage links in channel drafts may have UTM tags; source links and specific pages remain as written. Review every link before approval.",
     "backToQueue": "Back to queue",
     "bodyLabel": "Body",

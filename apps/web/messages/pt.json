@@ -701,6 +701,21 @@
     "saveError": "Não foi possível atualizar o feed."
   },
   "Publish": {
+    "richEditor": {
+      "label": "Rascunho principal formatado",
+      "formatting": "Formatação de texto",
+      "bold": "Negrito",
+      "italic": "Itálico",
+      "heading2": "Título 2",
+      "heading3": "Título 3",
+      "bulletList": "Lista com marcadores",
+      "orderedList": "Lista numerada",
+      "link": "Link",
+      "linkUrl": "URL do link",
+      "applyLink": "Aplicar link",
+      "cancel": "Cancelar",
+      "invalidLink": "Digite um link HTTP, HTTPS ou de e-mail."
+    },
     "linkPolicyApplied": "A regra de links da marca foi aplicada a este rascunho para {website}. Links para a página inicial nos rascunhos de canal podem ter UTM; fontes e páginas específicas permanecem como escritas. Revise cada link antes de aprovar.",
     "backToQueue": "Voltar à fila",
     "bodyLabel": "Texto",
