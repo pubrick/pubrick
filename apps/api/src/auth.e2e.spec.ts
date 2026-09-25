@@ -191,6 +191,26 @@ describe.skipIf(!url)("auth e2e", () => {
       expect(rows[0].expiresAt.toISOString()).toBe(original.body.expiresAt);
     });
 
+    it("does not let a member extend an existing admin invitation by resending it as member", async () => {
+      const email = fresh();
+      const original = await owner
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "admin", organizationId: orgId })
+        .expect(200);
+      await member
+        .post("/api/auth/organization/invite-member")
+        .send({ email, role: "member", organizationId: orgId, resend: true })
+        .expect(403);
+      const { db } = await import("./db");
+      const rows = await db
+        .select()
+        .from(schema.invitation)
+        .where(eq(schema.invitation.email, email));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: original.body.id, role: "admin", status: "pending" });
+      expect(rows[0].expiresAt.toISOString()).toBe(original.body.expiresAt);
+    });
+
     it("still lets a member invite an ordinary member and an owner invite an admin", async () => {
       const ordinary = await member
         .post("/api/auth/organization/invite-member")
