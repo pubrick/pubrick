@@ -205,7 +205,7 @@ export const paidReplyAnalysisAttempts = pgTable(
     enumCheck("paid_reply_analysis_attempts_status_check", t.status, PAID_REPLY_ATTEMPT_STATUSES),
     check(
       "paid_reply_analysis_attempts_live_fields_check",
-      sql`${t.origin} = 'legacy' OR (${t.admissionId} IS NOT NULL AND ${t.promptDigest} IS NOT NULL AND (${t.status} NOT IN ('queued', 'dispatching') OR ${t.promptEncrypted} IS NOT NULL) AND ${t.sampleSize} BETWEEN 1 AND 30 AND ${t.modelId} IS NOT NULL AND ${t.priceWindow} IS NOT NULL AND ${t.admissionLocalDate} IS NOT NULL AND ${t.admissionTimezone} IS NOT NULL AND ${t.dayStartUtc} IS NOT NULL AND ${t.dayEndUtc} IS NOT NULL AND ${t.dayStartUtc} < ${t.dayEndUtc} AND ${t.reservedMaxUsd} > 0)`,
+      sql`${t.origin} = 'legacy' OR (${t.status} <> 'legacy_consumed' AND ${t.admissionId} IS NOT NULL AND ${t.promptDigest} IS NOT NULL AND (${t.status} NOT IN ('queued', 'dispatching') OR ${t.promptEncrypted} IS NOT NULL) AND ${t.sampleSize} IS NOT NULL AND ${t.sampleSize} BETWEEN 1 AND 30 AND ${t.modelId} IS NOT NULL AND ${t.priceWindow} IS NOT NULL AND ${t.admissionLocalDate} IS NOT NULL AND ${t.admissionTimezone} IS NOT NULL AND ${t.dayStartUtc} IS NOT NULL AND ${t.dayEndUtc} IS NOT NULL AND ${t.dayStartUtc} < ${t.dayEndUtc} AND ${t.reservedMaxUsd} IS NOT NULL AND ${t.reservedMaxUsd} > 0 AND ${t.orgSettingsRevision} IS NOT NULL AND ${t.brandThresholdRevision} IS NOT NULL AND (${t.origin} <> 'automatic' OR (${t.freeRevision} IS NOT NULL AND ${t.paidRevision} IS NOT NULL)))`,
     ),
     check(
       "paid_reply_analysis_attempts_legacy_check",

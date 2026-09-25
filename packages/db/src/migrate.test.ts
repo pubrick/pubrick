@@ -968,6 +968,46 @@ describe.skipIf(!url)("runMigrations", () => {
             [brandId, untouchedItem],
           ),
         ).toBe(CHECK_VIOLATION);
+        const admitted = await after.query<{ id: string }>(
+          "INSERT INTO analysis_admissions (org_id, target_kind, target_id, sample_checked_at, lease_until) VALUES ('paid_old', 'source_comment', $1, now(), now() + interval '2 minutes') RETURNING id",
+          [untouchedItem],
+        );
+        const admissionId = admitted.rows[0]?.id;
+        const insertAttempt =
+          "INSERT INTO paid_reply_analysis_attempts (org_id, brand_id, target_kind, target_id, sample_version, admission_id, origin, status, prompt_digest, prompt_encrypted, sample_size, model_id, price_window, free_revision, paid_revision, org_settings_revision, brand_threshold_revision, admission_local_date, admission_timezone, day_start_utc, day_end_utc, reserved_max_usd) VALUES ('paid_old', $1, 'source_comment', $2, gen_random_uuid(), $3, $7, 'queued', 'digest', 'encrypted', $4, 'gemini-3.7-flash', '2026', 1, $6, 0, 0, '2026-09-25', 'UTC', '2026-09-25T00:00:00Z', '2026-09-26T00:00:00Z', $5)";
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            null,
+            "0.01",
+            1,
+            "manual",
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            1,
+            null,
+            1,
+            "manual",
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(after, insertAttempt, [
+            brandId,
+            untouchedItem,
+            admissionId,
+            1,
+            "0.01",
+            null,
+            "automatic",
+          ]),
+        ).toBe(CHECK_VIOLATION);
         expect(
           (await after.query("SELECT id FROM paid_reply_analysis_handoffs")).rows,
         ).toHaveLength(0);
