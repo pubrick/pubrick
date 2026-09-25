@@ -182,9 +182,23 @@ beforeAll(async () => {
     url: fresh.toString(),
     drop: async () => {
       const cleanup = new pg.Client({ connectionString: url });
-      await cleanup.connect();
-      await cleanup.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
-      await cleanup.end();
+      try {
+        await cleanup.connect();
+        // pool.end() can finish while Postgres is still retiring the socket.
+        // FORCE would terminate that connection and emit an unhandled pg error.
+        // Wait for ordinary disconnection instead of killing our own clients.
+        for (let attempt = 0; attempt < 20; attempt++) {
+          try {
+            await cleanup.query(`DROP DATABASE IF EXISTS "${name}"`);
+            return;
+          } catch (error) {
+            if ((error as { code?: string }).code !== "55006" || attempt === 19) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+      } finally {
+        await cleanup.end();
+      }
     },
   };
   await runMigrations(ownDatabase.url);
