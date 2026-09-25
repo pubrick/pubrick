@@ -2779,6 +2779,74 @@ describe.skipIf(!url)("content e2e", () => {
     }
   });
 
+  it("moves a scheduled retry after a known failure or a human confirmed no delivery", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    const { createDb, schema } = await import("@pubrick/db");
+    const { db, pool } = createDb(url as string);
+    try {
+      for (const prior of ["failed", "resolved_unknown"] as const) {
+        const created = await agent
+          .post("/api/content")
+          .send({ brandId, body: `Retry after ${prior}`, channelIds: [channelId] })
+          .expect(201);
+        const itemId = created.body.id as string;
+        const adaptationId = created.body.adaptations[0].id as string;
+        const orgId = await orgOf(itemId);
+        await db
+          .update(schema.adaptations)
+          .set({ status: "failed", attemptCount: 1 })
+          .where(eq(schema.adaptations.id, adaptationId));
+        await db
+          .update(schema.contentItems)
+          .set({ status: "failed" })
+          .where(eq(schema.contentItems.id, itemId));
+        await db.insert(schema.publications).values({
+          orgId,
+          adaptationId,
+          channelId,
+          status: prior === "failed" ? "failed" : "unknown",
+          attempt: 1,
+          createdAt: new Date(Date.now() - 2_000),
+        });
+        if (prior === "resolved_unknown") {
+          await agent
+            .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
+            .send({ delivered: false })
+            .expect(200);
+        }
+
+        const first = new Date(Date.now() + 24 * 3_600_000).toISOString();
+        const second = new Date(Date.now() + 48 * 3_600_000).toISOString();
+        await agent.post(`/api/content/${itemId}/approve`).send({ scheduledAt: first }).expect(200);
+        const moved = await agent
+          .post(`/api/content/${itemId}/adaptations/${adaptationId}/reschedule`)
+          .send({ expectedScheduledAt: first, scheduledAt: second })
+          .expect(200);
+        expect(moved.body.adaptations[0]).toMatchObject({
+          status: "scheduled",
+          scheduledAt: second,
+          attemptCount: 2,
+        });
+        const jobs = await db.execute(sql`
+          SELECT state, start_after FROM pgboss.job
+          WHERE name = 'publish' AND data->>'adaptationId' = ${adaptationId}
+          ORDER BY created_on, id
+        `);
+        expect(jobs.rows.map((row) => row.state).sort()).toEqual(["cancelled", "created"]);
+        expect(
+          jobs.rows.some(
+            (row) =>
+              row.state === "created" &&
+              new Date(row.start_after as string).toISOString() === second,
+          ),
+        ).toBe(true);
+      }
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("refuses cross-tenant, wrong-item, stale, past, near-due, and already-claimed channel moves", async () => {
     const agent = await orgAgent();
     const outsider = await orgAgent();
@@ -2854,15 +2922,43 @@ describe.skipIf(!url)("content e2e", () => {
     const { createDb, schema } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
     try {
-      const [receipt] = await db
+      const orgId = await orgOf(itemId);
+      for (const status of ["in_flight", "unknown", "published"] as const) {
+        const [receipt] = await db
+          .insert(schema.publications)
+          .values({ orgId, adaptationId, channelId, status, attempt: 1 })
+          .returning({ id: schema.publications.id });
+        expect(
+          (
+            await agent
+              .post(path)
+              .send({ expectedScheduledAt: second, scheduledAt: first })
+              .expect(409)
+          ).body.code,
+        ).toBe("schedule_has_history");
+        if (receipt)
+          await db.delete(schema.publications).where(eq(schema.publications.id, receipt.id));
+      }
+      const unresolved = await db
         .insert(schema.publications)
-        .values({
-          orgId: await orgOf(itemId),
-          adaptationId,
-          channelId,
-          status: "failed",
-          attempt: 1,
-        })
+        .values([
+          {
+            orgId,
+            adaptationId,
+            channelId,
+            status: "unknown",
+            attempt: 1,
+            createdAt: new Date(Date.now() - 2_000),
+          },
+          {
+            orgId,
+            adaptationId,
+            channelId,
+            status: "failed",
+            attempt: 2,
+            createdAt: new Date(Date.now() - 1_000),
+          },
+        ])
         .returning({ id: schema.publications.id });
       expect(
         (
@@ -2872,8 +2968,9 @@ describe.skipIf(!url)("content e2e", () => {
             .expect(409)
         ).body.code,
       ).toBe("schedule_has_history");
-      if (receipt)
+      for (const receipt of unresolved) {
         await db.delete(schema.publications).where(eq(schema.publications.id, receipt.id));
+      }
       await db
         .update(schema.adaptations)
         .set({ status: "publishing" })

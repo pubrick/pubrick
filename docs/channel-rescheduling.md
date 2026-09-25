@@ -12,11 +12,13 @@ returns `schedule_changed` so an old tab cannot silently overwrite a teammate's
 move. The route is organization and brand scoped and also requires the
 adaptation to belong to the URL's item.
 
-Only an approved post's scheduled automatic adaptation can move. A channel
-with a delivery receipt must be inspected before scheduling it again. Both the
-current slot and the requested slot must be more than one minute away by the
-database clock; a past request is refused because pg-boss would dispatch it
-immediately. A queued, publishing, published, failed, manual, rejected, or
+Only an approved post's scheduled automatic adaptation can move. A retry with
+earlier known failures can move, including one whose unknown outcome a person
+resolved as not delivered. A published receipt, an in-flight claim, or an
+unknown outcome without a later human not-delivered assertion blocks the move.
+Both the current slot and the requested slot must be more than one minute away
+by the database clock; a past request is refused because pg-boss would dispatch
+it immediately. A queued, publishing, published, failed, manual, rejected, or
 archived delivery cannot be moved through this route.
 
 The API holds the adaptation lock used by the publish worker. In one database
