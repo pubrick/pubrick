@@ -379,9 +379,9 @@ const NON_ENUM_CHECKS = [
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
   "memorable_dates_month_day_check",
-  // The knowledge category pin arrives after the pre-0009 seed, so it has no row for
-  // PINNED_COLUMNS to mutate. The knowledge e2e inserts a real note and proves
-  // the category constraint against a bogus update at head.
+  // Knowledge categories allow custom names but retain length, trim and control
+  // character checks. The knowledge e2e inserts a real note and proves the
+  // constraint rejects invalid data at head.
   "knowledge_entries_category_check",
   // These late enum pins: neither topics nor news items exists in the pre-0009
   // seed. The topic API e2e writes real rows and proves both reject off-list

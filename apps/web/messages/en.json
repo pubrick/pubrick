@@ -312,6 +312,11 @@
     "titleLabel": "Title",
     "contentLabel": "Content",
     "categoryLabel": "Category",
+    "customCategory": "Custom",
+    "customCategoryLabel": "Custom category",
+    "filterCategory": "Filter by category",
+    "filterAll": "All categories",
+    "filterEmpty": "No notes in this category. Choose another category.",
     "tagsLabel": "Tags, separated by commas",
     "categories": {
       "product_info": "Products",

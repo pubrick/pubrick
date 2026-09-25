@@ -312,6 +312,11 @@
     "titleLabel": "Название",
     "contentLabel": "Содержание",
     "categoryLabel": "Категория",
+    "customCategory": "Своя категория",
+    "customCategoryLabel": "Название своей категории",
+    "filterCategory": "Фильтр по категории",
+    "filterAll": "Все категории",
+    "filterEmpty": "В этой категории нет записей. Выберите другую категорию.",
     "tagsLabel": "Метки через запятую",
     "categories": {
       "product_info": "Продукты",

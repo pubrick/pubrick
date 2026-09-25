@@ -4,13 +4,12 @@ import {
   KNOWLEDGE_CATEGORIES,
   knowledgeCreateSchema,
   knowledgeImportSchema,
-  knowledgeUpdateSchema,
 } from "@pubrick/shared";
 import { zipSync } from "fflate";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,7 +28,7 @@ type Entry = {
   id: string;
   title: string;
   content: string;
-  category: (typeof KNOWLEDGE_CATEGORIES)[number];
+  category: string;
   tags: string[];
   isActive: boolean;
   hasEmbedding: boolean;
@@ -52,6 +51,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   );
   const canManageIndex = member?.role === "owner" || member?.role === "admin";
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [listError, setListError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -71,6 +71,20 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   } | null>(null);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const categories = useMemo(
+    () =>
+      [...new Set((entries ?? []).map((entry) => entry.category))].sort((a, b) =>
+        a.localeCompare(b, locale),
+      ),
+    [entries, locale],
+  );
+  const visibleEntries = categoryFilter
+    ? (entries ?? []).filter((entry) => entry.category === categoryFilter)
+    : entries;
+  const categoryLabel = (value: string) => {
+    const preset = KNOWLEDGE_CATEGORIES.find((category) => category === value);
+    return preset ? t(`categories.${preset}`) : value;
+  };
 
   const describeError = useCallback(
     (err: unknown) => {
@@ -147,10 +161,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
         .map((tag) => tag.trim())
         .filter(Boolean),
     };
-    const payload =
-      editor === "add"
-        ? knowledgeCreateSchema.safeParse({ ...body, brandId })
-        : knowledgeUpdateSchema.safeParse(body);
+    const payload = knowledgeCreateSchema.safeParse({ ...body, brandId });
     if (!payload.success) {
       setError(t("invalid"));
       return;
@@ -161,9 +172,19 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
       if (editor === "add") {
         await api("/api/knowledge", { method: "POST", body: JSON.stringify(payload.data) });
       } else {
+        const changes = {
+          ...(payload.data.title !== editor.title ? { title: payload.data.title } : {}),
+          ...(payload.data.content !== editor.content ? { content: payload.data.content } : {}),
+          ...(payload.data.category !== editor.category ? { category: payload.data.category } : {}),
+          ...(form.tags !== editor.tags.join(", ") ? { tags: payload.data.tags } : {}),
+        };
+        if (Object.keys(changes).length === 0) {
+          closeEditor();
+          return;
+        }
         await api(`/api/knowledge/${editor.id}?brandId=${brandId}`, {
           method: "PATCH",
-          body: JSON.stringify(payload.data),
+          body: JSON.stringify(changes),
         });
       }
       closeEditor();
@@ -500,38 +521,60 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           />
         </Card>
       ) : (
-        <div className="overflow-hidden rounded-card border border-border bg-panel">
-          {entries.map((entry) => (
-            <ListRow
-              key={entry.id}
-              id={`knowledge-${entry.id}`}
-              className="flex-wrap"
-              title={entry.title}
-              meta={`${t(`categories.${entry.category}`)} · ${entry.isActive ? t("active") : t("paused")} · ${entry.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}`}
-              trailing={
-                <div className="flex max-w-full flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => index(entry)}
-                    disabled={indexing === entry.id}
-                  >
-                    {indexing === entry.id ? t("indexing") : t("index")}
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
-                    {t("edit")}
-                  </Button>
-                  <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
-                    {entry.isActive ? t("pause") : t("resume")}
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => setPendingRemoval(entry)}>
-                    {t("remove")}
-                  </Button>
-                </div>
-              }
-            />
-          ))}
-        </div>
+        <>
+          <div className="mb-4 max-w-xs">
+            <Select
+              label={t("filterCategory")}
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+            >
+              <option value="">{t("filterAll")}</option>
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {categoryLabel(category)}
+                </option>
+              ))}
+            </Select>
+          </div>
+          {visibleEntries?.length === 0 ? (
+            <Card padded={false}>
+              <EmptyState title={t("filterEmpty")} />
+            </Card>
+          ) : (
+            <div className="overflow-hidden rounded-card border border-border bg-panel">
+              {visibleEntries?.map((entry) => (
+                <ListRow
+                  key={entry.id}
+                  id={`knowledge-${entry.id}`}
+                  className="flex-wrap"
+                  title={entry.title}
+                  meta={`${categoryLabel(entry.category)} · ${entry.isActive ? t("active") : t("paused")} · ${entry.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}`}
+                  trailing={
+                    <div className="flex max-w-full flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => index(entry)}
+                        disabled={indexing === entry.id}
+                      >
+                        {indexing === entry.id ? t("indexing") : t("index")}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
+                        {t("edit")}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
+                        {entry.isActive ? t("pause") : t("resume")}
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => setPendingRemoval(entry)}>
+                        {t("remove")}
+                      </Button>
+                    </div>
+                  }
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <Modal
@@ -571,15 +614,31 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           />
           <Select
             label={t("categoryLabel")}
-            value={form.category}
-            onChange={(e) => setForm({ ...form, category: e.target.value as Entry["category"] })}
+            value={
+              KNOWLEDGE_CATEGORIES.some((category) => category === form.category)
+                ? form.category
+                : "__custom__"
+            }
+            onChange={(e) =>
+              setForm({ ...form, category: e.target.value === "__custom__" ? "" : e.target.value })
+            }
           >
             {KNOWLEDGE_CATEGORIES.map((category) => (
               <option key={category} value={category}>
                 {t(`categories.${category}`)}
               </option>
             ))}
+            <option value="__custom__">{t("customCategory")}</option>
           </Select>
+          {!KNOWLEDGE_CATEGORIES.some((category) => category === form.category) && (
+            <Input
+              label={t("customCategoryLabel")}
+              value={form.category}
+              onChange={(e) => setForm({ ...form, category: e.target.value })}
+              maxLength={100}
+              required
+            />
+          )}
           <Input
             label={t("tagsLabel")}
             value={form.tags}

@@ -10,6 +10,14 @@ export const KNOWLEDGE_CATEGORIES = [
   "customer",
 ] as const;
 
+/** Stored verbatim after trimming, so imported and user-defined labels retain their meaning. */
+export const knowledgeCategorySchema = z
+  .string()
+  .refine((value) => !/[\p{Cc}]/u.test(value), "Category cannot contain control characters")
+  .trim()
+  .min(1)
+  .max(100);
+
 export const knowledgeCreateSchema = z.object({
   brandId: z.uuid(),
   title: z
@@ -24,7 +32,7 @@ export const knowledgeCreateSchema = z.object({
     .min(1)
     .max(20_000)
     .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
-  category: z.enum(KNOWLEDGE_CATEGORIES),
+  category: knowledgeCategorySchema,
   tags: z
     .array(
       z

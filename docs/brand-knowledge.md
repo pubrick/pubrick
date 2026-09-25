@@ -5,6 +5,13 @@ note has a title, content, category, tags, and an active switch. The API scopes
 every read and write by both the active organization and the brand. Removing a
 brand also removes its notes.
 
+The six familiar categories keep localized labels. Choose **Custom** to name
+another category; names are trimmed, limited to 100 characters, and cannot
+contain control characters. Custom names are displayed literally. The compact
+category selector filters the current brand's notes, including paused notes,
+without crowding the page with chips. Changing only a category keeps an
+existing vector because the indexed title and body have not changed.
+
 ## Using notes
 
 The generation worker selects up to five active notes for a run. If the brand
@@ -75,7 +82,7 @@ stops the whole import, and the API inserts the entire batch in one transaction.
 The API also accepts an optional boolean `isActive` on each bulk-import entry.
 Titles, content, categories, and tags must pass the same limits as an individual
 note (500 title characters, 20,000 content characters, 20 tags of 50 characters
-each).
+each). Custom categories round-trip in `category` without translation.
 
 For a portable export from another system, first extract its notes to a local
 UTF-8 CSV without embeddings, provider keys, or internal IDs. Map each note's

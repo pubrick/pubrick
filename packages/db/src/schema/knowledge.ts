@@ -1,4 +1,3 @@
-import { KNOWLEDGE_CATEGORIES } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -13,7 +12,6 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
-import { enumCheck } from "./enum-check.js";
 
 /** A brand-owned note that may be used as attributed context in generation. */
 export const knowledgeEntries = pgTable(
@@ -28,7 +26,7 @@ export const knowledgeEntries = pgTable(
       .references(() => brands.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     content: text("content").notNull(),
-    category: text("category", { enum: KNOWLEDGE_CATEGORIES }).notNull(),
+    category: text("category").notNull(),
     tags: text("tags").array().notNull().default([]),
     isActive: boolean("is_active").notNull().default(true),
     embedding: vector("embedding", { dimensions: 768 }),
@@ -42,7 +40,10 @@ export const knowledgeEntries = pgTable(
   },
   (t) => [
     index("knowledge_entries_org_brand_idx").on(t.orgId, t.brandId),
-    enumCheck("knowledge_entries_category_check", t.category, KNOWLEDGE_CATEGORIES),
+    check(
+      "knowledge_entries_category_check",
+      sql`char_length(${t.category}) between 1 and 100 and ${t.category} = btrim(${t.category}) and ${t.category} !~ '[[:cntrl:]]' and ${t.category} !~ ('[' || chr(127) || '-' || chr(159) || ']')`,
+    ),
     check(
       "knowledge_entries_embedding_metadata_check",
       sql`(${t.embedding} is null and ${t.embeddingModel} is null and ${t.embeddingDimensions} is null) or (${t.embedding} is not null and ${t.embeddingModel} is not null and ${t.embeddingDimensions} = 768)`,
