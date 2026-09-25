@@ -630,6 +630,19 @@ export default function SettingsPage() {
 
         {canManageApiKeys && (
           <Card>
+            <h2 className="mb-2 text-base font-semibold text-fg">{t("searchTitle")}</h2>
+            <p className="mb-3 text-sm text-fg-secondary">{t("searchHint")}</p>
+            <Link
+              href={`/${locale}/settings/search`}
+              className="text-sm font-medium text-accent underline"
+            >
+              {t("searchOpen")}
+            </Link>
+          </Card>
+        )}
+
+        {canManageApiKeys && (
+          <Card>
             <h2 className="mb-2 text-base font-semibold text-fg">{t("publicApiTitle")}</h2>
             <p className="mb-3 text-sm text-fg-secondary">{t("publicApiHint")}</p>
             <Link
