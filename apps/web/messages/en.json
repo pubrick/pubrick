@@ -270,7 +270,7 @@
     "minScoreAny": "No minimum",
     "minScoreZero": "0% and above · scored only",
     "minScoreAtLeast": "At least {score}%",
-    "minScoreHint": "Uses the original AI match score, before editor feedback. With AI score set to All articles, No minimum includes unscored and failed stories.",
+    "minScoreHint": "Uses the initial AI match score, before editor feedback. With AI score set to All articles, No minimum includes unscored and failed stories.",
     "clear": "Clear",
     "clearMinScore": "Clear minimum AI match filter",
     "aiScore": "AI match {score}%",

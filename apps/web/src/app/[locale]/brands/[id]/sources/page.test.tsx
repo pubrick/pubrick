@@ -7,9 +7,9 @@ import {
 } from "@pubrick/shared";
 import { act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signedInSession } from "@/test/auth-client.stub";
-import { routerMock } from "@/test/next-navigation.stub";
+import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import SourcesPage from "./page";
@@ -34,7 +34,10 @@ describe("watched sources page", () => {
   beforeEach(() => {
     signedInSession();
     vi.stubGlobal("fetch", vi.fn());
+    window.history.replaceState({}, "", `/en/brands/${BRAND_ID}/sources`);
   });
+
+  afterEach(() => window.history.replaceState({}, "", "/"));
 
   function install(
     items: unknown[] = [],
@@ -647,6 +650,7 @@ describe("watched sources page", () => {
     expect(screen.getByLabelText(en.Sources.searchLabel)).toHaveValue("");
     expect(screen.getByLabelText(en.Sources.sourceFilterLabel)).toHaveValue("");
     expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("");
+    expect(new URLSearchParams(window.location.search).has("news_relevance")).toBe(false);
     await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
   });
 
@@ -659,6 +663,7 @@ describe("watched sources page", () => {
     expect(screen.getByText(en.Sources.minScoreHint)).toBeInTheDocument();
     const user = userEvent.setup();
     await user.selectOptions(threshold, "0");
+    expect(new URLSearchParams(window.location.search).get("news_relevance")).toBe("0");
     await waitFor(() =>
       expect(
         calls.some(
@@ -679,7 +684,37 @@ describe("watched sources page", () => {
     expect(screen.getByText(en.Sources.emptyFiltered)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: en.Sources.clearMinScore }));
     expect(threshold).toHaveValue("");
+    expect(new URLSearchParams(window.location.search).has("news_relevance")).toBe(false);
     await waitFor(() => expect(screen.getByText(en.Sources.emptyNews)).toBeInTheDocument());
+  });
+
+  it("restores the AI threshold after remount and browser back navigation", async () => {
+    window.history.replaceState({}, "", `?view=compact&news_relevance=40`);
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    const calls = install();
+    const first = await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const threshold = screen.getByLabelText(en.Sources.minScoreLabel);
+    expect(threshold).toHaveValue("40");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("minScorePercent=40"))).toBe(true),
+    );
+
+    const user = userEvent.setup();
+    await user.selectOptions(threshold, "75");
+    expect(window.location.search).toBe("?view=compact&news_relevance=75");
+    first.unmount();
+
+    navigationState.searchParams = new URLSearchParams(window.location.search);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("75");
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes("minScorePercent=75"))).toBe(true),
+    );
+
+    window.history.replaceState({}, "", `?view=compact&news_relevance=40`);
+    await act(async () => window.dispatchEvent(new PopStateEvent("popstate")));
+    expect(screen.getByLabelText(en.Sources.minScoreLabel)).toHaveValue("40");
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("compact");
   });
 
   it("clears a selected source after that source is removed", async () => {
@@ -749,6 +784,7 @@ describe("watched sources page", () => {
     await user.selectOptions(screen.getByLabelText(en.Sources.minScoreLabel), "75");
     await user.type(screen.getByLabelText(en.Sources.searchLabel), "first");
     await waitFor(() => expect(calls.some((call) => call.url.includes("search=first"))).toBe(true));
+    window.history.replaceState({}, "", `/en/brands/${OTHER_BRAND_ID}/sources`);
     await act(async () => {
       view.rerender(<SourcesPage params={Promise.resolve({ id: OTHER_BRAND_ID })} />);
     });

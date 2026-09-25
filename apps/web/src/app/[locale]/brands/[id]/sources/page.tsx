@@ -16,7 +16,7 @@ import {
   runCreateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
@@ -39,6 +39,21 @@ type Channel = { id: string; name: string; platform: string };
 type Run = { id: string };
 const FORM_ID = "source-add-form";
 const SCORE_PERCENT_OPTIONS = Array.from({ length: 21 }, (_, index) => index * 5);
+const NEWS_RELEVANCE_PARAM = "news_relevance";
+
+function parseRelevance(brandId: string, value: string | null): number | null {
+  if (value === null) return null;
+  const result = newsItemListQuerySchema.safeParse({ brandId, minScorePercent: value });
+  return result.success ? (result.data.minScorePercent ?? null) : null;
+}
+
+function relevanceFromUrl(brandId: string): number | null {
+  if (!window.location.pathname.replace(/\/$/, "").endsWith(`/${brandId}/sources`)) return null;
+  return parseRelevance(
+    brandId,
+    new URLSearchParams(window.location.search).get(NEWS_RELEVANCE_PARAM),
+  );
+}
 
 export default function SourcesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -46,12 +61,15 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const urlSearchParams = useSearchParams();
   const [brand, setBrand] = useState<Brand | null>(null);
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);
   const [sort, setSort] = useState<"recent" | "relevance">("recent");
   const [status, setStatus] = useState<"all" | "unscored" | "scored" | "failed">("all");
-  const [minScorePercent, setMinScorePercent] = useState<number | null>(null);
+  const [minScorePercent, setMinScorePercent] = useState<number | null>(() =>
+    parseRelevance(id, urlSearchParams.get(NEWS_RELEVANCE_PARAM)),
+  );
   const [sourceFilter, setSourceFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -105,6 +123,21 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     return () => window.clearTimeout(timer);
   }, [searchInput, search]);
 
+  const updateMinScorePercent = useCallback((score: number | null) => {
+    const url = new URL(window.location.href);
+    if (score === null) url.searchParams.delete(NEWS_RELEVANCE_PARAM);
+    else url.searchParams.set(NEWS_RELEVANCE_PARAM, String(score));
+    window.history.replaceState(window.history.state, "", url);
+    setItems(null);
+    setMinScorePercent(score);
+  }, []);
+
+  useEffect(() => {
+    const restoreFromUrl = () => setMinScorePercent(relevanceFromUrl(id));
+    window.addEventListener("popstate", restoreFromUrl);
+    return () => window.removeEventListener("popstate", restoreFromUrl);
+  }, [id]);
+
   useEffect(() => {
     if (renderedBrandId.current === id) return;
     renderedBrandId.current = id;
@@ -118,7 +151,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     setSearch("");
     setSort("recent");
     setStatus("all");
-    setMinScorePercent(null);
+    setMinScorePercent(relevanceFromUrl(id));
     setEditingSource(null);
     setEditBusy(false);
     setEditError(null);
@@ -750,12 +783,16 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
         <Select
           label={t("minScoreLabel")}
           value={minScorePercent === null ? "" : String(minScorePercent)}
-          onChange={(event) => {
-            setItems(null);
-            setMinScorePercent(event.target.value === "" ? null : Number(event.target.value));
-          }}
+          onChange={(event) =>
+            updateMinScorePercent(event.target.value === "" ? null : Number(event.target.value))
+          }
         >
           <option value="">{t("minScoreAny")}</option>
+          {minScorePercent !== null && !SCORE_PERCENT_OPTIONS.includes(minScorePercent) && (
+            <option value={minScorePercent}>
+              {t("minScoreAtLeast", { score: minScorePercent })}
+            </option>
+          )}
           {SCORE_PERCENT_OPTIONS.map((score) => (
             <option key={score} value={score}>
               {t(score === 0 ? "minScoreZero" : "minScoreAtLeast", { score })}
@@ -767,10 +804,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             variant="ghost"
             className="self-end"
             aria-label={t("clearMinScore")}
-            onClick={() => {
-              setItems(null);
-              setMinScorePercent(null);
-            }}
+            onClick={() => updateMinScorePercent(null)}
           >
             {t("clear")}
           </Button>
@@ -798,7 +832,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                   variant="secondary"
                   onClick={() => {
                     setStatus("all");
-                    setMinScorePercent(null);
+                    updateMinScorePercent(null);
                     setSourceFilter("");
                     setSearchInput("");
                   }}

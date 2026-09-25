@@ -270,7 +270,7 @@
     "minScoreAny": "Sem mínimo",
     "minScoreZero": "0% ou mais · apenas pontuadas",
     "minScoreAtLeast": "Pelo menos {score}%",
-    "minScoreHint": "Usa a pontuação IA original, antes do feedback editorial. Com todos os artigos selecionados, Sem mínimo inclui notícias sem pontuação e com falha.",
+    "minScoreHint": "Usa a pontuação IA inicial, antes do feedback editorial. Com todos os artigos selecionados, Sem mínimo inclui notícias sem pontuação e com falha.",
     "clear": "Limpar",
     "clearMinScore": "Limpar filtro de correspondência IA mínima",
     "aiScore": "Afinidade IA {score}%",
