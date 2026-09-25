@@ -6,6 +6,12 @@ import { renderAsync, screen, waitFor } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import AutopilotPage from "./page";
 
+vi.mock("./diagnostics", () => ({
+  AutopilotDiagnostics: ({ brandId }: { brandId: string }) => (
+    <div data-testid="diagnostics">{brandId}</div>
+  ),
+}));
+
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const CHANNEL_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
 
@@ -39,6 +45,7 @@ describe("autopilot settings page", () => {
       return response(200, autopilotDefaults);
     });
     await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(screen.getByTestId("diagnostics")).toHaveTextContent(BRAND_ID);
     const user = userEvent.setup();
     const enabled = await screen.findByRole("checkbox", { name: /Enable scheduled generation/ });
     expect(enabled).not.toBeChecked();
@@ -153,6 +160,32 @@ describe("autopilot settings page", () => {
     await user.click(screen.getByRole("button", { name: en.Autopilot.planNowConfirm }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(en.Errors.topic_planning_cooldown),
+    );
+  });
+
+  it("links recent automatic runs by topic title", async () => {
+    const runId = "2e838682-1948-4959-9ec6-79503d49e691";
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/autopilot/history"))
+        return response(200, [
+          {
+            id: "dispatch",
+            topicId: "topic",
+            topicTitle: "Weekly release notes",
+            runId,
+            localDate: "2026-09-25",
+            runStatus: "running",
+            createdAt: "2026-09-25T10:00:00.000Z",
+          },
+        ]);
+      if (url.includes("/api/channels?")) return response(200, []);
+      return response(200, autopilotDefaults);
+    });
+    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByRole("link", { name: "Weekly release notes" })).toHaveAttribute(
+      "href",
+      `/en/content/runs/${runId}`,
     );
   });
 });

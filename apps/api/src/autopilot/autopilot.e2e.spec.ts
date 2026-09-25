@@ -330,4 +330,142 @@ describe.skipIf(!url)("autopilot API", () => {
     expect(config?.lastManualPlanAt).toBeNull();
     await owner.agent.post(`${configUrl}/plan-topics`).expect(202);
   });
+
+  it("shows scoped observed diagnostics to owners and admins without inventing skip history", async () => {
+    const owner = await orgAgent();
+    const other = await orgAgent();
+    const brand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Observed Brand" })
+      .expect(201);
+    const url = `/api/brands/${brand.body.id}/autopilot/diagnostics`;
+    await other.agent.get(url).expect(404);
+    const first = await owner.agent.get(url).expect(200);
+    expect(first.body).toMatchObject({
+      enabled: false,
+      dailyRuns: { used: 0, limit: 1 },
+      generationSpend: { knownUsd: 0, unpricedCalls: 0, lostCallCount: 0 },
+      approvedWaiting: { count: 0, topics: [] },
+      activeAutomaticRuns: 0,
+      recentDispatches: [],
+    });
+    expect(first.body).not.toHaveProperty("lastSkipReason");
+
+    const [dispatchedTopic, waitingTopic] = await db
+      .insert(schema.topics)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          title: "Already started",
+          status: "approved",
+        },
+        { orgId: owner.orgId, brandId: brand.body.id, title: "Waiting", status: "approved" },
+      ])
+      .returning({ id: schema.topics.id });
+    const [run] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        input: { kind: "brief", text: "Test brief", channelIds: [] },
+        unrecordedCalls: 2,
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!dispatchedTopic || !waitingTopic || !run) throw new Error("Test fixture insert failed");
+    await db.insert(schema.pipelineRuns).values({
+      orgId: owner.orgId,
+      brandId: brand.body.id,
+      input: { kind: "brief", text: "Older run", channelIds: [] },
+      status: "succeeded",
+      unrecordedCalls: null,
+    });
+    const otherBrand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Separate Brand" })
+      .expect(201);
+    const [otherRun] = await db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: owner.orgId,
+        brandId: otherBrand.body.id,
+        input: { kind: "brief", text: "Other brand", channelIds: [] },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!otherRun) throw new Error("Test fixture insert failed");
+    await db.insert(schema.autopilotDispatches).values({
+      orgId: owner.orgId,
+      brandId: brand.body.id,
+      topicId: dispatchedTopic.id,
+      runId: run.id,
+      localDate: first.body.localDate,
+    });
+    await db.insert(schema.usageLedger).values([
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test-model",
+        costUsd: "0.250000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+      {
+        orgId: owner.orgId,
+        runId: run.id,
+        step: "editor",
+        provider: "google",
+        modelId: "test-model",
+        costSource: "unknown",
+        status: "ok",
+        outcome: "unknown",
+      },
+      {
+        orgId: owner.orgId,
+        runId: otherRun.id,
+        step: "writer",
+        provider: "google",
+        modelId: "test-model",
+        costUsd: "0.990000",
+        costSource: "provider_reported",
+        status: "ok",
+        outcome: "completed",
+      },
+    ]);
+    const diagnostics = await owner.agent.get(url).expect(200);
+    expect(diagnostics.body).toMatchObject({
+      dailyRuns: { used: 1, limit: 1 },
+      generationSpend: {
+        knownUsd: 0.25,
+        thresholdUsd: 1,
+        unpricedCalls: 1,
+        lostCallCount: 2,
+        legacyUnknownRuns: 1,
+      },
+      approvedWaiting: { count: 1, topics: [{ id: waitingTopic.id, title: "Waiting" }] },
+      activeAutomaticRuns: 1,
+      recentDispatches: [
+        { topicId: dispatchedTopic.id, runId: run.id, topicTitle: "Already started" },
+      ],
+    });
+    expect(diagnostics.body.recentDispatches).toHaveLength(1);
+    expect(diagnostics.body).not.toHaveProperty("lastSkipReason");
+
+    await db
+      .update(schema.member)
+      .set({ role: "admin" })
+      .where(
+        and(eq(schema.member.organizationId, owner.orgId), eq(schema.member.userId, owner.userId)),
+      );
+    await owner.agent.get(url).expect(200);
+    await db
+      .update(schema.member)
+      .set({ role: "member" })
+      .where(
+        and(eq(schema.member.organizationId, owner.orgId), eq(schema.member.userId, owner.userId)),
+      );
+    await owner.agent.get(url).expect(403);
+  });
 });

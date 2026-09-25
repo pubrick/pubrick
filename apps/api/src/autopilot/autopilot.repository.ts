@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { type AutopilotConfig, autopilotDefaults } from "@pubrick/shared";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { type AutopilotConfig, autopilotDefaults, LIVE_RUN_STATUSES } from "@pubrick/shared";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
@@ -117,13 +117,29 @@ export class AutopilotRepository {
       .select({
         id: schema.autopilotDispatches.id,
         topicId: schema.autopilotDispatches.topicId,
+        topicTitle: schema.topics.title,
         runId: schema.autopilotDispatches.runId,
         localDate: schema.autopilotDispatches.localDate,
         createdAt: schema.autopilotDispatches.createdAt,
         runStatus: schema.pipelineRuns.status,
       })
       .from(schema.autopilotDispatches)
-      .innerJoin(schema.pipelineRuns, eq(schema.autopilotDispatches.runId, schema.pipelineRuns.id))
+      .innerJoin(
+        schema.pipelineRuns,
+        and(
+          eq(schema.autopilotDispatches.runId, schema.pipelineRuns.id),
+          eq(schema.pipelineRuns.orgId, orgId),
+          eq(schema.pipelineRuns.brandId, brandId),
+        ),
+      )
+      .innerJoin(
+        schema.topics,
+        and(
+          eq(schema.autopilotDispatches.topicId, schema.topics.id),
+          eq(schema.topics.orgId, orgId),
+          eq(schema.topics.brandId, brandId),
+        ),
+      )
       .where(
         and(
           eq(schema.autopilotDispatches.orgId, orgId),
@@ -132,6 +148,146 @@ export class AutopilotRepository {
       )
       .orderBy(desc(schema.autopilotDispatches.createdAt), desc(schema.autopilotDispatches.id))
       .limit(50);
+  }
+
+  /** Observed counters only. The scheduler does not persist skip decisions. */
+  async diagnostics(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    const [row] = await db
+      .select({
+        enabled: schema.autopilotConfigs.enabled,
+        timezone: schema.autopilotConfigs.timezone,
+        startHour: schema.autopilotConfigs.startHour,
+        quietStartHour: schema.autopilotConfigs.quietStartHour,
+        quietEndHour: schema.autopilotConfigs.quietEndHour,
+        dailyRunLimit: schema.autopilotConfigs.dailyRunLimit,
+        dailySpendLimitUsd: schema.autopilotConfigs.dailySpendLimitUsd,
+      })
+      .from(schema.autopilotConfigs)
+      .where(
+        and(eq(schema.autopilotConfigs.orgId, orgId), eq(schema.autopilotConfigs.brandId, brandId)),
+      )
+      .limit(1);
+    const config = row ?? autopilotDefaults;
+    const [clock] = await db
+      .select({
+        day: sql<string>`(timezone(${config.timezone}, now())::date)::text`,
+        hour: sql<number>`extract(hour from timezone(${config.timezone}, now()))::int`,
+      })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+      .limit(1);
+    const day = clock?.day;
+    if (!day) throw new Error("Autopilot clock unavailable");
+
+    const [quota] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.autopilotDispatches)
+      .where(
+        and(
+          eq(schema.autopilotDispatches.orgId, orgId),
+          eq(schema.autopilotDispatches.brandId, brandId),
+          eq(schema.autopilotDispatches.localDate, day),
+        ),
+      );
+    // These predicates deliberately match the worker's admission queries.
+    const [spend] = await db
+      .select({
+        usd: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}) filter (where ${schema.usageLedger.costSource} <> 'unknown'), 0)`,
+        unpriced: sql<number>`count(*) filter (where ${schema.usageLedger.costSource} = 'unknown' or ${schema.usageLedger.costUsd} is null)::int`,
+      })
+      .from(schema.usageLedger)
+      .innerJoin(schema.pipelineRuns, eq(schema.usageLedger.runId, schema.pipelineRuns.id))
+      .where(
+        and(
+          eq(schema.usageLedger.orgId, orgId),
+          eq(schema.pipelineRuns.brandId, brandId),
+          sql`(timezone(${config.timezone}, ${schema.usageLedger.createdAt} at time zone 'UTC')::date)::text = ${day}`,
+        ),
+      );
+    const [losses] = await db
+      .select({
+        calls: sql<number>`coalesce(sum(${schema.pipelineRuns.unrecordedCalls}), 0)::int`,
+        unknownRunCount: sql<number>`count(*) filter (where ${schema.pipelineRuns.unrecordedCalls} is null)::int`,
+      })
+      .from(schema.pipelineRuns)
+      .where(
+        and(
+          eq(schema.pipelineRuns.orgId, orgId),
+          eq(schema.pipelineRuns.brandId, brandId),
+          sql`(timezone(${config.timezone}, ${schema.pipelineRuns.createdAt} at time zone 'UTC')::date)::text = ${day}`,
+        ),
+      );
+    const [pending] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.topics)
+      .leftJoin(
+        schema.autopilotDispatches,
+        eq(schema.topics.id, schema.autopilotDispatches.topicId),
+      )
+      .where(
+        and(
+          eq(schema.topics.orgId, orgId),
+          eq(schema.topics.brandId, brandId),
+          eq(schema.topics.status, "approved"),
+          isNull(schema.topics.plannedDate),
+          isNull(schema.autopilotDispatches.id),
+        ),
+      );
+    const [active] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.autopilotDispatches)
+      .innerJoin(schema.pipelineRuns, eq(schema.autopilotDispatches.runId, schema.pipelineRuns.id))
+      .where(
+        and(
+          eq(schema.autopilotDispatches.orgId, orgId),
+          eq(schema.autopilotDispatches.brandId, brandId),
+          inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
+        ),
+      );
+    const waitingTopics = await db
+      .select({
+        id: schema.topics.id,
+        title: schema.topics.title,
+        createdAt: schema.topics.createdAt,
+      })
+      .from(schema.topics)
+      .leftJoin(
+        schema.autopilotDispatches,
+        eq(schema.topics.id, schema.autopilotDispatches.topicId),
+      )
+      .where(
+        and(
+          eq(schema.topics.orgId, orgId),
+          eq(schema.topics.brandId, brandId),
+          eq(schema.topics.status, "approved"),
+          isNull(schema.topics.plannedDate),
+          isNull(schema.autopilotDispatches.id),
+        ),
+      )
+      .orderBy(asc(schema.topics.createdAt), asc(schema.topics.id))
+      .limit(10);
+    return {
+      asOf: new Date().toISOString(),
+      localDate: day,
+      localHour: clock.hour,
+      enabled: config.enabled,
+      timezone: config.timezone,
+      startHour: config.startHour,
+      quietStartHour: config.quietStartHour,
+      quietEndHour: config.quietEndHour,
+      dailyRuns: { used: quota?.count ?? 0, limit: config.dailyRunLimit },
+      generationSpend: {
+        knownUsd: Number(spend?.usd ?? 0),
+        thresholdUsd: Number(config.dailySpendLimitUsd),
+        unpricedCalls: spend?.unpriced ?? 0,
+        lostCallCount: losses?.calls ?? 0,
+        legacyUnknownRuns: losses?.unknownRunCount ?? 0,
+      },
+      approvedWaiting: { count: pending?.count ?? 0, topics: waitingTopics },
+      activeAutomaticRuns: active?.count ?? 0,
+      recentDispatches: (await this.history(orgId, brandId)).slice(0, 10),
+    };
   }
 
   async planTopics(orgId: string, brandId: string) {

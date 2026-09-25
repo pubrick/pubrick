@@ -44,6 +44,13 @@ export class AutopilotController {
     return this.autopilot.history(orgId, brandId);
   }
 
+  @Get("diagnostics")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  diagnostics(@OrgId() orgId: string, @Param("brandId", ParseUUIDPipe) brandId: string) {
+    return this.autopilot.diagnostics(orgId, brandId);
+  }
+
   @Post("plan-topics")
   @BrandScope({ kind: "brand", source: "param", roles: "manager" })
   @HttpCode(202)

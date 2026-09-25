@@ -17,11 +17,13 @@ import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { AutopilotDiagnostics } from "./diagnostics";
 
 type Channel = { id: string; name: string; platform: string };
 type Dispatch = {
   id: string;
   topicId: string;
+  topicTitle: string;
   runId: string;
   localDate: string;
   runStatus: string;
@@ -335,6 +337,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
           </form>
         </Card>
       )}
+      <AutopilotDiagnostics brandId={id} />
       <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
       <Card padded={false}>
         {history.length === 0 ? (
@@ -348,10 +351,10 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
                   href={`/${locale}/content/runs/${entry.runId}`}
                   className="text-accent underline"
                 >
-                  {t("runLink", { date: entry.localDate })}
+                  {entry.topicTitle || t("runLink", { date: entry.localDate })}
                 </Link>
               }
-              meta={new Date(entry.createdAt).toLocaleString(locale)}
+              meta={`${entry.localDate} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
               trailing={
                 <StatusBadge
                   status={
