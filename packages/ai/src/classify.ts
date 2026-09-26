@@ -214,10 +214,12 @@ export function redactSecrets(message: string, secret?: string): string {
       // `Authorization: Bearer …` — OpenRouter and most OpenAI-compatible
       // providers.
       .replace(/(\bBearer\s+)[\w.\-~+/=]+/gi, "$1***")
-      // The two key shapes our two supported providers actually issue, for the
+      // Key shapes our two supported providers actually issue, for the
       // case where the key is in the prose rather than in a URL or a header.
       .replace(/\bsk-[\w-]{8,}/gi, "sk-***")
       .replace(/\bAIza[\w-]{10,}/g, "AIza***")
+      // Google's newer authorization keys (AQ.) replaced standard AIza keys.
+      .replace(/\bAQ\.[\w-]{10,}/g, "AQ.***")
   );
 }
 

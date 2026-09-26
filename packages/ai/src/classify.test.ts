@@ -425,6 +425,9 @@ describe("classifyAiError", () => {
       expect(redactSecrets("API key not valid: AIzaSyA1b2C3d4E5f6G7h8I9")).toBe(
         "API key not valid: AIza***",
       );
+      expect(redactSecrets("API key not valid: AQ.ExampleAuthKey1234567890")).toBe(
+        "API key not valid: AQ.***",
+      );
     });
 
     it("leaves an ordinary sentence alone, so a log stays worth reading", () => {

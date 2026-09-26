@@ -107,6 +107,34 @@ concurrently before transactional migrations. A large usage ledger can make
 startup take longer, but metering writes can continue while PostgreSQL builds
 the index. An interrupted build is retried at the next startup.
 
+## Connect Gemini
+
+Create a Gemini API key on the [Google AI Studio API keys page](https://aistudio.google.com/apikey).
+AI Studio calls it an API key; there is no separate AI Studio credential for
+Pubrick. In **Settings → AI provider**, choose **Google**, paste the key into
+**API key**, save it, and use **Test**. The key belongs in Pubrick's organization
+settings, not in `.env`. Only workspace owners and admins can manage it.
+
+Google now creates **authorization keys** by default. Check the **Key Type**
+column in AI Studio and use an active **Auth** key; older **Standard** keys may
+be rejected, especially when unrestricted. The environment variable name
+(`GOOGLE_API_KEY`, `GEMINI_API_KEY`, or another name) does not identify the key
+type. Paste only the key value, without `NAME=`. See Google's
+[key migration guide](https://ai.google.dev/gemini-api/docs/api-key#migrate-to-an-auth-key).
+
+The default text model is `gemini-3.8-flash`. A previously saved custom
+**Default model** in **Advanced** remains in effect until you change or clear
+it. Google lists 3.8 Flash as a stable model with structured output and
+`low`/`medium`/`high` thinking levels; it does not generate images. The
+[Gemini API pricing page](https://ai.google.dev/gemini-api/docs/pricing)
+shows the current token rates and free/paid tiers. Paid tier access requires
+billing on the Google project that owns the key.
+
+If the Google endpoint is unavailable from your server, set `GOOGLE_API_PROXY`
+in `.env` to an HTTP(S) forward proxy URL with an explicit port, then recreate
+both `api` and `worker` containers. Pubrick sends the organization's key through
+that proxy for Google requests; keep the proxy URL and key private.
+
 ## Rotating `APP_ENCRYPTION_KEY`
 
 `APP_ENCRYPTION_KEY` is a **ring**: one or more base64 keys separated by commas,

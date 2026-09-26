@@ -39,7 +39,7 @@ export type AiCredential = {
 /**
  * The model used when neither the call nor the credential names one.
  *
- * Gemini 3.7 Flash is the house default: it is fast, cheap, and it does
+ * Gemini 3.8 Flash is the house default: it is fast, cheap, and it does
  * structured output. The OpenRouter default routes to the same model through
  * their catalogue so a user switching providers gets the same behaviour rather
  * than a surprise.
@@ -51,8 +51,8 @@ export type AiCredential = {
  * first.
  */
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
-  google: "gemini-3.7-flash",
-  openrouter: "google/gemini-3.7-flash",
+  google: "gemini-3.8-flash",
+  openrouter: "google/gemini-3.8-flash",
 };
 
 /**
@@ -91,9 +91,8 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
  * a reasoning task.
  *
  * `"low"`, not `"minimal"`, and the difference is not a matter of taste.
- * Google's own thinking-level table (ai.google.dev/gemini-api/docs/thinking,
- * read 2026-09-04) lists `low, medium, high` for `gemini-3.7-flash` — the house
- * default — while `minimal` appears only for 3.6 Flash and the 3.5 pair. A
+ * Google's model page (ai.google.dev/gemini-api/docs/models/gemini-3.8-flash,
+ * read 2026-09-26) lists `low, medium, high` for the house default. A
  * `minimal` sent to the very model this exists for is a 400, and a 400 on the
  * Test button does not read as "we asked for something the model does not
  * support"; it reads as "your API key was refused". The whole job of that

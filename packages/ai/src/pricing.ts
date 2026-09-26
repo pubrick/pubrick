@@ -2,7 +2,7 @@
  * Local price table.
  *
  * Rates are stored with an effective date rather than as bare numbers because
- * Gemini 3.7 and 3.6 Flash are on an explicitly introductory price that doubles
+ * Gemini 3.8, 3.7 and 3.6 Flash are on an explicitly introductory price that doubles
  * on 2027-01-01. Storing the future rate now makes that change data, not a code
  * change made in a hurry on a January morning.
  *
@@ -15,7 +15,8 @@
  * WHAT IS DELIBERATELY MISSING IS AS LOAD-BEARING AS WHAT IS HERE. Every rate
  * below was read off Google's own pricing page
  * (https://ai.google.dev/gemini-api/docs/pricing) on 2026-09-02; a model whose
- * rate could not be confirmed there is absent, and prices as unknown. "Cost not
+ * rate could not be confirmed there is absent, and prices as unknown. Gemini
+ * 3.8 Flash was checked against the same page on 2026-09-26. "Cost not
  * reported" carries no information, but it is at least true — a number invented
  * for a model nobody checked would be believed.
  *
@@ -59,7 +60,7 @@ const ALWAYS = "1970-01-01";
 const INTRO_ENDS = "2027-01-01";
 
 /**
- * The Gemini 3 Flash tier — 3.7 and 3.6, which Google prices identically.
+ * The Gemini 3 Flash tier — 3.8, 3.7 and 3.6, which Google prices identically.
  * $0.75 / $3.75 per 1M is introductory "through December 31, 2026" and becomes
  * $1.50 / $7.50 on 2027-01-01, per Google's own pricing page.
  */
@@ -86,14 +87,15 @@ function flat(inputPerMTok: number, outputPerMTok: number): RateWindow[] {
  * undercharge it.
  *
  * `gemini-3.7-flash-lite` and `gemini-3.7-pro` are NOT here and are not
- * oversights: neither exists. Google's model list for the 3 family is 3.1 Pro,
- * 3.7/3.6/3.5 Flash and 3.5/3.1 Flash-Lite, so those two ids reach a provider
+ * oversights: neither exists. Google's model list for the 3 family includes 3.1 Pro,
+ * 3.8/3.7/3.6/3.5 Flash and 3.5/3.1 Flash-Lite, so those two ids reach a provider
  * as a 404 (`model_not_found`) rather than as a run to price. Should Google
  * ship a 3.7 Lite, the family rule below refuses to lend it Flash's rate — a
  * Lite has been between two and eight times cheaper than its Flash in every
  * generation, and guessing high is still guessing.
  */
 const GOOGLE_RATES: Record<string, RateWindow[]> = {
+  "gemini-3.8-flash": GEMINI_3_FLASH_TIER,
   "gemini-3.7-flash": GEMINI_3_FLASH_TIER,
   "gemini-3.6-flash": GEMINI_3_FLASH_TIER,
   "gemini-3.5-flash": flat(1.5, 9),

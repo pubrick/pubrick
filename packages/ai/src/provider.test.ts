@@ -22,7 +22,7 @@ describe("resolveModel", () => {
   it("builds an OpenRouter model, whose ids are vendor/model", () => {
     const model = resolveModel(openrouter);
     expect(model.provider).toBe("openrouter");
-    expect(model.modelId).toBe("google/gemini-3.7-flash");
+    expect(model.modelId).toBe("google/gemini-3.8-flash");
   });
 
   it("prefers the explicit model id over the credential's default", () => {
@@ -62,10 +62,9 @@ describe("resolveModel", () => {
  * screen that exists to answer that question.
  */
 describe("probeThinkingOptions", () => {
-  it("asks Google for the lowest level gemini-3.7-flash actually accepts", () => {
-    // NOT "minimal". Google's thinking-level table (read 2026-09-04) lists
-    // `low, medium, high` for 3.7 Flash and offers `minimal` only on 3.6 and
-    // the 3.5 pair — so `minimal` on the house default is a 400, which this
+  it("asks Google for the lowest level gemini-3.8-flash actually accepts", () => {
+    // NOT "minimal". Google's model page (read 2026-09-26) lists
+    // `low, medium, high` for 3.8 Flash — so `minimal` on the house default is a 400, which this
     // button would report as a rejected key.
     expect(probeThinkingOptions("google", DEFAULT_MODELS.google)).toEqual({
       google: { thinkingConfig: { thinkingLevel: "low" } },
@@ -101,7 +100,7 @@ describe("probeThinkingOptions", () => {
   });
 
   it("does not lend one provider's default to the other", () => {
-    // The ids differ (`gemini-3.7-flash` vs `google/gemini-3.7-flash`), and a
+    // The ids differ (`gemini-3.8-flash` vs `google/gemini-3.8-flash`), and a
     // check that compared against both providers' defaults at once would send
     // Google an id OpenRouter routes.
     expect(probeThinkingOptions("google", DEFAULT_MODELS.openrouter)).toBeUndefined();
