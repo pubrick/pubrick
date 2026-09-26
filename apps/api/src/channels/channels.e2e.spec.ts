@@ -214,6 +214,30 @@ describe.skipIf(!url)("channels e2e", () => {
         })
         .expect(400);
     });
+
+    it("creates a T-J manual channel without credentials", async () => {
+      const agent = await orgAgent();
+      const brand = await agent.post("/api/brands").send({ name: "T-J editorial" }).expect(201);
+      const created = await agent
+        .post("/api/channels")
+        .send({ brandId: brand.body.id, platform: "t_j", name: "T-J" })
+        .expect(201);
+      expect(created.body).toMatchObject({ platform: "t_j", name: "T-J" });
+      expect(created.body.credentialsEncrypted).toBeUndefined();
+      await agent
+        .patch(`/api/channels/${created.body.id}`)
+        .send({ credentials: { token: "unexpected" } })
+        .expect(400);
+      await agent
+        .post("/api/channels")
+        .send({
+          brandId: brand.body.id,
+          platform: "t_j",
+          name: "Bad",
+          credentials: { token: "unexpected" },
+        })
+        .expect(400);
+    });
   });
 
   it("rejects a channel for another org's brand", async () => {

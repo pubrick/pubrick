@@ -4505,6 +4505,23 @@ describe("a post whose channels disagreed", () => {
 });
 
 describe("VC.ru manual publication", () => {
+  it("points a ready T—Ж article to the submission guide without claiming publication", async () => {
+    const manualChannel: Channel = { id: "ch1", platform: "t_j", name: "T—Ж" };
+    const current = makeItem({
+      status: "approved",
+      adaptations: [makeAdaptation({ status: "manual_ready", body: "Approved body." })],
+    });
+    installBaseHandlers({ current }, [], undefined, [manualChannel]);
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = within(resultsList());
+    expect(results.getByText(en.Publish.manualTjInstructions)).toBeInTheDocument();
+    expect(results.getByRole("link", { name: "Open T—Ж" })).toHaveAttribute(
+      "href",
+      "https://t-j.ru/manual/",
+    );
+  });
+
   it("exports a Dzen draft without treating RSS as a publication receipt", async () => {
     const manualChannel: Channel = { id: "ch1", platform: "dzen", name: "Dzen" };
     const current = makeItem({

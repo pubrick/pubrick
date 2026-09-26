@@ -38,6 +38,7 @@ describe("manual publication URLs", () => {
     ["youtube", "https://youtu.be/example"],
     ["rutube", "https://rutube.ru/video/example/"],
     ["tenchat", "https://tenchat.ru/media/example"],
+    ["t_j", "https://t-j.ru/example-article/"],
   ] as const)("accepts a %s post on its own host", (platform, url) => {
     expect(manualPublicationSchema.safeParse({ url }).success).toBe(true);
     expect(isManualPublicationUrl(platform, url)).toBe(true);
@@ -54,6 +55,17 @@ describe("manual publication URLs", () => {
     expect(manualPublicationSchema.safeParse({ url: "https://rutube.ru////" }).success).toBe(false);
     expect(isManualPublicationUrl("tenchat", "https://user:pass@tenchat.ru/post/1")).toBe(false);
     expect(isManualPublicationUrl("vc_ru", "https://vc.ru:444/post/1")).toBe(false);
+    for (const link of [
+      "http://t-j.ru/example/",
+      "https://t-j.ru.evil.test/example/",
+      "https://www.t-j.ru/example/",
+      "https://t-j.ru:444/example/",
+      "https://t-j.ru/",
+      "https://t-j.ru////",
+      "https://user:password@t-j.ru/example/",
+    ]) {
+      expect(isManualPublicationUrl("t_j", link)).toBe(false);
+    }
   });
 });
 

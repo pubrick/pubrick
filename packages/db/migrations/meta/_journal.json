@@ -764,6 +764,13 @@
       "when": 1790408546343,
       "tag": "0109_dzen_rss_handoff",
       "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1790409135576,
+      "tag": "0110_tj_manual_publication",
+      "breakpoints": true
     }
   ]
 }

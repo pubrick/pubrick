@@ -9,6 +9,7 @@ export const PLATFORM_IDS = [
   "youtube",
   "rutube",
   "tenchat",
+  "t_j",
   "max",
   "bluesky",
   "mastodon",
@@ -60,6 +61,7 @@ export const MANUAL_PLATFORM_IDS = [
   "youtube",
   "rutube",
   "tenchat",
+  "t_j",
 ] as const;
 export type ManualPlatformId = (typeof MANUAL_PLATFORM_IDS)[number];
 
@@ -90,6 +92,7 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   youtube: [],
   rutube: [],
   tenchat: [],
+  t_j: [],
   max: ["accessToken", "chatId"],
   bluesky: ["handle", "appPassword"],
   mastodon: ["instanceUrl", "accessToken"],

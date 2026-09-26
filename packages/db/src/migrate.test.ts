@@ -2477,7 +2477,7 @@ describe.skipIf(!url)("runMigrations", () => {
         await pool.query("UPDATE channels SET platform = 'dzen'");
         await pool.query("UPDATE channels SET credentials_encrypted = 'legacy encrypted token'");
         await pool.query("UPDATE channels SET credentials_encrypted = NULL");
-        for (const platform of ["instagram", "youtube", "rutube", "tenchat"]) {
+        for (const platform of ["instagram", "youtube", "rutube", "tenchat", "t_j"]) {
           await pool.query(`UPDATE channels SET platform = '${platform}'`);
           expect(
             await refusal(pool, "UPDATE channels SET credentials_encrypted = 'unexpected'"),

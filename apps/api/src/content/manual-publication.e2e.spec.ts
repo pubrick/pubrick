@@ -175,6 +175,7 @@ describe.skipIf(!url)("manual publication e2e", () => {
     ["youtube", "https://www.youtube.com/watch?v=reviewed"],
     ["rutube", "https://rutube.ru/video/reviewed-post/"],
     ["tenchat", "https://tenchat.ru/media/reviewed-post"],
+    ["t_j", "https://t-j.ru/reviewed-post/"],
   ])(
     "prepares %s without a send and records only its confirmed link",
     async (platform, publicUrl) => {
@@ -216,6 +217,16 @@ describe.skipIf(!url)("manual publication e2e", () => {
         .expect(200);
       expect(approved.body.adaptations[0].status).toBe("manual_ready");
       await agent.post(endpoint).send({ url: "https://vc.ru/post/on-wrong-platform" }).expect(400);
+      if (platform === "t_j") {
+        for (const invalid of [
+          "http://t-j.ru/reviewed-post/",
+          "https://t-j.ru.evil.test/reviewed-post/",
+          "https://www.t-j.ru/reviewed-post/",
+          "https://t-j.ru/",
+        ]) {
+          await agent.post(endpoint).send({ url: invalid }).expect(400);
+        }
+      }
 
       const { db, pool } = createDb(url as string);
       try {
