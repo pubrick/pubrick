@@ -1148,7 +1148,7 @@
     "aiEmpty": "Ключа пока нет — добавьте его ниже, чтобы Pubrick мог генерировать контент.",
     "aiProviderLabel": "Провайдер",
     "aiKeyLabel": "API-ключ",
-    "aiGoogleKeyHint": "Используйте Auth API-ключ Gemini из Google AI Studio.",
+    "aiGoogleKeyHint": "Используйте действующий API-ключ Gemini из Google AI Studio.",
     "aiGoogleKeyLink": "Получить ключ",
     "aiModelLabel": "Модель по умолчанию",
     "aiModelPlaceholder": "Модель провайдера",

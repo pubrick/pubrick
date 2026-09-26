@@ -1148,7 +1148,7 @@
     "aiEmpty": "No API key yet — add one below so Pubrick can generate content.",
     "aiProviderLabel": "Provider",
     "aiKeyLabel": "API key",
-    "aiGoogleKeyHint": "Use a Gemini Auth API key from Google AI Studio.",
+    "aiGoogleKeyHint": "Use an active Gemini API key from Google AI Studio.",
     "aiGoogleKeyLink": "Get a key",
     "aiModelLabel": "Default model",
     "aiModelPlaceholder": "Provider default",
