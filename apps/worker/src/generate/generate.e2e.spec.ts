@@ -119,6 +119,11 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     boss = new (PgBoss as PgBossCtor)(url as string);
     boss.on("error", (err: Error) => console.error("pg-boss error (generate.e2e.spec)", err));
     await boss.start();
+    const claimQueues = await import("@pubrick/shared");
+    await boss.createQueue(claimQueues.CLAIM_REVIEW_DLQ);
+    await boss.createQueue(claimQueues.CLAIM_REVIEW_QUEUE, {
+      ...claimQueues.CLAIM_REVIEW_QUEUE_OPTIONS,
+    });
 
     const { GenerateRepository } = (await import("./generate.repository")) as {
       GenerateRepository: GenerateRepositoryCtor;
@@ -309,6 +314,12 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .from(schema.contentItems)
       .where(eq(schema.contentItems.id, run?.contentItemId as string));
     expect(item).toMatchObject({ body: EDITED, status: "draft", origin: "ai", qualityScore: 0.84 });
+    expect(
+      await db
+        .select({ id: schema.claimReviews.id })
+        .from(schema.claimReviews)
+        .where(eq(schema.claimReviews.contentItemId, item?.id as string)),
+    ).toHaveLength(0);
 
     const adaptations = await db
       .select()
@@ -852,6 +863,69 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       }
     }, 80_000);
   });
+
+  it("queues advisory evidence for the exact saved AI draft only when the brand opts in and both keys exist", async () => {
+    const withoutSearch = await seed(1);
+    await db
+      .update(schema.brands)
+      .set({ automaticClaimEvidence: true })
+      .where(eq(schema.brands.id, withoutSearch.brandId));
+    active = scriptedModel({ editor: () => ({ body: EDITED, changes: [], qualityScore: 0.84 }) });
+    expect(
+      (await waitForJobState(await enqueue(withoutSearch.runId, withoutSearch.orgId))).state,
+    ).toBe("completed");
+    const firstRun = await runRow(withoutSearch.runId);
+    expect(
+      await db
+        .select({ id: schema.claimReviews.id })
+        .from(schema.claimReviews)
+        .where(eq(schema.claimReviews.contentItemId, firstRun?.contentItemId as string)),
+    ).toHaveLength(0);
+
+    const admitted = await seed(1);
+    await db
+      .update(schema.brands)
+      .set({ automaticClaimEvidence: true })
+      .where(eq(schema.brands.id, admitted.brandId));
+    await db.insert(schema.searchCredentials).values({
+      orgId: admitted.orgId,
+      credentialsEncrypted: encryptJson(
+        { apiKey: "search-key-for-test" },
+        process.env.APP_ENCRYPTION_KEY as string,
+      ),
+      folderId: "folder-for-test",
+    });
+    active = scriptedModel({ editor: () => ({ body: EDITED, changes: [], qualityScore: 0.84 }) });
+    expect((await waitForJobState(await enqueue(admitted.runId, admitted.orgId))).state).toBe(
+      "completed",
+    );
+    const run = await runRow(admitted.runId);
+    const [review] = await db
+      .select({
+        id: schema.claimReviews.id,
+        bodyHash: schema.claimReviews.bodyHash,
+        trigger: schema.claimReviews.trigger,
+        status: schema.claimReviews.status,
+      })
+      .from(schema.claimReviews)
+      .where(eq(schema.claimReviews.contentItemId, run?.contentItemId as string));
+    expect(review).toMatchObject({ trigger: "automatic", status: "queued" });
+    expect(review?.bodyHash).toBe(
+      (await import("node:crypto")).createHash("sha256").update(EDITED).digest("hex"),
+    );
+    const queued = await pool.query<{
+      name: string;
+      group_id: string;
+      data: { orgId: string; reviewId: string };
+    }>("select name, group_id, data from pgboss.job where id = $1", [review?.id]);
+    expect(queued.rows).toEqual([
+      {
+        name: "claim-review",
+        group_id: admitted.orgId,
+        data: { orgId: admitted.orgId, reviewId: review?.id },
+      },
+    ]);
+  }, 40_000);
 
   it("completes the job for a permanent failure instead of retrying a run that cannot succeed", async () => {
     const seeded = await seed(1);

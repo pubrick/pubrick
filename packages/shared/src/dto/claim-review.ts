@@ -16,6 +16,7 @@ export type ClaimReviewOutcome = (typeof CLAIM_REVIEW_OUTCOMES)[number];
 export const CLAIM_REVIEW_FAILURES = [
   "no_ai_key",
   "no_search_key",
+  "automatic_disabled",
   "source_changed",
   "provider_unavailable",
   "invalid_response",
@@ -46,6 +47,7 @@ export const claimReviewDtoSchema = z.strictObject({
   id: z.uuid(),
   contentItemId: z.uuid(),
   status: z.enum(CLAIM_REVIEW_STATUSES),
+  trigger: z.enum(["manual", "automatic"]),
   stale: z.boolean(),
   claims: z.array(claimReviewClaimSchema),
   errorCode: z.enum(CLAIM_REVIEW_FAILURES).nullable(),

@@ -53,6 +53,7 @@ type Brand = {
   audience: string | null;
   contentLanguage: string;
   linkPolicy: BrandLinkPolicy | null;
+  automaticClaimEvidence: boolean;
 };
 type VerifyResult = { ok: true; account: string; target: string } | { ok: false; reason: string };
 
@@ -128,6 +129,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // roles can inspect granted brands, while only managers control team access.
   const canEditBrandSettings = canManageAccess || activeMember?.role === "member";
   const [brand, setBrand] = useState<Brand | null>(null);
+  const [claimEvidenceBusy, setClaimEvidenceBusy] = useState(false);
+  const [claimEvidenceError, setClaimEvidenceError] = useState<string | null>(null);
   const [brandRemovalOpen, setBrandRemovalOpen] = useState(false);
   const [brandRemovalName, setBrandRemovalName] = useState("");
   const [brandRemovalError, setBrandRemovalError] = useState<string | null>(null);
@@ -482,6 +485,23 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     }
   }
 
+  async function toggleAutomaticClaimEvidence() {
+    if (!brand || claimEvidenceBusy || !canEditBrandSettings) return;
+    setClaimEvidenceBusy(true);
+    setClaimEvidenceError(null);
+    try {
+      const updated = await api<Brand>(`/api/brands/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ automaticClaimEvidence: !brand.automaticClaimEvidence }),
+      });
+      setBrand(updated);
+    } catch (err) {
+      setClaimEvidenceError(describeError(err));
+    } finally {
+      setClaimEvidenceBusy(false);
+    }
+  }
+
   async function testConnection(channelId: string) {
     setTestResults((prev) => ({ ...prev, [channelId]: "loading" }));
     try {
@@ -685,6 +705,36 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           {tb("knowledgeOpen")}
         </Link>
       </Card>
+
+      <Advanced
+        className="mb-6"
+        label={tb("automaticClaimEvidenceTitle")}
+        dirty={brand?.automaticClaimEvidence ?? false}
+      >
+        <div className="flex items-start justify-end gap-3">
+          {canEditBrandSettings && (
+            <Button
+              size="sm"
+              variant="secondary"
+              type="button"
+              disabled={!brand || claimEvidenceBusy}
+              onClick={() => void toggleAutomaticClaimEvidence()}
+              aria-label={`${tb("automaticClaimEvidenceTitle")}: ${brand?.automaticClaimEvidence ? tb("automaticClaimEvidenceDisable") : tb("automaticClaimEvidenceEnable")}`}
+            >
+              {brand?.automaticClaimEvidence
+                ? tb("automaticClaimEvidenceDisable")
+                : tb("automaticClaimEvidenceEnable")}
+            </Button>
+          )}
+        </div>
+        <p className="mt-2 text-sm text-fg-secondary">{tb("automaticClaimEvidenceHint")}</p>
+        <p className="mt-2 text-sm text-fg-secondary">{tb("automaticClaimEvidenceCost")}</p>
+        {claimEvidenceError && (
+          <p role="alert" className="mt-2 text-sm text-danger">
+            {claimEvidenceError}
+          </p>
+        )}
+      </Advanced>
 
       <h2 id="channels" className="mb-3 scroll-mt-6 text-lg font-semibold text-fg">
         {t("title")}

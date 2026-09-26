@@ -102,6 +102,7 @@ describe("creating a brand (Step 4)", () => {
     expect(brandCreateSchema.parse(parsedBody(postCall))).toEqual({
       name: "New Co",
       contentLanguage: "en",
+      automaticClaimEvidence: false,
     });
 
     await screen.findByRole("link", { name: "New Co" });
@@ -148,7 +149,7 @@ describe("creating a brand (Step 4)", () => {
       audience: "Morning travelers",
       contentLanguage: "es",
     });
-    expect(brandCreateSchema.parse(body)).toEqual(body);
+    expect(brandCreateSchema.parse(body)).toEqual({ ...body, automaticClaimEvidence: false });
   });
 
   it("shows the server's error and does not clear the field when creation fails", async () => {

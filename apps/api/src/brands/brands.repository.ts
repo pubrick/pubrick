@@ -25,6 +25,7 @@ const PUBLIC_COLUMNS = {
   audience: schema.brands.audience,
   contentLanguage: schema.brands.contentLanguage,
   linkPolicy: schema.brands.linkPolicy,
+  automaticClaimEvidence: schema.brands.automaticClaimEvidence,
   createdAt: schema.brands.createdAt,
   updatedAt: schema.brands.updatedAt,
 };

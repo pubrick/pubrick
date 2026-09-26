@@ -100,6 +100,7 @@ describe.skipIf(!url)("claim review e2e", () => {
     expect(first).toMatchObject({
       contentItemId: itemId,
       status: "queued",
+      trigger: "manual",
       stale: false,
       claims: [],
       errorCode: null,

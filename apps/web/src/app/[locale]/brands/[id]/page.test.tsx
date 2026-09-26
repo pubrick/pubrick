@@ -44,6 +44,41 @@ beforeEach(() => {
   } as never);
 });
 
+describe("automatic claim evidence brand setting", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows the paid default-off setting and sends a single explicit opt-in", async () => {
+    const patches: unknown[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/api/channels?brandId=")) return jsonResponse(200, []);
+      if (url.endsWith("/api/brands/b1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        patches.push(body);
+        return jsonResponse(200, { ...brand, automaticClaimEvidence: true });
+      }
+      if (url.endsWith("/api/brands/b1"))
+        return jsonResponse(200, { ...brand, automaticClaimEvidence: false });
+      return jsonResponse(200, {});
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+    await userEvent.setup().click(screen.getByText(en.Brands.automaticClaimEvidenceTitle));
+    expect(screen.getByText(en.Brands.automaticClaimEvidenceCost)).toBeVisible();
+    await userEvent.setup().click(
+      await screen.findByRole("button", {
+        name: `${en.Brands.automaticClaimEvidenceTitle}: ${en.Brands.automaticClaimEvidenceEnable}`,
+      }),
+    );
+    expect(patches).toEqual([{ automaticClaimEvidence: true }]);
+    expect(brandUpdateSchema.parse(patches[0]).automaticClaimEvidence).toBe(true);
+    expect(
+      screen.getByRole("button", {
+        name: `${en.Brands.automaticClaimEvidenceTitle}: ${en.Brands.automaticClaimEvidenceDisable}`,
+      }),
+    ).toBeVisible();
+  });
+});
+
 describe("VK automatic metrics setting", () => {
   beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 

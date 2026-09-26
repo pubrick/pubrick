@@ -460,11 +460,14 @@ describe("QueueService.registerAll", () => {
     // fencing. `signal` is pg-boss's abort for THIS delivery, fired at the expiry
     // that lets a second handler start; dropping it here would silently disarm
     // the earliest stop the handler has.
-    expect(generate.handle).toHaveBeenCalledWith({
-      id: "job-1",
-      data: { runId: "run-1", orgId: "org-1" },
-      signal,
-    });
+    expect(generate.handle).toHaveBeenCalledWith(
+      {
+        id: "job-1",
+        data: { runId: "run-1", orgId: "org-1" },
+        signal,
+      },
+      boss,
+    );
   });
 
   it("puts the abandoned-run sweep on a schedule and consumes its ticks", async () => {

@@ -118,7 +118,12 @@
     "remove": "Remover",
     "removeCancel": "Cancelar",
     "removeConfirmHint": "Digite o nome exato para remover {name} (ID {id}). Esta ação não pode ser desfeita.",
-    "removeConfirmLabel": "Nome da marca: {name}"
+    "removeConfirmLabel": "Nome da marca: {name}",
+    "automaticClaimEvidenceTitle": "Evidências automáticas de afirmações",
+    "automaticClaimEvidenceHint": "Para cada novo rascunho de IA, inicia uma pesquisa consultiva sobre o texto salvo quando ambas as chaves do espaço de trabalho estiverem disponíveis. Não edita nem certifica o rascunho.",
+    "automaticClaimEvidenceCost": "Cada rascunho pode usar até cinco pesquisas pagas do Yandex e chamadas de IA cobradas nas chaves do espaço de trabalho. Desativado por padrão.",
+    "automaticClaimEvidenceEnable": "Ativar",
+    "automaticClaimEvidenceDisable": "Desativar"
   },
   "BrandAccess": {
     "roleOwner": "Proprietário",
@@ -1205,7 +1210,7 @@
     "title": "API de pesquisa",
     "back": "Voltar às definições",
     "provider": "Yandex Search API",
-    "hint": "Guarde uma chave da organização e o ID da pasta. O Pubrick pesquisa apenas quando um editor pede para rever afirmações.",
+    "hint": "Guarde uma chave da organização e o ID da pasta. As pesquisas começam quando um editor solicita uma revisão ou uma marca tem as evidências automáticas de afirmações ativadas.",
     "costHint": "A Yandex cobra cada pesquisa separadamente. A revisão de afirmações também usa a sua chave de IA para extrair e comparar afirmações.",
     "setupGuide": "Guia de configuração da Yandex",
     "configured": "Existe uma chave de pesquisa guardada. O valor não pode voltar a ser apresentado.",
@@ -1243,6 +1248,7 @@
     "failure": {
       "no_ai_key": "A chave de IA já não está disponível. Adicione uma nas Definições.",
       "no_search_key": "A chave de pesquisa já não está disponível. Adicione uma nas Definições.",
+      "automatic_disabled": "A verificação automática de afirmações foi desativada antes de começar.",
       "source_changed": "O rascunho guardado mudou antes da verificação começar. Repita-a para o texto atual.",
       "provider_unavailable": "O fornecedor de IA ou pesquisa não estava disponível. Tente mais tarde.",
       "invalid_response": "O fornecedor de IA devolveu uma resposta inutilizável. Tente novamente.",
@@ -1290,7 +1296,9 @@
       "evidence_conflicts": "Os excertos encontrados contradizem esta afirmação. Leia as páginas e edite o rascunho se necessário.",
       "insufficient": "Estes resultados não resolvem a afirmação.",
       "search_unavailable": "A pesquisa não esteve disponível para esta afirmação."
-    }
+    },
+    "automaticTrigger": "Iniciada automaticamente",
+    "manualTrigger": "Iniciada por um editor"
   },
   "Webhooks": {
     "title": "Webhooks de saída",

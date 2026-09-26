@@ -54,10 +54,15 @@ export const brandCreateSchema = z.object({
   audience: z.string().max(2000).optional(),
   contentLanguage: z.string().min(2).max(10).default("en"),
   linkPolicy: brandLinkPolicySchema.nullable().optional(),
+  automaticClaimEvidence: z.boolean().default(false),
 });
 export type BrandCreate = z.infer<typeof brandCreateSchema>;
 
-export const brandUpdateSchema = brandCreateSchema.partial();
+// `.partial()` retains `.default(false)`, which would silently switch this
+// paid setting off on an unrelated PATCH. Keep the default only on create.
+export const brandUpdateSchema = brandCreateSchema.partial().extend({
+  automaticClaimEvidence: z.boolean().optional(),
+});
 export type BrandUpdate = z.infer<typeof brandUpdateSchema>;
 
 /** A preview request never writes brand data. The caller opts into one paid AI call. */
