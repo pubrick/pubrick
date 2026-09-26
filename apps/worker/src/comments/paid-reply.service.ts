@@ -22,10 +22,16 @@ export class PaidReplyService {
     if (!claim) return;
     let metered = false;
     try {
-      const result = await generatePaidReply(claim.request, claim.apiKey, async (usage) => {
-        await this.replies.recordUsage(job, usage);
-        metered = true;
-      });
+      const result = await generatePaidReply(
+        claim.request,
+        claim.apiKey,
+        async (usage) => {
+          await this.replies.recordUsage(job, usage);
+          metered = true;
+        },
+        undefined,
+        claim.proxyUrl,
+      );
       await this.replies.finish(job, result);
     } catch {
       // The request may have reached Google. Keep the one-call fence and the

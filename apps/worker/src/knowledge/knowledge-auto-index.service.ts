@@ -35,9 +35,11 @@ export class KnowledgeAutoIndexService {
       const started = Date.now();
       let result: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
       try {
+        const proxyUrl = await this.repo.googleProxy?.(orgId);
         result = await embedKnowledgeBatch(
           key,
           selected.map((entry) => `${entry.title}\n\n${entry.content}`),
+          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
         );
       } catch (error) {
         await this.repo.recordUsage(

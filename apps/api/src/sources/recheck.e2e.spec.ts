@@ -145,7 +145,7 @@ describe.skipIf(!url)("paid relevance recheck admission", () => {
     const priced = await first.agent
       .get(`${route.replace("/recheck?", "/recheck/preview?")}&days=7`)
       .expect(200);
-    expect(priced.body).toMatchObject({ eligible: 2, model: "gemini-3.7-flash" });
+    expect(priced.body).toMatchObject({ eligible: 2, model: "gemini-3.8-flash" });
     expect(priced.body.estimatedCostUsd).toBeGreaterThan(0);
     expect(JSON.stringify(priced.body)).not.toContain("test-secret");
     await first.agent.post(route).send({ days: 7, maxItems: 1 }).expect(409);

@@ -1,5 +1,5 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
-import type { AiCredential, UsageRecord } from "@pubrick/ai";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { type AiCredential, isAllowedGoogleProxy, type UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import {
   AI_PROVIDERS,
@@ -27,16 +27,39 @@ import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
 
 /**
- * Explicit allowlist, and note what is NOT in it: `credentialsEncrypted`.
- * Same rule as `ChannelsRepository` — a `select()` silently widens the moment a
- * column is added, and the column this table exists for is a secret. `id` is
- * absent too: the resource is addressed by provider, so nothing needs it.
+ * Public response columns. The listing also selects ciphertext explicitly to
+ * derive only `proxyConfigured`; it never returns the ciphertext or plaintext.
+ * `id` is absent: the resource is addressed by provider.
  */
 const PUBLIC_COLUMNS = {
   provider: schema.aiCredentials.provider,
   defaultModel: schema.aiCredentials.defaultModel,
   updatedAt: schema.aiCredentials.updatedAt,
 };
+
+function publicCredential(row: {
+  provider: AiProviderId;
+  defaultModel: string | null;
+  updatedAt: Date;
+  credentialsEncrypted: string;
+}) {
+  let proxyConfigured = false;
+  if (row.provider === "google") {
+    try {
+      proxyConfigured = !!parseStoredAiCredential(
+        decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+      ).proxyUrl;
+    } catch {
+      // A corrupt key is still listed, so the user can replace or remove it.
+    }
+  }
+  return {
+    provider: row.provider,
+    defaultModel: row.defaultModel,
+    updatedAt: row.updatedAt,
+    proxyConfigured,
+  };
+}
 
 /** The `step` a ledger row gets when the call belongs to no run. */
 const TEST_STEP = "test";
@@ -60,11 +83,15 @@ export class AiCredentialsRepository {
 
   constructor(private readonly probe: AiCredentialProbe) {}
 
-  list(orgId: string) {
-    return db
-      .select(PUBLIC_COLUMNS)
+  async list(orgId: string) {
+    const rows = await db
+      .select({
+        ...PUBLIC_COLUMNS,
+        credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
+      })
       .from(schema.aiCredentials)
       .where(eq(schema.aiCredentials.orgId, orgId));
+    return rows.map(publicCredential);
   }
 
   /** Non-secret generation availability for members who cannot manage keys. */
@@ -85,23 +112,89 @@ export class AiCredentialsRepository {
   }
 
   async upsert(orgId: string, data: AiCredentialUpsert) {
-    const credentialsEncrypted = encryptJson({ apiKey: data.apiKey }, env.APP_ENCRYPTION_KEY);
     const defaultModel = data.defaultModel ?? null;
-    const rows = await db
-      .insert(schema.aiCredentials)
-      .values({ orgId, provider: data.provider, credentialsEncrypted, defaultModel })
-      .onConflictDoUpdate({
-        target: [schema.aiCredentials.orgId, schema.aiCredentials.provider],
-        // `updatedAt` is deliberately absent: drizzle's `buildUpdateSet` — the
-        // same builder `.update()` uses — adds every column carrying an
-        // `$onUpdate`, whether or not it appears here (pg-core/dialect.js:100-109,
-        // reached from insert.js:149). Setting it by hand would be a no-op
-        // dressed up as a safeguard. The e2e backdates the row and asserts the
-        // date moves, so a drizzle upgrade that changed this fails there.
-        set: { credentialsEncrypted, defaultModel },
-      })
-      .returning(PUBLIC_COLUMNS);
-    return rows[0];
+    return db.transaction(async (tx) => {
+      const previous = await tx
+        .select({ credentialsEncrypted: schema.aiCredentials.credentialsEncrypted })
+        .from(schema.aiCredentials)
+        .where(
+          and(
+            eq(schema.aiCredentials.orgId, orgId),
+            eq(schema.aiCredentials.provider, data.provider),
+          ),
+        )
+        .for("update")
+        .limit(1);
+      let proxyUrl: string | undefined;
+      if (data.provider === "google" && previous[0]) {
+        try {
+          proxyUrl = parseStoredAiCredential(
+            decryptJson(previous[0].credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+          ).proxyUrl;
+        } catch {
+          // A newly saved key repairs an unreadable row rather than preserving it.
+        }
+      }
+      const credentialsEncrypted = encryptJson(
+        { apiKey: data.apiKey, ...(proxyUrl ? { proxyUrl } : {}) },
+        env.APP_ENCRYPTION_KEY,
+      );
+      const rows = await tx
+        .insert(schema.aiCredentials)
+        .values({ orgId, provider: data.provider, credentialsEncrypted, defaultModel })
+        .onConflictDoUpdate({
+          target: [schema.aiCredentials.orgId, schema.aiCredentials.provider],
+          // `updatedAt` is deliberately absent: drizzle's `buildUpdateSet` — the
+          // same builder `.update()` uses — adds every column carrying an
+          // `$onUpdate`, whether or not it appears here (pg-core/dialect.js:100-109,
+          // reached from insert.js:149). Setting it by hand would be a no-op
+          // dressed up as a safeguard. The e2e backdates the row and asserts the
+          // date moves, so a drizzle upgrade that changed this fails there.
+          set: { credentialsEncrypted, defaultModel },
+        })
+        .returning({
+          ...PUBLIC_COLUMNS,
+          credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
+        });
+      return rows[0] ? publicCredential(rows[0]) : undefined;
+    });
+  }
+
+  async updateGoogleProxy(orgId: string, proxyUrl: string | null) {
+    // Never echo a URL, username or password in an HTTP validation error.
+    if (proxyUrl !== null && !isAllowedGoogleProxy(proxyUrl)) {
+      throw new BadRequestException("Invalid or unapproved Google proxy destination");
+    }
+    return db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ credentialsEncrypted: schema.aiCredentials.credentialsEncrypted })
+        .from(schema.aiCredentials)
+        .where(
+          and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+        )
+        .for("update")
+        .limit(1);
+      const row = rows[0];
+      if (!row) throw notFound("ai_credential_not_found", "Add a Google API key first");
+      const { apiKey } = parseStoredAiCredential(
+        decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+      );
+      const credentialsEncrypted = encryptJson(
+        { apiKey, ...(proxyUrl ? { proxyUrl } : {}) },
+        env.APP_ENCRYPTION_KEY,
+      );
+      const updated = await tx
+        .update(schema.aiCredentials)
+        .set({ credentialsEncrypted })
+        .where(
+          and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+        )
+        .returning({
+          ...PUBLIC_COLUMNS,
+          credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
+        });
+      return updated[0] ? publicCredential(updated[0]) : undefined;
+    });
   }
 
   /**
@@ -477,10 +570,15 @@ export class AiCredentialsRepository {
     provider: AiProviderId,
     row: { credentialsEncrypted: string; defaultModel: string | null },
   ): AiCredential {
-    const { apiKey } = parseStoredAiCredential(
+    const { apiKey, proxyUrl } = parseStoredAiCredential(
       decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
     );
-    return { provider, apiKey, defaultModel: row.defaultModel };
+    return {
+      provider,
+      apiKey,
+      defaultModel: row.defaultModel,
+      ...(provider === "google" && proxyUrl ? { proxyUrl } : {}),
+    };
   }
 
   /**

@@ -44,6 +44,12 @@ export const aiCredentialUpsertSchema = z.object({
 });
 export type AiCredentialUpsert = z.infer<typeof aiCredentialUpsertSchema>;
 
+/** A Google proxy is saved separately so rotating the API key cannot clear it. */
+export const googleProxyUpdateSchema = z.object({
+  proxyUrl: z.string().min(1).max(4096).nullable(),
+});
+export type GoogleProxyUpdate = z.infer<typeof googleProxyUpdateSchema>;
+
 /**
  * The plaintext `AiCredentialsRepository.upsert` seals — what a decrypted
  * `ai_credentials.credentials_encrypted` MUST hold before its contents go
@@ -63,7 +69,10 @@ export type AiCredentialUpsert = z.infer<typeof aiCredentialUpsertSchema>;
  * would refuse a row saved under an older, looser rule for no reason the reader
  * could act on.
  */
-export const storedAiCredentialSchema = z.object({ apiKey: z.string().min(1) });
+export const storedAiCredentialSchema = z.object({
+  apiKey: z.string().min(1),
+  proxyUrl: z.string().min(1).optional(),
+});
 export type StoredAiCredential = z.infer<typeof storedAiCredentialSchema>;
 
 /**
@@ -129,6 +138,7 @@ export type AiCredentialPublic = {
   provider: AiProviderId;
   defaultModel: string | null;
   updatedAt: string;
+  proxyConfigured: boolean;
 };
 
 /**

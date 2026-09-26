@@ -107,6 +107,43 @@ concurrently before transactional migrations. A large usage ledger can make
 startup take longer, but metering writes can continue while PostgreSQL builds
 the index. An interrupted build is retried at the next startup.
 
+## Connect Gemini
+
+Create a Gemini API key on the [Google AI Studio API keys page](https://aistudio.google.com/apikey).
+AI Studio calls it an API key; there is no separate AI Studio credential for
+Pubrick. In **Settings → AI provider**, choose **Google**, paste the key into
+**API key**, save it, and use **Test**. The key belongs in Pubrick's organization
+settings, not in `.env`. Only workspace owners and admins can manage it.
+
+Google now creates **authorization keys** by default. Check the **Key Type**
+column in AI Studio and use an active **Auth** key; older **Standard** keys may
+be rejected, especially when unrestricted. The environment variable name
+(`GOOGLE_API_KEY`, `GEMINI_API_KEY`, or another name) does not identify the key
+type. Paste only the key value, without `NAME=`. See Google's
+[key migration guide](https://ai.google.dev/gemini-api/docs/api-key#migrate-to-an-auth-key).
+
+The default text model is `gemini-3.8-flash`. A previously saved custom
+**Default model** in **Advanced** remains in effect until you change or clear
+it. Google lists 3.8 Flash as a stable model with structured output and
+`low`/`medium`/`high` thinking levels; it does not generate images. The
+[Gemini API pricing page](https://ai.google.dev/gemini-api/docs/pricing)
+shows the current token rates and free/paid tiers. Paid tier access requires
+billing on the Google project that owns the key.
+
+If the Google endpoint is unavailable from your server, open **Settings → AI
+provider → Advanced** and save an HTTP(S) forward proxy URL with an explicit
+port under **Google proxy URL**. This setting applies to the current workspace's
+Google calls in both API and worker. Pubrick encrypts it with the same key ring
+as the API key and never returns the saved URL to the browser. Use **Remove**
+there to clear it. The instance operator must first approve the proxy's
+`host:port` in `GOOGLE_PROXY_ALLOWED_HOSTS` in `.env`; the host and port of an
+existing `GOOGLE_API_PROXY` are approved automatically. This server-side gate
+prevents workspace admins from directing server requests to arbitrary internal
+addresses. An instance operator may also set `GOOGLE_API_PROXY` in `.env` as a
+fallback for workspaces without their own proxy. Changes to either environment
+variable require recreating both `api` and `worker` containers. Keep the proxy
+URL and Gemini key private.
+
 ## Rotating `APP_ENCRYPTION_KEY`
 
 `APP_ENCRYPTION_KEY` is a **ring**: one or more base64 keys separated by commas,
@@ -412,7 +449,8 @@ each one in full.
 | 2026-09-23 | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | no | required together when reading Telegram channel sources ([setup](telegram-sources.md)) |
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
 | 2026-09-25 | `PAID_REPLY_DISPATCH_AFTER` | no | optional ISO instant with a timezone offset; only automatic reply-analysis handoffs collected at or after this instant may start a paid Gemini call. Unset means no automatic paid dispatch. Existing manual Analyze remains available. Brand-level paid switches and daily admission thresholds must also be configured. |
-| 2026-09-25 | `GOOGLE_API_PROXY` | no | server-side HTTP(S) forward proxy with an explicit port for Google generation, credential tests, embeddings, images and reply analysis. An authenticated URL is accepted; keep it secret. Unset uses direct Google access. Set it for both API and worker; Compose passes the same value to each. |
+| 2026-09-25 | `GOOGLE_API_PROXY` | no | instance fallback HTTP(S) forward proxy with an explicit port for Google generation, credential tests, embeddings, images and reply analysis. A workspace proxy saved in Settings overrides it. An authenticated URL is accepted; keep it secret. Unset uses direct Google access. Set it for both API and worker; Compose passes the same value to each. |
+| 2026-09-26 | `GOOGLE_PROXY_ALLOWED_HOSTS` | no | comma-separated `host:port` destinations workspace admins may save as Google proxies in Settings. An existing `GOOGLE_API_PROXY` host and port are also allowed. No destination is accepted without either approval. This list contains no proxy passwords. |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot
 miss them. The optional ones are worth reading: an `.env` written

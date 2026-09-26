@@ -24,13 +24,18 @@ function rate(inputPerMTok: number, outputPerMTok: number): ModelRate {
  * a real id an org can type reaches a real published rate.
  *
  * Rates were read off https://ai.google.dev/gemini-api/docs/pricing on
- * 2026-09-02 (paid tier, text input).
+ * 2026-09-02, with Gemini 3.8 Flash checked on 2026-09-26 (paid tier, text input).
  */
 const FAMILIES: ReadonlyArray<{
   family: string;
   expected: ModelRate;
   ids: readonly string[];
 }> = [
+  {
+    family: "gemini-3.8-flash",
+    expected: rate(0.75, 3.75),
+    ids: ["gemini-3.8-flash", "models/gemini-3.8-flash", "gemini-3.8-flash-001"],
+  },
   {
     family: "gemini-3.7-flash",
     expected: rate(0.75, 3.75),
@@ -178,13 +183,15 @@ describe("priceFor — a family lends its rate to nobody else", () => {
   });
 
   it.each([
-    // Neither exists. Google's Gemini 3 line is 3.1 Pro, 3.7/3.6/3.5 Flash and
+    // Neither exists. Google's Gemini 3 line includes 3.1 Pro, 3.8/3.7/3.6/3.5 Flash and
     // 3.5/3.1 Flash-Lite, so both of these reach a provider as a 404. If Google
     // ever ships them, a Lite that borrowed Flash's rate would be reported at
     // several times its price — a confident wrong number, which is worse than
     // the honest gap.
     "gemini-3.7-flash-lite",
     "gemini-3.7-pro",
+    "gemini-3.8-flash-tts",
+    "gemini-3.8-flash-image",
     // A different product at a different price, sharing a prefix with one that
     // is in the table.
     "gemini-3.1-flash-lite-image",
@@ -251,7 +258,8 @@ describe("priceFor — the rate schedule", () => {
     );
   });
 
-  it("moves 3.6 Flash on the same date, and leaves the flat-rate families alone", () => {
+  it("moves 3.8 and 3.6 Flash on the same date, and leaves the flat-rate families alone", () => {
+    expect(priceFor("google", "gemini-3.8-flash", new Date("2027-02-01"))).toEqual(rate(1.5, 7.5));
     expect(priceFor("google", "gemini-3.6-flash", new Date("2027-02-01"))).toEqual(rate(1.5, 7.5));
     expect(priceFor("google", "gemini-2.5-flash", new Date("2027-02-01"))).toEqual(rate(0.3, 2.5));
   });

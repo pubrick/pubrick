@@ -46,9 +46,11 @@ export class KnowledgeService {
       const started = Date.now();
       let embeddings: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
       try {
+        const proxyUrl = await this.entries.googleProxy?.(orgId);
         embeddings = await embedKnowledgeBatch(
           apiKey,
           selected.map((entry) => `${entry.title}\n\n${entry.content}`),
+          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
         );
       } catch (error) {
         const providerOutcome = callOutcomeOf(error);
@@ -158,10 +160,12 @@ export class KnowledgeService {
     // No retry inside the SDK: one request yields one ledger row.
     let result: Awaited<ReturnType<typeof embedKnowledgeText>>;
     try {
+      const proxyUrl = await this.entries.googleProxy?.(orgId);
       result = await embedKnowledgeText(
         apiKey,
         `${entry.title}\n\n${entry.content}`,
         "RETRIEVAL_DOCUMENT",
+        ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
       );
     } catch (error) {
       await this.entries.recordEmbeddingUsage(

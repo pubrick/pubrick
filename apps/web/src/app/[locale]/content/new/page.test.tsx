@@ -65,7 +65,12 @@ function parsedBody(call: Call | undefined): Record<string, unknown> {
  */
 const noCredentials: AiCredentialPublic[] = [];
 const googleKey: AiCredentialPublic[] = [
-  { provider: "google", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+  {
+    provider: "google",
+    defaultModel: null,
+    proxyConfigured: false,
+    updatedAt: "2026-08-28T10:00:00.000Z",
+  },
 ];
 
 function installHandlers(
@@ -481,7 +486,12 @@ describe("Generate (Task 10)", () => {
   it("keeps the cover control disabled without a Google key", async () => {
     const calls: Call[] = [];
     installHandlers(calls, undefined, [
-      { provider: "openrouter", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+      {
+        provider: "openrouter",
+        defaultModel: null,
+        proxyConfigured: false,
+        updatedAt: "2026-08-28T10:00:00.000Z",
+      },
     ]);
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });
@@ -577,7 +587,12 @@ describe("Generate (Task 10)", () => {
   it("requires a Google key for generated article images", async () => {
     const calls: Call[] = [];
     installHandlers(calls, undefined, [
-      { provider: "openrouter", defaultModel: null, updatedAt: "2026-08-28T10:00:00.000Z" },
+      {
+        provider: "openrouter",
+        defaultModel: null,
+        proxyConfigured: false,
+        updatedAt: "2026-08-28T10:00:00.000Z",
+      },
     ]);
     render(<NewContentPage />);
     await screen.findByRole("option", { name: "Acme" });

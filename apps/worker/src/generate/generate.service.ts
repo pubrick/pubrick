@@ -521,7 +521,13 @@ export class GenerateService {
               const started = Date.now();
               let result: Awaited<ReturnType<typeof embedKnowledgeText>> | undefined;
               try {
-                result = await embedKnowledgeText(key, topic, "RETRIEVAL_QUERY");
+                const proxyUrl = await this.repo.googleProxy?.(run.orgId);
+                result = await embedKnowledgeText(
+                  key,
+                  topic,
+                  "RETRIEVAL_QUERY",
+                  ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+                );
               } catch (error) {
                 await ctx.onUsage(
                   {
@@ -738,7 +744,8 @@ export class GenerateService {
                 `Create one 1K editorial cover image for ${context.brand.name}. ` +
                 "The image should illustrate this draft without text, logos, or watermarks. " +
                 `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
-              const result = await this.imageCaller.call(googleKey, prompt);
+              const proxyUrl = await this.repo.googleProxy?.(run.orgId);
+              const result = await this.imageCaller.call(googleKey, prompt, undefined, proxyUrl);
               const cost = imageCostUsd(result.usage);
               const record: UsageRecord = {
                 provider: "google",
@@ -821,7 +828,8 @@ export class GenerateService {
                   "The image should depict the passage below without text, logos, or watermarks. " +
                   `Article context:\n<draft>\n${edited.body.slice(0, 1000)}\n</draft>\n` +
                   `Passage to illustrate:\n<passage>\n${text.slice(0, 1000)}\n</passage>`;
-                const result = await this.imageCaller.call(googleKey, prompt);
+                const proxyUrl = await this.repo.googleProxy?.(run.orgId);
+                const result = await this.imageCaller.call(googleKey, prompt, undefined, proxyUrl);
                 const cost = imageCostUsd(result.usage);
                 const record: UsageRecord = {
                   provider: "google",

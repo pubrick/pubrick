@@ -207,10 +207,12 @@ export class RelevanceService {
       const started = Date.now();
       let result: Awaited<ReturnType<Embedder>> | undefined;
       try {
+        const proxyUrl = await this.repo.googleProxy?.(job.orgId);
         result = await this.embedText(
           googleKey,
           `${input.title.slice(0, 500)}\n\n${input.summary.slice(0, 1500)}`,
           "RETRIEVAL_DOCUMENT",
+          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
         );
       } catch (error) {
         try {

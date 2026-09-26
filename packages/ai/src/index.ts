@@ -24,7 +24,11 @@ export {
   generateStructured,
   type ModelCallOptions,
 } from "./generate.js";
-export { googleProxyEnvSchema } from "./google-transport.js";
+export {
+  googleProxyAllowlistSchema,
+  googleProxyEnvSchema,
+  isAllowedGoogleProxy,
+} from "./google-transport.js";
 export {
   embedKnowledgeBatch,
   embedKnowledgeText,

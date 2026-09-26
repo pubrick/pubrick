@@ -86,6 +86,19 @@ describe("the key ring is validated at boot", () => {
     expect(refusal(error)).not.toContain("secret");
   });
 
+  it("validates the operator's Google proxy destination allowlist", async () => {
+    expect(
+      await boot({ GOOGLE_PROXY_ALLOWED_HOSTS: "proxy.example:8080,backup.example:3128" }),
+    ).toBeNull();
+    const error = await boot({
+      GOOGLE_PROXY_ALLOWED_HOSTS: "http://user:secret@proxy.example:8080",
+    });
+    expect(refusal(error)).toContain(
+      "GOOGLE_PROXY_ALLOWED_HOSTS must be comma-separated host:port entries",
+    );
+    expect(refusal(error)).not.toContain("secret");
+  });
+
   it("starts on a single key — every value that has ever been deployed", async () => {
     expect(await boot({ APP_ENCRYPTION_KEY: FRESH_KEYS[0] })).toBeNull();
   });

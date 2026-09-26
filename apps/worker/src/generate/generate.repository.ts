@@ -882,8 +882,9 @@ export class GenerateRepository {
     if (!row) return undefined;
 
     let apiKey: string;
+    let proxyUrl: string | undefined;
     try {
-      ({ apiKey } = parseStoredAiCredential(
+      ({ apiKey, proxyUrl } = parseStoredAiCredential(
         decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
       ));
     } catch (error) {
@@ -908,7 +909,12 @@ export class GenerateRepository {
       // pg-boss retries it — the treatment every other unclassified throw gets.
       throw error;
     }
-    return { provider: row.provider, apiKey, defaultModel: row.defaultModel };
+    return {
+      provider: row.provider,
+      apiKey,
+      defaultModel: row.defaultModel,
+      ...(row.provider === "google" && proxyUrl ? { proxyUrl } : {}),
+    };
   }
 
   async hasKnowledge(orgId: string, brandId: string): Promise<boolean> {
@@ -1042,6 +1048,23 @@ export class GenerateRepository {
     if (!row) return undefined;
     try {
       return parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).apiKey;
+    } catch (error) {
+      if (isUnreadableCiphertext(error) || isMalformedStoredAiCredential(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async googleProxy(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    if (!row) return undefined;
+    try {
+      return parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).proxyUrl;
     } catch (error) {
       if (isUnreadableCiphertext(error) || isMalformedStoredAiCredential(error)) return undefined;
       throw error;

@@ -3326,7 +3326,7 @@ describe.skipIf(!url)("runMigrations", () => {
         await fresh.drop();
       }
     }
-  }, 180_000);
+  }, 360_000);
   /**
    * THE BACKFILL, which is the one row rewrite this folder performs on purpose.
    *

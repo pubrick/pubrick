@@ -202,6 +202,9 @@ export default function SettingsPage() {
   const [provider, setProvider] = useState<AiProviderId>("google");
   const [apiKey, setApiKey] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxySaving, setProxySaving] = useState(false);
+  const [proxyMessage, setProxyMessage] = useState<"saved" | "removed" | "error" | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   // PUT /api/ai-credentials is idempotent per provider, but each submit is a
   // round trip with the key still in the field: a double-click sends the
@@ -210,6 +213,7 @@ export default function SettingsPage() {
   // second click can be dispatched, and it takes Enter-in-the-field with it.
   const [saving, setSaving] = useState(false);
   const [testResults, setTestResults] = useState<Partial<Record<AiProviderId, TestState>>>({});
+  const googleCredential = credentials?.find((credential) => credential.provider === "google");
 
   // An account with no organization yet is an onboarding state, not an error to
   // shout about on the Settings screen — every other failure gets a sentence.
@@ -273,6 +277,29 @@ export default function SettingsPage() {
       handleAiError(err);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function updateProxy(nextUrl: string | null) {
+    if (proxySaving) return;
+    setProxyMessage(null);
+    setProxySaving(true);
+    try {
+      await api("/api/ai-credentials/google/proxy", {
+        method: "PUT",
+        body: JSON.stringify({ proxyUrl: nextUrl }),
+      });
+      setProxyUrl("");
+      setProxyMessage(nextUrl === null ? "removed" : "saved");
+      // A previous Test result described the old network route.
+      setTestResults((previous) => ({ ...previous, google: undefined }));
+      loadAi();
+    } catch {
+      // A proxy URL may contain a password. Never render a server error body
+      // that could reflect it back into the page.
+      setProxyMessage("error");
+    } finally {
+      setProxySaving(false);
     }
   }
 
@@ -539,7 +566,9 @@ export default function SettingsPage() {
             It is handed the unsaved-key state because switching locale is a
             navigation, and the API key above is the one field on this screen
             no endpoint can give back. */}
-        <LanguageCard hasUnsavedText={apiKey !== "" || defaultModel.trim() !== ""} />
+        <LanguageCard
+          hasUnsavedText={apiKey !== "" || defaultModel.trim() !== "" || proxyUrl !== ""}
+        />
 
         {canManageApiKeys && (
           <Card>
@@ -636,9 +665,28 @@ export default function SettingsPage() {
                   className="min-w-[200px] flex-1"
                 />
               </div>
+              {provider === "google" && (
+                <p className="text-sm text-fg-secondary">
+                  {t("aiGoogleKeyHint")}{" "}
+                  <a
+                    href="https://aistudio.google.com/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-accent underline"
+                  >
+                    {t("aiGoogleKeyLink")}
+                  </a>
+                </p>
+              )}
               {/* Constitution rule 2: the one option most people never set lives
                 behind the shared disclosure, never loose on the form. */}
-              <Advanced dirty={defaultModel.trim() !== ""}>
+              <Advanced
+                dirty={
+                  defaultModel.trim() !== "" ||
+                  (provider === "google" &&
+                    (proxyUrl !== "" || !!googleCredential?.proxyConfigured))
+                }
+              >
                 <Input
                   label={t("aiModelLabel")}
                   placeholder={t("aiModelPlaceholder")}
@@ -646,6 +694,84 @@ export default function SettingsPage() {
                   onChange={(e) => setDefaultModel(e.target.value)}
                   className="w-full"
                 />
+                {provider === "google" && (
+                  <div className="mt-4 border-t border-border-soft pt-4">
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      label={t("aiProxyLabel")}
+                      placeholder={t("aiProxyPlaceholder")}
+                      value={proxyUrl}
+                      onChange={(event) => {
+                        setProxyUrl(event.target.value);
+                        setProxyMessage(null);
+                      }}
+                      onKeyDown={(event) => {
+                        // This field saves through its own endpoint. Enter must
+                        // not submit the surrounding API-key form.
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          if (googleCredential && proxyUrl.trim())
+                            void updateProxy(proxyUrl.trim());
+                        }
+                      }}
+                      className="w-full"
+                    />
+                    <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyHint")}</p>
+                    {credentials === null ? null : googleCredential ? (
+                      <>
+                        <p className="mt-2 text-sm text-fg-secondary">
+                          {t(
+                            googleCredential.proxyConfigured
+                              ? "aiProxyConfigured"
+                              : "aiProxyDirect",
+                          )}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={proxySaving || proxyUrl.trim() === ""}
+                            onClick={() => updateProxy(proxyUrl.trim())}
+                          >
+                            {t("aiProxySave")}
+                          </Button>
+                          {googleCredential.proxyConfigured && (
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              aria-label={t("aiProxyRemove")}
+                              disabled={proxySaving}
+                              onClick={() => updateProxy(null)}
+                            >
+                              {t("remove")}
+                            </Button>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyNeedsKey")}</p>
+                    )}
+                    {proxyMessage && (
+                      <p
+                        role={proxyMessage === "error" ? "alert" : "status"}
+                        className={
+                          proxyMessage === "error"
+                            ? "mt-2 text-sm text-danger"
+                            : "mt-2 text-sm text-fg-secondary"
+                        }
+                      >
+                        {t(
+                          proxyMessage === "saved"
+                            ? "aiProxySaved"
+                            : proxyMessage === "removed"
+                              ? "aiProxyRemoved"
+                              : "aiProxyError",
+                        )}
+                      </p>
+                    )}
+                  </div>
+                )}
               </Advanced>
             </form>
           </Card>
