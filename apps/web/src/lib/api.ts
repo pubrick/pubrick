@@ -145,6 +145,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   inline_images_require_google_key: "inline_images_require_google_key",
   feed_not_found: "feed_not_found",
   feed_item_not_ready: "feed_item_not_ready",
+  feed_adaptation_not_ready: "feed_adaptation_not_ready",
+  feed_item_exists: "feed_item_exists",
   adaptation_not_found: "adaptation_not_found",
   version_not_found: "version_not_found",
   version_changed: "version_changed",

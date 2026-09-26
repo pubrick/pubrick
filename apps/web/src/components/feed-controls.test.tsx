@@ -59,4 +59,40 @@ describe("public RSS controls", () => {
     expect(mockApi).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: en.Feed.add })).not.toBeInTheDocument();
   });
+
+  it("offers a reviewed Dzen-only article without claiming Dzen publication", async () => {
+    const withArticle = {
+      ...enabled,
+      entries: [
+        {
+          id: "entry-1",
+          contentItemId: "post-1",
+          adaptationId: "adaptation-1",
+          title: "Article",
+          publishedAt: "2026-09-26",
+        },
+      ],
+    };
+    mockApi.mockResolvedValueOnce(enabled).mockResolvedValueOnce(withArticle);
+    render(
+      <FeedEntryAction
+        brandId="brand-1"
+        itemId="post-1"
+        status="approved"
+        dzenAdaptationId="adaptation-1"
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Feed.addDzen }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Feed.addDzenTitle }));
+    expect(dialog.getByText(en.Feed.addDzenHint)).toBeInTheDocument();
+    await user.click(dialog.getByRole("button", { name: en.Feed.addDzen }));
+    await waitFor(() =>
+      expect(mockApi).toHaveBeenLastCalledWith(
+        "/api/brands/brand-1/feed/adaptations/adaptation-1",
+        { method: "POST" },
+      ),
+    );
+    expect(await screen.findByText(en.Feed.dzenAvailable)).toBeInTheDocument();
+  });
 });

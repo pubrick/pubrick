@@ -45,8 +45,10 @@ caller cannot claim that a VC.ru adaptation was published on Dzen.
 ## Dzen RSS is separate
 
 Pubrick's optional [public RSS feed](public-rss.md) serves snapshots for
-syndication. A feed entry means Pubrick served it, not that Dzen imported or
-published it. A Dzen manual receipt exists only after a person publishes on
+syndication. After approval, an editor can explicitly add a reviewed Dzen
+adaptation to the feed even when the article has not been published through
+another channel. A feed entry means Pubrick served it, not that Dzen imported
+or published it. A Dzen manual receipt exists only after a person publishes on
 Dzen and records the public Dzen URL. Pubrick does not infer a receipt from
 the RSS feed.
 

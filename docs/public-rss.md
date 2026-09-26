@@ -7,10 +7,12 @@ whether Dzen accepted, imported, rejected, or removed it.
 
 ## Use it
 
-1. Publish a titled post through one of Pubrick's connected channels.
+1. Publish a titled post through one of Pubrick's connected channels, or
+   approve a reviewed Dzen adaptation for manual publication.
 2. Open the brand page and enable **Public RSS feed**. The feed starts empty.
-3. Open the published post and choose **Add** in its RSS card. Confirm the
-   public sharing prompt. Pubrick stores a snapshot of the title, body, and
+3. Open the post and choose **Add** in its RSS card, or **Add Dzen article to
+   RSS** for a reviewed Dzen adaptation. Confirm the public sharing prompt.
+   Pubrick stores a snapshot of the title, chosen body, and
    [inline article images](article-images.md);
    later edits to the post do not change that public snapshot.
 4. Copy the feed URL from the brand page. It and each article link are public.
@@ -27,6 +29,10 @@ organization ID and the unguessable token in the URL; neither an org ID alone
 nor a post ID alone exposes content. The feed and article endpoints send
 `Cache-Control: no-store` so Pubrick does not intentionally keep a stale public
 copy after revocation.
+
+If approval for a Dzen adaptation is withdrawn, Pubrick removes its RSS entry.
+The same applies when its Dzen channel is removed. External consumers may have
+already retained the prior snapshot.
 
 ## Dzen
 
@@ -48,6 +54,7 @@ Authenticated members with an active organization can use:
 | `POST /api/brands/:brandId/feed` | Enable an empty feed, idempotently |
 | `DELETE /api/brands/:brandId/feed` | Revoke URL and entries |
 | `POST /api/brands/:brandId/feed/items/:itemId` | Add a snapshot of a titled published post |
+| `POST /api/brands/:brandId/feed/adaptations/:adaptationId` | Add a snapshot of a reviewed Dzen adaptation |
 | `DELETE /api/brands/:brandId/feed/items/:itemId` | Remove its snapshot |
 
 The returned URL, article links, and image URLs within an included article are

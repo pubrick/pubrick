@@ -140,8 +140,12 @@ export const API_ERROR_CODES = [
   "inline_images_require_google_key",
   /** Public syndication is opt-in; the feed may have been disabled. */
   "feed_not_found",
-  /** A feed entry must be a titled post already delivered somewhere. */
+  /** An ordinary feed entry must be a titled post already delivered somewhere. */
   "feed_item_not_ready",
+  /** Dzen handoff requires a titled, approved manual-ready adaptation. */
+  "feed_adaptation_not_ready",
+  /** A different immutable snapshot already occupies this post's feed slot. */
+  "feed_item_exists",
   /** The channel override's row is gone — usually its channel was deleted. */
   "adaptation_not_found",
   "version_not_found",

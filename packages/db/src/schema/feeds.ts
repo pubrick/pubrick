@@ -11,7 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { brands } from "./content.js";
-import { contentItems } from "./content-items.js";
+import { adaptations, contentItems } from "./content-items.js";
 
 /** A brand explicitly opts in to a public, unguessable syndication URL. */
 export const brandFeeds = pgTable(
@@ -49,6 +49,8 @@ export const feedEntries = pgTable(
     contentItemId: uuid("content_item_id")
       .notNull()
       .references(() => contentItems.id, { onDelete: "cascade" }),
+    /** Present only for a Dzen manual-ready handoff; deleting the adaptation revokes it. */
+    adaptationId: uuid("adaptation_id"),
     title: text("title").notNull(),
     body: text("body").notNull(),
     richBody: jsonb("rich_body"),
@@ -62,7 +64,13 @@ export const feedEntries = pgTable(
       columns: [t.orgId, t.brandId, t.feedId],
       foreignColumns: [brandFeeds.orgId, brandFeeds.brandId, brandFeeds.id],
     }).onDelete("cascade"),
+    foreignKey({
+      name: "feed_entries_adaptation_item_fk",
+      columns: [t.adaptationId, t.contentItemId],
+      foreignColumns: [adaptations.id, adaptations.contentItemId],
+    }).onDelete("cascade"),
     index("feed_entries_org_id_idx").on(t.orgId),
+    index("feed_entries_adaptation_id_idx").on(t.adaptationId),
     index("feed_entries_feed_id_published_at_idx").on(t.feedId, t.publishedAt.desc()),
   ],
 );
