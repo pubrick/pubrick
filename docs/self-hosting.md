@@ -115,11 +115,15 @@ Pubrick. In **Settings → AI provider**, choose **Google**, paste the key into
 **API key**, save it, and use **Test**. The key belongs in Pubrick's organization
 settings, not in `.env`. Only workspace owners and admins can manage it.
 
-Google now creates **authorization keys** by default. Check the **Key Type**
-column in AI Studio and use an active **Auth** key; older **Standard** keys may
-be rejected, especially when unrestricted. The environment variable name
-(`GOOGLE_API_KEY`, `GEMINI_API_KEY`, or another name) does not identify the key
-type. Paste only the key value, without `NAME=`. See Google's
+Google now creates **authorization keys** by default. Active **Auth** keys and
+appropriately restricted **Standard** keys can both authenticate to the Gemini
+API; unrestricted Standard keys are rejected. Check the **Key Type** and
+restrictions in AI Studio. The environment variable name (`GOOGLE_API_KEY`,
+`GEMINI_API_KEY`, or another name) does not identify the key type. If a previous
+installation has separate AI Studio and Vertex AI credentials, enter its AI
+Studio key here. Pubrick's Google integration calls the Gemini API and does not
+use a Vertex AI key or `GOOGLE_CLOUD_PROJECT`. Paste only the key value,
+without `NAME=`. See Google's
 [key migration guide](https://ai.google.dev/gemini-api/docs/api-key#migrate-to-an-auth-key).
 
 The default text model is `gemini-3.8-flash`. A previously saved custom
