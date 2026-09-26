@@ -45,6 +45,7 @@
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",
         "GOOGLE_API_PROXY",
+        "GOOGLE_PROXY_ALLOWED_HOSTS",
         "TELEGRAM_API_BASE_URL",
         // The worker's staleness bound. Declared not because a test reads it
         // through `process.env` — it is read through apps/worker/src/env.ts,

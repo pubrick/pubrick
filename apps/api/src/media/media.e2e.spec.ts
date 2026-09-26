@@ -709,6 +709,7 @@ describe.skipIf(!url)("media library e2e", () => {
       "test-google-key",
       "A golden ceramic vase on a table",
       undefined,
+      undefined,
     );
     const saved = await readFile(path.join(mediaDir, `${created.body.id}.jpg`));
     expect((await sharp(saved).metadata()).format).toBe("jpeg");
