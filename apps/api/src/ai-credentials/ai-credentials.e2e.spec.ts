@@ -30,6 +30,7 @@ const url = process.env.TEST_DATABASE_URL;
 
 /** The key every test stores. Nothing in any response body may contain it. */
 const SECRET_KEY = "sk-live-never-leak-this-0123456789";
+const originalProxyAllowlist = process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
 
 describe.skipIf(!url)("ai credentials e2e", () => {
   let app: INestApplication;
@@ -50,6 +51,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
     // Migrations run once for the whole suite in vitest.global-setup.ts — see the
     // comment there. Do NOT add a runMigrations() call here.
     const { AppModule } = await import("../app.module");
@@ -82,6 +84,8 @@ describe.skipIf(!url)("ai credentials e2e", () => {
   afterAll(async () => {
     await app.close();
     await direct.pool.end();
+    if (originalProxyAllowlist === undefined) delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
+    else process.env.GOOGLE_PROXY_ALLOWED_HOSTS = originalProxyAllowlist;
   });
 
   beforeEach(() => {
@@ -193,11 +197,16 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       }
     });
 
-    it("returns exactly provider, defaultModel and updatedAt — nothing else", async () => {
+    it("returns only public metadata, including proxy presence", async () => {
       const { agent } = await orgAgent();
       const saved = await save(agent, { defaultModel: "gemini-3.7-flash" }).expect(200);
 
-      expect(Object.keys(saved.body).sort()).toEqual(["defaultModel", "provider", "updatedAt"]);
+      expect(Object.keys(saved.body).sort()).toEqual([
+        "defaultModel",
+        "provider",
+        "proxyConfigured",
+        "updatedAt",
+      ]);
       expect(saved.body.provider).toBe("google");
       expect(saved.body.defaultModel).toBe("gemini-3.7-flash");
     });
@@ -217,6 +226,53 @@ describe.skipIf(!url)("ai credentials e2e", () => {
   });
 
   describe("saving", () => {
+    it("stores a Google proxy encrypted, preserves it on key rotation, and never returns it", async () => {
+      const { agent, orgId } = await orgAgent();
+      const proxyUrl = "http://alice:private@proxy.example:8080";
+      await agent.put("/api/ai-credentials/google/proxy").send({ proxyUrl }).expect(404);
+      await save(agent).expect(200);
+      const saved = await agent
+        .put("/api/ai-credentials/google/proxy")
+        .send({ proxyUrl })
+        .expect(200);
+      expect(saved.body.proxyConfigured).toBe(true);
+      expect(JSON.stringify(saved.body)).not.toContain(proxyUrl);
+      const listed = await agent.get("/api/ai-credentials").expect(200);
+      expect(listed.body[0].proxyConfigured).toBe(true);
+      expect(JSON.stringify(listed.body)).not.toContain("private");
+      const [stored] = await direct.db
+        .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+        .from(schema.aiCredentials)
+        .where(eq(schema.aiCredentials.orgId, orgId));
+      expect(stored?.encrypted).not.toContain(proxyUrl);
+      await save(agent, { apiKey: "replacement-google-key-123" }).expect(200);
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+      expect(probeCalls.at(-1)?.proxyUrl).toBe(proxyUrl);
+      await agent.put("/api/ai-credentials/google/proxy").send({ proxyUrl: null }).expect(200);
+      expect((await agent.get("/api/ai-credentials").expect(200)).body[0].proxyConfigured).toBe(
+        false,
+      );
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+      expect(probeCalls.at(-1)?.proxyUrl).toBeUndefined();
+    });
+
+    it("rejects malformed Google proxies without echoing their credentials", async () => {
+      const { agent } = await orgAgent();
+      await save(agent).expect(200);
+      const proxyUrl = "http://alice:private@proxy.example:8080/path";
+      const rejected = await agent
+        .put("/api/ai-credentials/google/proxy")
+        .send({ proxyUrl })
+        .expect(400);
+      expect(JSON.stringify(rejected.body)).not.toContain(proxyUrl);
+      expect(JSON.stringify(rejected.body)).not.toContain("private");
+      const unapproved = await agent
+        .put("/api/ai-credentials/google/proxy")
+        .send({ proxyUrl: "http://alice:private@unapproved.example:8080" })
+        .expect(400);
+      expect(JSON.stringify(unapproved.body)).not.toContain("private");
+    });
+
     it("omitting defaultModel stores null, so the provider's own default applies", async () => {
       const { agent } = await orgAgent();
       const saved = await save(agent).expect(200);

@@ -60,6 +60,17 @@ describe("the worker validates the key ring at boot", () => {
     expect(refusal(error)).not.toContain("secret");
   });
 
+  it("validates the operator's Google proxy destination allowlist", async () => {
+    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080,backup.example:3128";
+    expect(await boot(FRESH_KEYS[0] as string)).toBeNull();
+    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "http://user:secret@proxy.example:8080";
+    const error = await boot(FRESH_KEYS[0] as string);
+    expect(refusal(error)).toContain(
+      "GOOGLE_PROXY_ALLOWED_HOSTS must be comma-separated host:port entries",
+    );
+    expect(refusal(error)).not.toContain("secret");
+  });
+
   it("starts on a single key, and on a rotated ring", async () => {
     expect(await boot(FRESH_KEYS[0] as string)).toBeNull();
     expect(await boot(`${FRESH_KEYS[0]},${FRESH_KEYS[1]}`)).toBeNull();

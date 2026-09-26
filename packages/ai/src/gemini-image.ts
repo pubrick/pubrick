@@ -40,7 +40,12 @@ async function boundedResponse(response: Response): Promise<string | null> {
 
 /** Official Gemini generateContent wire format; the shared Google key stays server-side. */
 export class GeminiImageCaller {
-  async call(apiKey: string, prompt: string, source?: Buffer): Promise<ImageCall> {
+  async call(
+    apiKey: string,
+    prompt: string,
+    source?: Buffer,
+    proxyUrl?: string,
+  ): Promise<ImageCall> {
     const started = Date.now();
     try {
       const parts: unknown[] = [{ text: prompt }];
@@ -58,6 +63,7 @@ export class GeminiImageCaller {
           }),
           signal: AbortSignal.timeout(120_000),
         },
+        proxyUrl,
       );
       // Google returns base64 data in JSON. Bound the stream before buffering it.
       const raw = await boundedResponse(response);

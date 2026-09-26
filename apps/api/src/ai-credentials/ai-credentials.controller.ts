@@ -18,6 +18,8 @@ import {
   type AiProviderId,
   aiCredentialUpsertSchema,
   aiProviderSchema,
+  type GoogleProxyUpdate,
+  googleProxyUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
@@ -79,6 +81,15 @@ export class AiCredentialsController {
     @Body(new ZodValidationPipe(aiCredentialUpsertSchema)) body: AiCredentialUpsert,
   ) {
     return this.credentials.upsert(orgId, body);
+  }
+
+  /** Store or clear a Google CONNECT proxy without replacing the API key. */
+  @Put("google/proxy")
+  updateGoogleProxy(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(googleProxyUpdateSchema)) body: GoogleProxyUpdate,
+  ) {
+    return this.credentials.updateGoogleProxy(orgId, body.proxyUrl);
   }
 
   @Delete(":provider")

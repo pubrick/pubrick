@@ -225,7 +225,12 @@ export class SuggestionsService {
         const started = Date.now();
         let batch: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
         try {
-          batch = await this.embedBatch(embeddingKey, texts.slice(offset, offset + 10));
+          const proxyUrl = await this.repo.googleProxy?.(job.orgId);
+          batch = await this.embedBatch(
+            embeddingKey,
+            texts.slice(offset, offset + 10),
+            ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+          );
         } catch (error) {
           try {
             await this.repo.recordEmbeddingUsage(

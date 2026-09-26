@@ -43,10 +43,12 @@ const encryptedRequestSchema = z.object({
 const publicStoryUrl = /^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/[1-9]\d*$/;
 const BATCH_SIZE = 20;
 
-function safeKey(encrypted: string | undefined): string | null {
+function safeCredential(
+  encrypted: string | undefined,
+): { apiKey: string; proxyUrl?: string } | null {
   if (!encrypted) return null;
   try {
-    return parseStoredAiCredential(decryptJson(encrypted, env.APP_ENCRYPTION_KEY)).apiKey;
+    return parseStoredAiCredential(decryptJson(encrypted, env.APP_ENCRYPTION_KEY));
   } catch {
     return null;
   }
@@ -287,8 +289,8 @@ export class PaidReplyRepository {
             eq(schema.aiCredentials.provider, "google"),
           ),
         );
-      const apiKey = safeKey(credential?.encrypted);
-      if (!apiKey) {
+      const google = safeCredential(credential?.encrypted);
+      if (!google) {
         await this.finishHandoff(handoff.id, "blocked", "no_key");
         continue;
       }
@@ -296,7 +298,12 @@ export class PaidReplyRepository {
       let allowance: number;
       try {
         request = buildPaidReplyRequest(snapshot);
-        ({ allowance } = await countPaidReplyTokens(request, apiKey));
+        ({ allowance } = await countPaidReplyTokens(
+          request,
+          google.apiKey,
+          undefined,
+          google.proxyUrl,
+        ));
       } catch (error) {
         await this.finishHandoff(
           handoff.id,
@@ -428,7 +435,7 @@ export class PaidReplyRepository {
   /** Irreversible transaction commits before the only provider request. */
   async claim(
     job: PaidReplyAnalysisJob,
-  ): Promise<{ request: PaidReplyRequest; apiKey: string } | null> {
+  ): Promise<{ request: PaidReplyRequest; apiKey: string; proxyUrl?: string } | null> {
     const [hint] = await db
       .select()
       .from(schema.paidReplyAnalysisAttempts)
@@ -596,8 +603,8 @@ export class PaidReplyRepository {
           ),
         )
         .for("share");
-      const apiKey = safeKey(keyRow?.encrypted);
-      if (!apiKey) reason ??= "no_key";
+      const google = safeCredential(keyRow?.encrypted);
+      if (!google) reason ??= "no_key";
       let request: PaidReplyRequest | null = null;
       try {
         request = encryptedRequestSchema.parse(
@@ -634,7 +641,12 @@ export class PaidReplyRepository {
         .update(schema.paidReplyAnalysisAttempts)
         .set({ status: "dispatching", dispatchStartedAt: sql`now()` })
         .where(eq(schema.paidReplyAnalysisAttempts.id, attempt.id));
-      return { request: request as PaidReplyRequest, apiKey: apiKey as string };
+      if (!google) return null;
+      return {
+        request: request as PaidReplyRequest,
+        apiKey: google.apiKey,
+        proxyUrl: google.proxyUrl,
+      };
     });
   }
 

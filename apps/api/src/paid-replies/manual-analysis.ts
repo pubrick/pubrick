@@ -28,8 +28,9 @@ export async function requestManualPaidReplyAnalysis(args: {
   { status: "in_progress" | "no_key" | "stale" | "failed" } | { status: "blocked"; reason: string }
 > {
   let apiKey: string;
+  let proxyUrl: string | undefined;
   try {
-    apiKey = (await args.credentials.getDecrypted(args.orgId, "google")).apiKey;
+    ({ apiKey, proxyUrl } = await args.credentials.getDecrypted(args.orgId, "google"));
   } catch (error) {
     if (error instanceof NotFoundException) return { status: "no_key" };
     throw error;
@@ -38,7 +39,7 @@ export async function requestManualPaidReplyAnalysis(args: {
     const request = buildPaidReplyRequest({ title: args.title, comments: args.comments });
     let counted: Awaited<ReturnType<typeof countPaidReplyTokens>>;
     try {
-      counted = await countPaidReplyTokens(request, apiKey);
+      counted = await countPaidReplyTokens(request, apiKey, undefined, proxyUrl);
     } catch (error) {
       return {
         status: "blocked",

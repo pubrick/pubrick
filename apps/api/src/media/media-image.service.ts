@@ -51,7 +51,12 @@ export class MediaImageService {
       if (Number(count[0]?.calls ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
         throw conflict("media_generation_limit", "The hourly image generation limit is reached");
       }
-      const result = await this.caller.call(credential.apiKey, request.prompt, source);
+      const result = await this.caller.call(
+        credential.apiKey,
+        request.prompt,
+        source,
+        credential.proxyUrl,
+      );
       await this.record(orgId, result, regeneration || !!source);
       return result;
     });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { type CommentAnalysisResult, commentAnalysisResultSchema } from "@pubrick/shared";
 import { z } from "zod";
-import { googleProxyFetch } from "./google-transport.js";
+import { googleFetchForProxy } from "./google-transport.js";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { UsageRecord } from "./usage.js";
 
@@ -134,18 +134,22 @@ function assertFrozenRequest(request: PaidReplyRequest): object {
 export async function countPaidReplyTokens(
   request: PaidReplyRequest,
   apiKey: string,
-  fetcher: typeof fetch = googleProxyFetch,
+  fetcher?: typeof fetch,
+  proxyUrl?: string,
 ): Promise<{ counted: number; allowance: number }> {
   if (!apiKey.trim()) throw new Error("paid_reply_preflight_unavailable");
   const body = assertFrozenRequest(request);
-  const response = await fetcher(`${baseUrl}/${request.modelId}:countTokens`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-    body: JSON.stringify({
-      generateContentRequest: { ...body, model: `models/${request.modelId}` },
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
+  const response = await (fetcher ?? googleFetchForProxy(proxyUrl))(
+    `${baseUrl}/${request.modelId}:countTokens`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        generateContentRequest: { ...body, model: `models/${request.modelId}` },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
   if (!response.ok) throw new Error("paid_reply_count_unavailable");
   const parsed = countResponseSchema.safeParse(await response.json());
   if (!parsed.success || parsed.data.totalTokens > MAX_COUNTED_INPUT_TOKENS)
@@ -184,7 +188,8 @@ export async function generatePaidReply(
   request: PaidReplyRequest,
   apiKey: string,
   onUsage: (record: UsageRecord) => Promise<void>,
-  fetcher: typeof fetch = googleProxyFetch,
+  fetcher?: typeof fetch,
+  proxyUrl?: string,
 ): Promise<PaidReplyGeneration> {
   if (!apiKey.trim()) throw new Error("paid_reply_dispatch_unavailable");
   assertFrozenRequest(request);
@@ -197,12 +202,15 @@ export async function generatePaidReply(
   let cachedInputTokens = 0;
   let result: CommentAnalysisResult | null = null;
   try {
-    const response = await fetcher(`${baseUrl}/${request.modelId}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      body: request.body,
-      signal: AbortSignal.timeout(60_000),
-    });
+    const response = await (fetcher ?? googleFetchForProxy(proxyUrl))(
+      `${baseUrl}/${request.modelId}:generateContent`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: request.body,
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
     if (!response.ok) {
       // An upstream timeout, throttle, or 5xx can occur after inference. Only
       // clear pre-inference request/auth refusals release the reservation.

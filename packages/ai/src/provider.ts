@@ -9,7 +9,7 @@ import type { LanguageModelV4, SharedV4ProviderOptions } from "@ai-sdk/provider"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { type AiProviderId, PermanentError } from "@pubrick/shared";
 import { withRunFailure } from "./classify.js";
-import { googleProxyFetch } from "./google-transport.js";
+import { googleFetchForProxy } from "./google-transport.js";
 
 /**
  * Providers a BYOK key can be stored for.
@@ -34,6 +34,7 @@ export type AiCredential = {
   provider: AiProvider;
   apiKey: string;
   defaultModel?: string | null;
+  proxyUrl?: string;
 };
 
 /**
@@ -80,7 +81,10 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
 
   switch (credential.provider) {
     case "google":
-      return createGoogleGenerativeAI({ apiKey: credential.apiKey, fetch: googleProxyFetch })(id);
+      return createGoogleGenerativeAI({
+        apiKey: credential.apiKey,
+        fetch: googleFetchForProxy(credential.proxyUrl),
+      })(id);
     case "openrouter":
       return createOpenRouter({ apiKey: credential.apiKey })(id);
   }

@@ -51,6 +51,7 @@ type Handlers = {
   credentials?: AiCredentialPublic[];
   spend?: CostSummary;
   test?: AiCredentialTestResult;
+  proxyError?: Error;
   /** When set, POST …/test hangs until this resolves — the in-flight window. */
   testGate?: Promise<void>;
 };
@@ -58,10 +59,13 @@ type Handlers = {
 const googleKey: AiCredentialPublic = {
   provider: "google",
   defaultModel: "gemini-3.7-flash",
+  proxyConfigured: false,
   updatedAt: "2026-08-28T10:00:00.000Z",
 };
 
 function installApi(calls: Call[], handlers: Handlers = {}) {
+  let proxyConfigured =
+    handlers.credentials?.find((c) => c.provider === "google")?.proxyConfigured ?? false;
   mockApi.mockImplementation(async (...args: unknown[]) => {
     const path = args[0] as string;
     const init = args[1] as RequestInit | undefined;
@@ -72,7 +76,10 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
       body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
 
-    if (method === "GET" && path === "/api/ai-credentials") return handlers.credentials ?? [];
+    if (method === "GET" && path === "/api/ai-credentials")
+      return (handlers.credentials ?? []).map((credential) =>
+        credential.provider === "google" ? { ...credential, proxyConfigured } : credential,
+      );
     if (method === "GET" && path === "/api/paid-replies/organization")
       return {
         timezone: "UTC",
@@ -84,6 +91,12 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
     if (method === "GET" && path === "/api/ai-credentials/spend")
       return handlers.spend ?? ({ kind: "exact", usd: 0 } satisfies CostSummary);
     if (method === "PUT" && path === "/api/ai-credentials") return googleKey;
+    if (method === "PUT" && path === "/api/ai-credentials/google/proxy") {
+      if (handlers.proxyError) throw handlers.proxyError;
+      proxyConfigured =
+        (JSON.parse(String(init?.body)) as { proxyUrl: string | null }).proxyUrl !== null;
+      return { ...googleKey, proxyConfigured };
+    }
     if (method === "POST" && path.endsWith("/test")) {
       if (handlers.testGate) await handlers.testGate;
       return (
@@ -409,6 +422,90 @@ describe("Settings — AI provider: saving a key", () => {
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
 
     await waitFor(() => expect(field).toHaveValue(""));
+  });
+});
+
+describe("Settings — Google proxy", () => {
+  it("asks for a saved Google key before proxy setup", async () => {
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiProxyLabel),
+      "http://proxy.example:8080",
+    );
+    expect(screen.getByText(en.SettingsPage.aiProxyNeedsKey)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: en.SettingsPage.aiProxySave }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the proxy secret in Advanced and saves it independently of the key", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [googleKey] });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    const proxy = screen.getByLabelText(en.SettingsPage.aiProxyLabel);
+    expect(proxy).toHaveAttribute("type", "password");
+    expect(proxy).not.toBeVisible();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.type(proxy, "http://user:secret@proxy.example:8080");
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxySave }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: "/api/ai-credentials/google/proxy",
+        method: "PUT",
+        body: { proxyUrl: "http://user:secret@proxy.example:8080" },
+      }),
+    );
+    expect(calls).not.toContainEqual(
+      expect.objectContaining({ path: "/api/ai-credentials", method: "PUT" }),
+    );
+    expect(await screen.findByText(en.SettingsPage.aiProxyConfigured)).toBeInTheDocument();
+    expect(proxy).toHaveValue("");
+    expect(screen.queryByText(/user:secret/)).not.toBeInTheDocument();
+  });
+
+  it("removes a stored proxy without sending or deleting the Google key", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [{ ...googleKey, proxyConfigured: true }] });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyRemove }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: "/api/ai-credentials/google/proxy",
+        method: "PUT",
+        body: { proxyUrl: null },
+      }),
+    );
+    expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+    expect(await screen.findByText(en.SettingsPage.aiProxyDirect)).toBeInTheDocument();
+  });
+
+  it("does not echo a proxy password when saving fails", async () => {
+    const calls: Call[] = [];
+    installApi(calls, {
+      credentials: [googleKey],
+      proxyError: new Error("Rejected http://user:secret@proxy.example:8080"),
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiProxyLabel),
+      "http://user:secret@proxy.example:8080",
+    );
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxySave }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.SettingsPage.aiProxyError);
+    expect(screen.queryByText(/Rejected http/)).not.toBeInTheDocument();
   });
 });
 

@@ -299,6 +299,19 @@ export class RelevanceRepository {
       : undefined;
   }
 
+  async googleProxy(orgId: string): Promise<string | undefined> {
+    const [row] = await db
+      .select({ encrypted: schema.aiCredentials.credentialsEncrypted })
+      .from(schema.aiCredentials)
+      .where(
+        and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
+      )
+      .limit(1);
+    return row
+      ? parseStoredAiCredential(decryptJson(row.encrypted, env.APP_ENCRYPTION_KEY)).proxyUrl
+      : undefined;
+  }
+
   /** Privileged scheduler scan; only unscored rows are picked, twenty per hour. */
   async unscored(afterId?: string) {
     return db
