@@ -71,6 +71,7 @@ export class ClaimReviewWorkerRepository {
           status: schema.claimReviews.status,
           bodyHash: schema.claimReviews.bodyHash,
           contentItemId: schema.claimReviews.contentItemId,
+          trigger: schema.claimReviews.trigger,
         })
         .from(schema.claimReviews)
         .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.id, reviewId)))
@@ -93,6 +94,29 @@ export class ClaimReviewWorkerRepository {
           .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.id, reviewId)));
         return null;
       }
+      const [brand] = await tx
+        .select({
+          contentLanguage: schema.brands.contentLanguage,
+          automaticClaimEvidence: schema.brands.automaticClaimEvidence,
+        })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, item.brandId)))
+        .limit(1);
+      // A queued automatic review may outlive the opt-in. Check again before
+      // claiming it for paid work; a review already running may finish.
+      if (locked.trigger === "automatic" && !brand?.automaticClaimEvidence) {
+        await tx
+          .update(schema.claimReviews)
+          .set({
+            status: "failed",
+            errorCode: "automatic_disabled",
+            completedAt: new Date(),
+            activeDeliveryToken: null,
+            leaseExpiresAt: null,
+          })
+          .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.id, reviewId)));
+        return null;
+      }
       await tx
         .update(schema.claimReviews)
         .set({
@@ -102,11 +126,6 @@ export class ClaimReviewWorkerRepository {
           leaseExpiresAt: sql`now() + ${LEASE_SECONDS} * interval '1 second'`,
         })
         .where(and(eq(schema.claimReviews.orgId, orgId), eq(schema.claimReviews.id, reviewId)));
-      const [brand] = await tx
-        .select({ contentLanguage: schema.brands.contentLanguage })
-        .from(schema.brands)
-        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, item.brandId)))
-        .limit(1);
       return {
         contentItemId: locked.contentItemId,
         body: item.body,
@@ -122,6 +141,7 @@ export class ClaimReviewWorkerRepository {
         .select({
           contentItemId: schema.claimReviews.contentItemId,
           bodyHash: schema.claimReviews.bodyHash,
+          trigger: schema.claimReviews.trigger,
         })
         .from(schema.claimReviews)
         .where(
@@ -137,7 +157,7 @@ export class ClaimReviewWorkerRepository {
       if (!review) return false;
       const [item] = review.contentItemId
         ? await tx
-            .select({ body: schema.contentItems.body })
+            .select({ body: schema.contentItems.body, brandId: schema.contentItems.brandId })
             .from(schema.contentItems)
             .where(
               and(
@@ -167,6 +187,33 @@ export class ClaimReviewWorkerRepository {
             ),
           );
         return false;
+      }
+      if (review.trigger === "automatic") {
+        const [brand] = await tx
+          .select({ automaticClaimEvidence: schema.brands.automaticClaimEvidence })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, item.brandId)))
+          .limit(1);
+        if (!brand?.automaticClaimEvidence) {
+          await tx
+            .update(schema.claimReviews)
+            .set({
+              status: "failed",
+              errorCode: "automatic_disabled",
+              completedAt: new Date(),
+              activeDeliveryToken: null,
+              leaseExpiresAt: null,
+            })
+            .where(
+              and(
+                eq(schema.claimReviews.orgId, orgId),
+                eq(schema.claimReviews.id, reviewId),
+                eq(schema.claimReviews.status, "running"),
+                eq(schema.claimReviews.activeDeliveryToken, token),
+              ),
+            );
+          return false;
+        }
       }
       const rows = await tx
         .update(schema.claimReviews)

@@ -21,6 +21,10 @@ saved after it is enabled. Both workspace keys must already be present when the
 draft is saved; without either key, no automatic review is queued. Enabling the
 setting itself makes no provider request. Every automatic review may make up to
 five billable Yandex searches and billed AI calls on the workspace keys.
+Turning the setting off also stops queued automatic checks before they start
+and prevents later paid calls in checks already running. A provider call that
+has already started may finish. The card shows why a stopped check ended.
+Editor-started checks are unaffected.
 
 Search credentials are encrypted at rest and never returned to the browser.
 Neither saving nor removing the key makes a billable search request.

@@ -16,6 +16,7 @@ export type ClaimReviewOutcome = (typeof CLAIM_REVIEW_OUTCOMES)[number];
 export const CLAIM_REVIEW_FAILURES = [
   "no_ai_key",
   "no_search_key",
+  "automatic_disabled",
   "source_changed",
   "provider_unavailable",
   "invalid_response",

@@ -1248,6 +1248,7 @@
     "failure": {
       "no_ai_key": "The AI key is no longer available. Add one in Settings.",
       "no_search_key": "The search key is no longer available. Add one in Settings.",
+      "automatic_disabled": "Automatic claim evidence was turned off before this check began.",
       "source_changed": "The saved draft changed before this check began. Refresh for the current text.",
       "provider_unavailable": "The AI or search provider was unavailable. Try again later.",
       "invalid_response": "The AI provider returned an unusable answer. Try again.",

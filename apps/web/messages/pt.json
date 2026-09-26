@@ -1248,6 +1248,7 @@
     "failure": {
       "no_ai_key": "A chave de IA já não está disponível. Adicione uma nas Definições.",
       "no_search_key": "A chave de pesquisa já não está disponível. Adicione uma nas Definições.",
+      "automatic_disabled": "A verificação automática de afirmações foi desativada antes de começar.",
       "source_changed": "O rascunho guardado mudou antes da verificação começar. Repita-a para o texto atual.",
       "provider_unavailable": "O fornecedor de IA ou pesquisa não estava disponível. Tente mais tarde.",
       "invalid_response": "O fornecedor de IA devolveu uma resposta inutilizável. Tente novamente.",

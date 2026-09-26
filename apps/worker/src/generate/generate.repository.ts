@@ -1189,11 +1189,10 @@ export class GenerateRepository {
    *
    * WHAT THIS TRANSACTION LOCKS, in statement order:
    *
-   *   1. `brands` — `FOR KEY SHARE` on the run's brand. Its automatic-review
-   *      opt-in is read for this draft's terminal transaction. The
-   *      `content_items` INSERT at step 4 takes exactly this lock anyway, for
-   *      `content_items.brand_id`, four statements later — this takes it up
-   *      front instead, where the canonical order (`docs/lock-order.md`) wants it.
+   *   1. `brands` — `FOR SHARE` on the run's brand. Its automatic-review
+   *      opt-in is read for this draft's terminal transaction. This conflicts
+   *      with a concurrent setting update and serializes the opt-in decision
+   *      with draft completion, while retaining the brand-first lock order.
    *   2. `pipeline_runs` — `FOR UPDATE` on the run, with the status and fence
    *      re-checked under it. Still before every write, which is the property
    *      that makes a second content item impossible; see above.
@@ -1257,9 +1256,8 @@ export class GenerateRepository {
   ): Promise<TerminalOutcome> {
     try {
       return await db.transaction(async (tx) => {
-        // The brand, `FOR KEY SHARE`, before anything else. This is the
-        // `content_items` INSERT's own foreign-key lock, taken four statements
-        // early so that it is taken in the canonical order.
+        // Lock the brand before anything else. `FOR SHARE` also conflicts with
+        // a non-key setting UPDATE, so the opt-in cannot change before commit.
         //
         // The opt-in comes from this row in the same transaction as the new
         // draft. There is no separate "brand is gone" branch: a committed
@@ -1270,7 +1268,7 @@ export class GenerateRepository {
           .from(schema.brands)
           .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
           .limit(1)
-          .for("key share");
+          .for("share");
 
         const locked = await tx
           .select({

@@ -119,6 +119,54 @@ describe.skipIf(!url)("ClaimReviewWorkerRepository (real database)", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("does not claim a queued automatic review after the brand opts out", async () => {
+    const row = await seed();
+    await db
+      .update(schema.claimReviews)
+      .set({ trigger: "automatic" })
+      .where(eq(schema.claimReviews.id, row.reviewId));
+
+    expect(await repo.claim(row.orgId, row.reviewId, randomUUID())).toBeNull();
+    const [review] = await db
+      .select({ status: schema.claimReviews.status, errorCode: schema.claimReviews.errorCode })
+      .from(schema.claimReviews)
+      .where(eq(schema.claimReviews.id, row.reviewId));
+    expect(review).toEqual({ status: "failed", errorCode: "automatic_disabled" });
+
+    const manual = await seed();
+    expect(await repo.claim(manual.orgId, manual.reviewId, randomUUID())).not.toBeNull();
+  });
+
+  it("stops later paid calls when automatic evidence is turned off during a review", async () => {
+    const row = await seed();
+    const [item] = await db
+      .select({ brandId: schema.contentItems.brandId })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, row.contentItemId));
+    await db
+      .update(schema.brands)
+      .set({ automaticClaimEvidence: true })
+      .where(eq(schema.brands.id, item?.brandId as string));
+    await db
+      .update(schema.claimReviews)
+      .set({ trigger: "automatic" })
+      .where(eq(schema.claimReviews.id, row.reviewId));
+
+    const token = randomUUID();
+    expect(await repo.claim(row.orgId, row.reviewId, token)).not.toBeNull();
+    expect(await repo.beginCall(row.orgId, row.reviewId, token)).toBe(true);
+    await db
+      .update(schema.brands)
+      .set({ automaticClaimEvidence: false })
+      .where(eq(schema.brands.id, item?.brandId as string));
+    expect(await repo.beginCall(row.orgId, row.reviewId, token)).toBe(false);
+    const [review] = await db
+      .select({ status: schema.claimReviews.status, errorCode: schema.claimReviews.errorCode })
+      .from(schema.claimReviews)
+      .where(eq(schema.claimReviews.id, row.reviewId));
+    expect(review).toEqual({ status: "failed", errorCode: "automatic_disabled" });
+  });
+
   it("stops another paid call when the saved body changes during review", async () => {
     const row = await seed();
     const token = randomUUID();
