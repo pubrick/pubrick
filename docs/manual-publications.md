@@ -1,7 +1,7 @@
 # Manual publication channels
 
-Pubrick can prepare posts for VC.ru, Dzen, Instagram, YouTube, RuTube and
-TenChat. These channels have no credentials, connection test or automatic
+Pubrick can prepare posts for VC.ru, Dzen, Instagram, YouTube, RuTube, TenChat
+and T—Ж. These channels have no credentials, connection test or automatic
 publisher. Approving a post changes its channel adaptation to **Ready for
 manual publishing** and creates no publish job. The editor must publish it on
 the platform and record the resulting public URL in Pubrick.
@@ -37,10 +37,16 @@ The confirmation endpoint is
 access to the adaptation, a `manual_ready` state and an HTTPS post URL on the
 channel's own host with a non-root path. Allowed hosts are exact platform hosts:
 `vc.ru`, `dzen.ru`, `instagram.com`, `youtube.com`/`youtu.be`, `rutube.ru`,
-and `tenchat.ru` (plus the supported `www`/mobile forms). A URL for another
+`tenchat.ru` and `t-j.ru`. Some of the other platforms also accept their listed
+`www` or mobile hosts; T—Ж requires the exact `t-j.ru` host. A URL for another
 platform, a homepage URL, an insecure URL and repeated confirmation are
 refused. The server reads the saved channel before validating its host, so a
 caller cannot claim that a VC.ru adaptation was published on Dzen.
+
+For T—Ж, use its [submission guide](https://t-j.ru/manual/) to choose the
+appropriate community or editorial route and submit the reviewed text there.
+Pubrick cannot observe its editorial review or publication. Record the public
+T—Ж article URL only after it is available on the site.
 
 ## Dzen RSS is separate
 

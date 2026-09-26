@@ -934,6 +934,7 @@
     "manualReadyAction": "Ready for manual publishing",
     "manualScheduleHint": "Manual channels cannot be scheduled from Pubrick. Publish them on their platforms when ready.",
     "manualInstructions": "Copy the reviewed title and body. Publish them on {platform} yourself, then paste the public post URL below. Pubrick does not send this post to {platform}.",
+    "manualTjInstructions": "Copy the approved title and body, then follow T—Ж's submission guide. Record the public article URL only after T—Ж publishes it. Pubrick does not submit the article to T—Ж.",
     "manualVideoHint": "Download an attached video if present, then upload and edit it in the platform editor yourself. Pubrick does not send video to this channel.",
     "manualDzenHint": "The optional public RSS feed is syndication only. A feed entry does not prove Dzen imported or published this post.",
     "copyTitle": "Copy title",

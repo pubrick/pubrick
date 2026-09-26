@@ -2647,9 +2647,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             {a.status === "manual_ready" && isManualPlatform(channelPlatform(a.channelId)) && (
               <div className="flex flex-col gap-3 rounded-card border border-border bg-panel p-4">
                 <p className="text-sm text-fg-secondary">
-                  {t("manualInstructions", {
-                    platform: platformName(channelPlatform(a.channelId)),
-                  })}
+                  {channelPlatform(a.channelId) === "t_j"
+                    ? t("manualTjInstructions")
+                    : t("manualInstructions", {
+                        platform: platformName(channelPlatform(a.channelId)),
+                      })}
                 </p>
                 {["youtube", "rutube"].includes(channelPlatform(a.channelId)) && (
                   <p className="text-xs text-fg-tertiary">{t("manualVideoHint")}</p>

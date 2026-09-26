@@ -1,0 +1,4 @@
+ALTER TABLE "channels" DROP CONSTRAINT "channels_platform_check";--> statement-breakpoint
+ALTER TABLE "channels" DROP CONSTRAINT "channels_credentials_mode_check";--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_platform_check" CHECK ("channels"."platform" in ('telegram', 'vk', 'dzen', 'vc_ru', 'instagram', 'youtube', 'rutube', 'tenchat', 't_j', 'max', 'bluesky', 'mastodon', 'x'));--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_credentials_mode_check" CHECK ("channels"."platform" = 'dzen' or (("channels"."platform" in ('vc_ru', 'instagram', 'youtube', 'rutube', 'tenchat', 't_j')) = ("channels"."credentials_encrypted" is null)));

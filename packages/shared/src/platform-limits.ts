@@ -19,6 +19,7 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
   youtube: MAX_BODY_LENGTH,
   rutube: MAX_BODY_LENGTH,
   tenchat: MAX_BODY_LENGTH,
+  t_j: MAX_BODY_LENGTH,
   max: 4000,
   bluesky: 300,
   mastodon: 500,

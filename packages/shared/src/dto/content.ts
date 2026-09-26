@@ -714,6 +714,7 @@ const MANUAL_PUBLICATION_HOSTS: Record<ManualPlatformId, readonly string[]> = {
   youtube: ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"],
   rutube: ["rutube.ru", "www.rutube.ru"],
   tenchat: ["tenchat.ru", "www.tenchat.ru"],
+  t_j: ["t-j.ru"],
 };
 
 export function isManualPublicationUrl(platform: ManualPlatformId, value: string): boolean {

@@ -934,6 +934,7 @@
     "manualReadyAction": "Lista para publicar manualmente",
     "manualScheduleHint": "Los canales manuales no se pueden programar desde Pubrick. Publícalos en sus plataformas cuando estén listos.",
     "manualInstructions": "Copia el título y el texto revisados. Publícalos tú mismo en {platform} y pega abajo la URL pública. Pubrick no envía esta publicación a {platform}.",
+    "manualTjInstructions": "Copia el título y el texto aprobados y sigue la guía de envío de T—Ж. Registra la URL pública solo cuando T—Ж publique el artículo. Pubrick no lo envía a T—Ж.",
     "manualVideoHint": "Si hay un vídeo adjunto, descárgalo y súbelo al editor de la plataforma. Pubrick no envía vídeos a este canal.",
     "manualDzenHint": "El canal RSS público opcional solo distribuye contenido. Una entrada no demuestra que Dzen importara o publicara el post.",
     "copyTitle": "Copiar título",

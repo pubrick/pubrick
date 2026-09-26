@@ -18,6 +18,7 @@ const PLATFORM_NAMES: Record<string, string> = {
   youtube: "YouTube",
   rutube: "RuTube",
   tenchat: "TenChat",
+  t_j: "T—Ж",
   max: "MAX",
   bluesky: "Bluesky",
   mastodon: "Mastodon",
@@ -36,6 +37,7 @@ const MANUAL_PLATFORM_HOMES: Record<ManualPlatformId, string> = {
   youtube: "https://www.youtube.com/",
   rutube: "https://rutube.ru/",
   tenchat: "https://tenchat.ru/",
+  t_j: "https://t-j.ru/manual/",
 };
 
 export function manualPlatformHome(id: string): string | undefined {

@@ -1426,7 +1426,7 @@ describe("BrandPage — the platform picker", () => {
     expect(JSON.parse(requests[0]?.body ?? "{}")).not.toHaveProperty("credentials");
   });
 
-  it.each(["dzen", "instagram", "youtube", "rutube", "tenchat"])(
+  it.each(["dzen", "instagram", "youtube", "rutube", "tenchat", "t_j"])(
     "offers %s as a manual channel without credentials",
     async (platform) => {
       const requests: string[] = [];

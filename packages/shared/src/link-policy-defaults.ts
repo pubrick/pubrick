@@ -12,6 +12,7 @@ export const DEFAULT_UTM: Record<PlatformId, { source: string; medium: string }>
   youtube: { source: "youtube", medium: "video" },
   rutube: { source: "rutube", medium: "video" },
   tenchat: { source: "tenchat", medium: "social" },
+  t_j: { source: "t-j", medium: "article" },
   max: { source: "max", medium: "post" },
   bluesky: { source: "bluesky", medium: "post" },
   mastodon: { source: "mastodon", medium: "post" },

@@ -4,11 +4,19 @@ import {
   TELEGRAM_LONG_POST_LENGTH,
 } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
-import { adaptationLimit, channelLabel, credentialFieldLabel, platformName } from "./platform";
+import {
+  adaptationLimit,
+  channelLabel,
+  credentialFieldLabel,
+  manualPlatformHome,
+  platformName,
+} from "./platform";
 
 describe("platformName / channelLabel", () => {
   it("renders a known id as its display name and an unknown one raw", () => {
     expect(platformName("vc_ru")).toBe("VC.ru");
+    expect(platformName("t_j")).toBe("T—Ж");
+    expect(manualPlatformHome("t_j")).toBe("https://t-j.ru/manual/");
     expect(platformName("myspace")).toBe("myspace");
   });
 
