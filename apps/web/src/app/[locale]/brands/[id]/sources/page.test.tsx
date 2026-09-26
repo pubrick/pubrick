@@ -422,6 +422,48 @@ describe("watched sources page", () => {
     expect(newsSourceCreateSchema.parse(request?.body)).toEqual(request?.body);
   });
 
+  it("adds a public Telegram group for manual review through the shared source API", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.kind), "telegram_group");
+    expect(screen.getByText(en.Sources.groupSetup, { exact: false })).toBeInTheDocument();
+    await user.type(screen.getByLabelText(en.Sources.name), "Community");
+    await user.type(
+      screen.getByLabelText(en.Sources.telegramGroupUrl),
+      "https://t.me/example_group",
+    );
+    await user.click(screen.getByRole("button", { name: en.Sources.add }));
+    const request = calls.find(
+      (call) => call.method === "POST" && call.url.endsWith("/api/sources"),
+    );
+    expect(request?.body).toEqual({
+      brandId: BRAND_ID,
+      name: "Community",
+      kind: "telegram_group",
+      url: "https://t.me/example_group",
+      checkIntervalMinutes: 60,
+    });
+    expect(newsSourceCreateSchema.parse(request?.body)).toEqual(request?.body);
+  });
+
+  it("rejects a private invite for a public Telegram group before the API call", async () => {
+    const calls = install();
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.Sources.kind), "telegram_group");
+    await user.type(screen.getByLabelText(en.Sources.name), "Invitation");
+    await user.type(
+      screen.getByLabelText(en.Sources.telegramGroupUrl),
+      "https://t.me/+privateinvite",
+    );
+    await user.click(screen.getByRole("button", { name: en.Sources.add }));
+    expect(screen.getByRole("alert")).toHaveTextContent(en.Sources.invalidTelegramGroupUrl);
+    expect(calls.some((call) => call.method === "POST" && call.url.endsWith("/api/sources"))).toBe(
+      false,
+    );
+  });
+
   it("explains an invalid Telegram URL without sending it to the API", async () => {
     const calls = install();
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);

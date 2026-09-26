@@ -11,7 +11,7 @@ export const NEWS_SOURCE_ERROR_CODES = [
   "telegram_unavailable",
 ] as const;
 
-export const NEWS_SOURCE_KINDS = ["rss", "telegram", "telegram_private"] as const;
+export const NEWS_SOURCE_KINDS = ["rss", "telegram", "telegram_group", "telegram_private"] as const;
 export type NewsSourceKind = (typeof NEWS_SOURCE_KINDS)[number];
 export const NEWS_COMMENT_STATUSES = [
   "pending",
@@ -93,6 +93,7 @@ export const newsSourceCreateSchema = z.preprocess(
   z.discriminatedUnion("kind", [
     z.object({ ...sourceBase, kind: z.literal("rss"), url: feedUrl }),
     z.object({ ...sourceBase, kind: z.literal("telegram"), url: telegramUrl }),
+    z.object({ ...sourceBase, kind: z.literal("telegram_group"), url: telegramUrl }),
   ]),
 );
 export type NewsSourceCreate = z.infer<typeof newsSourceCreateSchema>;

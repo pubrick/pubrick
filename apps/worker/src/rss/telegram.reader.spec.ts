@@ -1,11 +1,16 @@
 import { encryptJson } from "@pubrick/shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fake = vi.hoisted(() => ({ readPrivateChannel: vi.fn(), readPrivateComments: vi.fn() }));
+const fake = vi.hoisted(() => ({
+  readPrivateChannel: vi.fn(),
+  readPrivateComments: vi.fn(),
+  readPublicGroup: vi.fn(),
+}));
 vi.mock("@pubrick/telegram", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@pubrick/telegram")>()),
   readPrivateChannel: fake.readPrivateChannel,
   readPrivateComments: fake.readPrivateComments,
+  readPublicGroup: fake.readPublicGroup,
 }));
 
 describe("private Telegram reader", () => {
@@ -63,5 +68,21 @@ describe("private Telegram reader", () => {
       peer: { channelId: 123456, accessHash: "987654321" },
       url: "https://t.me/c/123456/42",
     });
+  });
+
+  it("passes the decrypted workspace session to the public group adapter", async () => {
+    fake.readPublicGroup.mockResolvedValue([]);
+    const session = encryptJson({ session: "user-session" }, key);
+    expect(await reader.readGroup("https://t.me/public_group", session)).toEqual([]);
+    expect(fake.readPublicGroup).toHaveBeenCalledWith({
+      apiId: 1234,
+      apiHash: "test-hash",
+      session: "user-session",
+      url: "https://t.me/public_group",
+    });
+    await expect(reader.readGroup("https://t.me/public_group", null)).rejects.toMatchObject({
+      code: "telegram_not_connected",
+    });
+    expect(fake.readPublicGroup).toHaveBeenCalledTimes(1);
   });
 });

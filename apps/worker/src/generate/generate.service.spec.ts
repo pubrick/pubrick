@@ -1142,7 +1142,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         .insert(schema.brands)
         .values({ orgId: victim.orgId, name: "Other news brand" })
         .returning({ id: schema.brands.id });
-      const [publicSource, privateSource, otherBrandSource, otherOrgSource] = await db
+      const [publicSource, privateSource, groupSource, otherBrandSource, otherOrgSource] = await db
         .insert(schema.newsSources)
         .values([
           {
@@ -1159,6 +1159,13 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
             kind: "telegram_private",
             url: "https://example.com/private",
             privatePeerEncrypted: "fixture",
+          },
+          {
+            orgId: victim.orgId,
+            brandId: victim.brandId,
+            name: "Public group",
+            kind: "telegram_group",
+            url: "https://t.me/example_group",
           },
           {
             orgId: victim.orgId,
@@ -1194,6 +1201,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         .values([
           row(publicSource?.id as string, victim.orgId, victim.brandId, "OWN_NEWS_MARKER"),
           row(privateSource?.id as string, victim.orgId, victim.brandId, "PRIVATE_NEWS_MARKER"),
+          row(groupSource?.id as string, victim.orgId, victim.brandId, "GROUP_NEWS_MARKER"),
           row(
             otherBrandSource?.id as string,
             victim.orgId,
@@ -1250,6 +1258,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
         const call = script.calls.find((candidate) => candidate.role === role);
         expect(call?.user).toContain("OWN_NEWS_MARKER");
         expect(call?.user).not.toContain("PRIVATE_NEWS_MARKER");
+        expect(call?.user).not.toContain("GROUP_NEWS_MARKER");
         expect(call?.user).not.toContain("OTHER_BRAND_NEWS_MARKER");
         expect(call?.user).not.toContain("OTHER_ORG_NEWS_MARKER");
         expect(call?.user).not.toContain("IRRELEVANT_NEWS_MARKER");

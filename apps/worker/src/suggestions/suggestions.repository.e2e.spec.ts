@@ -131,6 +131,29 @@ describe.skipIf(!url)("SuggestionsRepository (Postgres)", () => {
       relevanceUrgency: "timely",
       relevanceScoredAt: new Date(),
     });
+    const [groupSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        name: "Public group",
+        kind: "telegram_group",
+        url: "https://t.me/example_group",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!groupSource) throw new Error("Group source seed failed");
+    await db.insert(schema.newsItems).values({
+      orgId: stamp,
+      brandId: brand.id,
+      sourceId: groupSource.id,
+      title: "Public group scored story",
+      url: "https://t.me/example_group/1",
+      relevanceStatus: "scored",
+      relevanceScore: 0.99,
+      relevanceReason: "Fit",
+      relevanceUrgency: "timely",
+      relevanceScoredAt: new Date(),
+    });
     await db
       .insert(schema.topics)
       .values({ orgId: stamp, brandId: brand.id, title: "Existing Topic", status: "approved" });

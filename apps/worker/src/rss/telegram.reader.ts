@@ -7,6 +7,7 @@ import {
   readComments,
   readPrivateChannel,
   readPrivateComments,
+  readPublicGroup,
 } from "@pubrick/telegram";
 import { env } from "../env";
 import type { FeedItem } from "./rss.fetcher";
@@ -64,6 +65,19 @@ export class TelegramReader {
     return this.call(
       (session) =>
         readChannel({
+          apiId: Number(env.TELEGRAM_API_ID),
+          apiHash: env.TELEGRAM_API_HASH ?? "",
+          session,
+          url,
+        }),
+      encryptedSession,
+    );
+  }
+
+  async readGroup(url: string, encryptedSession: string | null): Promise<FeedItem[]> {
+    return this.call(
+      (session) =>
+        readPublicGroup({
           apiId: Number(env.TELEGRAM_API_ID),
           apiHash: env.TELEGRAM_API_HASH ?? "",
           session,

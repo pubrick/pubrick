@@ -26,7 +26,12 @@ export class RssService {
             )
           : source.kind === "telegram"
             ? await this.telegram.read(source.url, await this.sources.telegramSession(job.orgId))
-            : await fetchFeed(source.url);
+            : source.kind === "telegram_group"
+              ? await this.telegram.readGroup(
+                  source.url,
+                  await this.sources.telegramSession(job.orgId),
+                )
+              : await fetchFeed(source.url);
     } catch (error) {
       if (!(error instanceof FeedFetchError) && !(error instanceof TelegramSourceError))
         throw error;

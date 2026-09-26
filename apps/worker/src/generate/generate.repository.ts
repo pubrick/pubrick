@@ -985,6 +985,7 @@ export class GenerateRepository {
       eq(schema.newsSources.orgId, orgId),
       eq(schema.newsSources.brandId, brandId),
       ne(schema.newsSources.kind, "telegram_private"),
+      ne(schema.newsSources.kind, "telegram_group"),
       eq(schema.newsItems.relevanceStatus, "scored"),
       isNull(schema.newsItems.dismissedAt),
       sql`${newsRankScore} >= 0.5`,
