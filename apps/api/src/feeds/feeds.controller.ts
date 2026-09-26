@@ -35,6 +35,16 @@ export class ManagedFeedsController {
     return this.feeds.add(orgId, brandId, itemId);
   }
 
+  /** Human-approved Dzen copy becomes a feed snapshot, not a Dzen delivery receipt. */
+  @Post("adaptations/:adaptationId")
+  addDzenAdaptation(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+  ) {
+    return this.feeds.addDzenAdaptation(orgId, brandId, adaptationId);
+  }
+
   @Delete("items/:itemId")
   remove(
     @OrgId() orgId: string,

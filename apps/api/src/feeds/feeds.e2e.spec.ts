@@ -204,4 +204,112 @@ describe.skipIf(!url)("public syndication feed", () => {
     await request(app.getHttpServer()).get(publicImagePath).expect(404);
     await owner.agent.delete(`/api/media/${upload.body.id}`).expect(204);
   });
+
+  it("hands off only an approved Dzen adaptation, snapshots its text, and revokes it on rejection", async () => {
+    const owner = await member();
+    const stranger = await member();
+    const feedPath = `/api/brands/${owner.brandId}/feed`;
+    const channel = await owner.agent
+      .post("/api/channels")
+      .send({ brandId: owner.brandId, platform: "dzen", name: "Dzen" })
+      .expect(201);
+    const item = await owner.agent
+      .post("/api/content")
+      .send({
+        brandId: owner.brandId,
+        title: "Reviewed Dzen headline",
+        body: "Master article text",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const itemId = item.body.id as string;
+    const adaptationId = item.body.adaptations[0].id as string;
+    const handoffPath = `${feedPath}/adaptations/${adaptationId}`;
+    await owner.agent
+      .patch(`/api/content/${itemId}/adaptations/${adaptationId}`)
+      .send({ body: "Dzen-specific copy" })
+      .expect(200);
+
+    await owner.agent.post(handoffPath).expect(404);
+    const feed = await owner.agent.post(feedPath).expect(201);
+    const rssPath = new URL(feed.body.url as string).pathname;
+    await owner.agent.post(handoffPath).expect(400);
+    await stranger.agent.post(handoffPath).expect(404);
+    const otherBrand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Another brand" })
+      .expect(201);
+    await owner.agent.post(`/api/brands/${otherBrand.body.id}/feed`).expect(201);
+    await owner.agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    await owner.agent
+      .post(`/api/brands/${otherBrand.body.id}/feed/adaptations/${adaptationId}`)
+      .expect(400);
+    const vc = await owner.agent
+      .post("/api/channels")
+      .send({ brandId: otherBrand.body.id, platform: "vc_ru", name: "VC.ru" })
+      .expect(201);
+    const vcItem = await owner.agent
+      .post("/api/content")
+      .send({
+        brandId: otherBrand.body.id,
+        title: "Another approved post",
+        body: "VC body",
+        channelIds: [vc.body.id],
+      })
+      .expect(201);
+    await owner.agent.post(`/api/content/${vcItem.body.id}/approve`).send({}).expect(200);
+    await owner.agent
+      .post(`/api/brands/${otherBrand.body.id}/feed/adaptations/${vcItem.body.adaptations[0].id}`)
+      .expect(400);
+
+    const added = await owner.agent.post(handoffPath).expect(201);
+    expect(added.body.entries).toMatchObject([{ contentItemId: itemId, adaptationId }]);
+    const publicRss = await request(app.getHttpServer()).get(rssPath).expect(200);
+    expect(publicRss.text).toContain("Dzen-specific copy");
+    expect(publicRss.text).not.toContain("Master article text");
+    const articleUrl = new XMLParser({ ignoreAttributes: false }).parse(publicRss.text).rss.channel
+      .item.link as string;
+    const articlePath = new URL(articleUrl).pathname;
+    expect((await request(app.getHttpServer()).get(articlePath).expect(200)).text).toContain(
+      "Dzen-specific copy",
+    );
+    const [snapshot] = await db
+      .select({ id: schema.feedEntries.id, body: schema.feedEntries.body })
+      .from(schema.feedEntries)
+      .where(eq(schema.feedEntries.adaptationId, adaptationId));
+    expect(snapshot?.body).toBe("Dzen-specific copy");
+    await owner.agent.post(handoffPath).expect(201);
+    expect((await owner.agent.get(feedPath).expect(200)).body.entries).toHaveLength(1);
+    expect(
+      await db
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(eq(schema.publications.adaptationId, adaptationId)),
+    ).toHaveLength(0);
+
+    // Manual-ready delivery is considered started: retraction must refuse,
+    // leaving the approved snapshot intact until a valid rejection removes it.
+    await owner.agent.post(`/api/content/${itemId}/retract-approval`).expect(409);
+    await request(app.getHttpServer()).get(articlePath).expect(200);
+
+    await owner.agent.post(`/api/content/${itemId}/reject`).expect(200);
+    expect((await owner.agent.get(feedPath).expect(200)).body.entries).toEqual([]);
+    await request(app.getHttpServer()).get(articlePath).expect(404);
+    expect((await request(app.getHttpServer()).get(rssPath).expect(200)).text).not.toContain(
+      "Dzen-specific copy",
+    );
+    await owner.agent.post(handoffPath).expect(400);
+    await owner.agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+    await owner.agent.post(handoffPath).expect(201);
+    const secondRss = await request(app.getHttpServer()).get(rssPath).expect(200);
+    const secondArticle = new URL(
+      new XMLParser({ ignoreAttributes: false }).parse(secondRss.text).rss.channel.item
+        .link as string,
+    ).pathname;
+    await owner.agent.delete(`/api/channels/${channel.body.id}`).expect(200);
+    expect((await owner.agent.get(feedPath).expect(200)).body.entries).toEqual([]);
+    await request(app.getHttpServer()).get(secondArticle).expect(404);
+    await owner.agent.delete(feedPath).expect(200);
+    await request(app.getHttpServer()).get(rssPath).expect(404);
+  });
 });

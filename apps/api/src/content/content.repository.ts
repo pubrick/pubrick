@@ -6474,6 +6474,17 @@ export class ContentRepository {
           "A delivery has started or finished; inspect the channel results before changing this post",
         );
       }
+      // A feed handoff is public even though it has no platform receipt. Keep
+      // this cleanup in the same transaction as any approval retraction.
+      await tx.delete(schema.feedEntries).where(
+        and(
+          eq(schema.feedEntries.orgId, orgId),
+          inArray(
+            schema.feedEntries.adaptationId,
+            adaptations.map((adaptation) => adaptation.id),
+          ),
+        ),
+      );
       for (const adaptation of adaptations) {
         const hadJob = adaptation.status === "scheduled" || adaptation.status === "queued";
         if (hadJob) await this.queue.cancelPublish(tx, adaptation.id, orgId);
@@ -6883,6 +6894,21 @@ export class ContentRepository {
         hasOutstanding: outstanding.length > 0,
       });
       const journalDecision = await this.shouldJournalDecision(tx, orgId, id, "rejected");
+
+      if (outstanding.length > 0) {
+        // Rejecting a manual-ready Dzen adaptation also revokes its still
+        // pending public handoff. The adaptation locks above serialize this
+        // delete with a concurrent feed insert.
+        await tx.delete(schema.feedEntries).where(
+          and(
+            eq(schema.feedEntries.orgId, orgId),
+            inArray(
+              schema.feedEntries.adaptationId,
+              outstanding.map((adaptation) => adaptation.id),
+            ),
+          ),
+        );
+      }
 
       for (const adaptation of outstanding) {
         if (adaptation.status !== "manual_ready") {

@@ -1,0 +1,3 @@
+ALTER TABLE "feed_entries" ADD COLUMN "adaptation_id" uuid;--> statement-breakpoint
+ALTER TABLE "feed_entries" ADD CONSTRAINT "feed_entries_adaptation_item_fk" FOREIGN KEY ("adaptation_id","content_item_id") REFERENCES "public"."adaptations"("id","content_item_id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "feed_entries_adaptation_id_idx" ON "feed_entries" USING btree ("adaptation_id");

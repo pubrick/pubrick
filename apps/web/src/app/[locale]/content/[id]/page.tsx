@@ -3130,7 +3130,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         />
       )}
       {canManageFeed && (
-        <FeedEntryAction brandId={item.brandId} itemId={item.id} status={item.status} />
+        <FeedEntryAction
+          brandId={item.brandId}
+          itemId={item.id}
+          status={item.status}
+          dzenAdaptationId={
+            item.adaptations.find(
+              (adaptation) =>
+                adaptation.status === "manual_ready" &&
+                channelPlatform(adaptation.channelId) === "dzen",
+            )?.id
+          }
+        />
       )}
     </AppShell>
   );

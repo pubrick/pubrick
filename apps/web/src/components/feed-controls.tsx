@@ -13,7 +13,13 @@ type FeedState =
   | {
       enabled: true;
       url: string;
-      entries: { id: string; contentItemId: string; title: string; publishedAt: string }[];
+      entries: {
+        id: string;
+        contentItemId: string;
+        adaptationId: string | null;
+        title: string;
+        publishedAt: string;
+      }[];
     };
 
 /** Feed activation and revocation live with the brand's other settings. */
@@ -111,10 +117,12 @@ export function FeedEntryAction({
   brandId,
   itemId,
   status,
+  dzenAdaptationId,
 }: {
   brandId: string;
   itemId: string;
   status: string;
+  dzenAdaptationId?: string;
 }) {
   const t = useTranslations("Feed");
   const te = useTranslations("Errors");
@@ -124,7 +132,8 @@ export function FeedEntryAction({
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"add" | "remove" | null>(null);
   const path = `/api/brands/${brandId}/feed`;
-  const eligible = status === "published" || status === "partially_published";
+  const eligible =
+    status === "published" || status === "partially_published" || Boolean(dzenAdaptationId);
 
   useEffect(() => {
     if (!eligible) return;
@@ -137,7 +146,10 @@ export function FeedEntryAction({
   }, [eligible, path, t, te]);
 
   if (!eligible) return null;
-  const included = feed?.entries.some((entry) => entry.contentItemId === itemId) ?? false;
+  const entry = feed?.entries.find((entry) => entry.contentItemId === itemId);
+  const included = Boolean(entry);
+  const dzenEntry = Boolean(entry?.adaptationId);
+  const addingDzen = Boolean(dzenAdaptationId);
 
   async function change() {
     if (!confirm) return;
@@ -145,9 +157,14 @@ export function FeedEntryAction({
     setError(null);
     try {
       setFeed(
-        await api<FeedState>(`${path}/items/${itemId}`, {
-          method: confirm === "add" ? "POST" : "DELETE",
-        }),
+        await api<FeedState>(
+          confirm === "add" && dzenAdaptationId
+            ? `${path}/adaptations/${dzenAdaptationId}`
+            : `${path}/items/${itemId}`,
+          {
+            method: confirm === "add" ? "POST" : "DELETE",
+          },
+        ),
       );
       setConfirm(null);
     } catch (err) {
@@ -176,21 +193,21 @@ export function FeedEntryAction({
       ) : (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <p className="text-sm text-fg-secondary">
-            {included ? t("available") : t("notIncluded")}
+            {included ? t(dzenEntry ? "dzenAvailable" : "available") : t("notIncluded")}
           </p>
           <Button
             variant={included ? "danger" : "secondary"}
             disabled={busy}
             onClick={() => setConfirm(included ? "remove" : "add")}
           >
-            {included ? t("remove") : t("add")}
+            {included ? t("remove") : t(addingDzen ? "addDzen" : "add")}
           </Button>
         </div>
       )}
       <Modal
         open={confirm !== null}
         onClose={() => setConfirm(null)}
-        title={t(confirm === "add" ? "addTitle" : "removeTitle")}
+        title={t(confirm === "add" ? (addingDzen ? "addDzenTitle" : "addTitle") : "removeTitle")}
         footer={
           <>
             <Button variant="secondary" onClick={() => setConfirm(null)}>
@@ -201,13 +218,13 @@ export function FeedEntryAction({
               disabled={busy}
               onClick={change}
             >
-              {t(confirm === "add" ? "add" : "remove")}
+              {t(confirm === "add" ? (addingDzen ? "addDzen" : "add") : "remove")}
             </Button>
           </>
         }
       >
         <p className="text-sm text-fg-secondary">
-          {t(confirm === "add" ? "addHint" : "removeHint")}
+          {t(confirm === "add" ? (addingDzen ? "addDzenHint" : "addHint") : "removeHint")}
         </p>
       </Modal>
     </Card>

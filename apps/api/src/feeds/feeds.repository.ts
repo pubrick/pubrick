@@ -9,6 +9,7 @@ import { env } from "../env";
 const ENTRY_COLUMNS = {
   id: schema.feedEntries.id,
   contentItemId: schema.feedEntries.contentItemId,
+  adaptationId: schema.feedEntries.adaptationId,
   title: schema.feedEntries.title,
   publishedAt: schema.feedEntries.publishedAt,
 };
@@ -134,6 +135,154 @@ export class FeedsRepository {
             })),
           );
         }
+      }
+    });
+    return this.get(orgId, brandId);
+  }
+
+  /** Snapshot an approved Dzen adaptation without recording a Dzen publication. */
+  async addDzenAdaptation(orgId: string, brandId: string, adaptationId: string) {
+    await db.transaction(async (tx) => {
+      // Parent FK locks must precede adaptations. Brand deletion and tenant
+      // deletion can cascade through the feed while removing adaptations.
+      await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId))
+        .for("key share");
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
+        .limit(1)
+        .for("key share");
+      if (!brand) throw notFound("brand_not_found", "Brand not found");
+      const [feed] = await tx
+        .select({ id: schema.brandFeeds.id })
+        .from(schema.brandFeeds)
+        .where(and(eq(schema.brandFeeds.orgId, orgId), eq(schema.brandFeeds.brandId, brandId)))
+        .limit(1)
+        .for("key share");
+      if (!feed) throw notFound("feed_not_found", "Enable the public feed first");
+      // Publication and rejection lock adaptations before channels and items.
+      // Holding this lock until the insert commits keeps approval valid under
+      // concurrent rejection and prevents a pending public snapshot.
+      const [adaptation] = await tx
+        .select({
+          id: schema.adaptations.id,
+          contentItemId: schema.adaptations.contentItemId,
+          channelId: schema.adaptations.channelId,
+          body: schema.adaptations.body,
+          status: schema.adaptations.status,
+        })
+        .from(schema.adaptations)
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .limit(1)
+        .for("update");
+      if (adaptation?.status !== "manual_ready") {
+        throw badRequest(
+          "feed_adaptation_not_ready",
+          "Only approved Dzen adaptations can enter the feed",
+        );
+      }
+      const [channel] = await tx
+        .select({ brandId: schema.channels.brandId, platform: schema.channels.platform })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, adaptation.channelId)))
+        .limit(1)
+        .for("key share");
+      if (!channel || channel.brandId !== brandId || channel.platform !== "dzen") {
+        throw badRequest(
+          "feed_adaptation_not_ready",
+          "Only approved Dzen adaptations can enter the feed",
+        );
+      }
+      const [item] = await tx
+        .select({
+          brandId: schema.contentItems.brandId,
+          title: schema.contentItems.title,
+          body: schema.contentItems.body,
+          richBody: schema.contentItems.richBody,
+          status: schema.contentItems.status,
+        })
+        .from(schema.contentItems)
+        .where(
+          and(
+            eq(schema.contentItems.orgId, orgId),
+            eq(schema.contentItems.id, adaptation.contentItemId),
+          ),
+        )
+        .limit(1)
+        .for("share");
+      const body = adaptation.body ?? item?.body;
+      if (
+        !item ||
+        item.brandId !== brandId ||
+        !["approved", "partially_published", "published"].includes(item.status) ||
+        !item.title?.trim() ||
+        !body?.trim()
+      ) {
+        throw badRequest(
+          "feed_adaptation_not_ready",
+          "Only approved Dzen adaptations can enter the feed",
+        );
+      }
+      const [entry] = await tx
+        .insert(schema.feedEntries)
+        .values({
+          orgId,
+          brandId,
+          feedId: feed.id,
+          contentItemId: adaptation.contentItemId,
+          adaptationId,
+          title: item.title,
+          body,
+          richBody: adaptation.body === null ? item.richBody : null,
+        })
+        .onConflictDoNothing({
+          target: [schema.feedEntries.feedId, schema.feedEntries.contentItemId],
+        })
+        .returning({ id: schema.feedEntries.id });
+      if (!entry) {
+        const [existing] = await tx
+          .select({ adaptationId: schema.feedEntries.adaptationId })
+          .from(schema.feedEntries)
+          .where(
+            and(
+              eq(schema.feedEntries.feedId, feed.id),
+              eq(schema.feedEntries.contentItemId, adaptation.contentItemId),
+            ),
+          )
+          .limit(1);
+        if (existing?.adaptationId === adaptationId) return;
+        throw badRequest("feed_item_exists", "This post already has a different feed entry");
+      }
+      const slots = await tx
+        .select({
+          mediaId: schema.contentImageSlots.mediaId,
+          afterParagraph: schema.contentImageSlots.afterParagraph,
+          alt: schema.contentImageSlots.alt,
+          caption: schema.contentImageSlots.caption,
+          alignment: schema.contentImageSlots.alignment,
+        })
+        .from(schema.contentImageSlots)
+        .where(
+          and(
+            eq(schema.contentImageSlots.orgId, orgId),
+            eq(schema.contentImageSlots.contentItemId, adaptation.contentItemId),
+          ),
+        )
+        .orderBy(asc(schema.contentImageSlots.afterParagraph));
+      if (slots.length) {
+        await tx.insert(schema.feedEntryImages).values(
+          slots.map((slot, position) => ({
+            orgId,
+            brandId,
+            feedEntryId: entry.id,
+            position,
+            ...slot,
+          })),
+        );
       }
     });
     return this.get(orgId, brandId);
