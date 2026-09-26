@@ -106,7 +106,9 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const feedbackVersion = useRef(0);
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [telegramConnected, setTelegramConnected] = useState(false);
-  const [kind, setKind] = useState<"rss" | "telegram" | "telegram_private">("rss");
+  const [kind, setKind] = useState<"rss" | "telegram" | "telegram_group" | "telegram_private">(
+    "rss",
+  );
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [invite, setInvite] = useState("");
@@ -297,7 +299,15 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       }
       const parsed = newsSourceCreateSchema.safeParse({ brandId: id, name, kind, url });
       if (!parsed.success) {
-        setError(t(kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"));
+        setError(
+          t(
+            kind === "telegram"
+              ? "invalidTelegramUrl"
+              : kind === "telegram_group"
+                ? "invalidTelegramGroupUrl"
+                : "invalidFeedUrl",
+          ),
+        );
         return;
       }
       await api("/api/sources", {
@@ -363,7 +373,13 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       });
       if (!validSource.success) {
         setEditError(
-          t(editingSource.kind === "telegram" ? "invalidTelegramUrl" : "invalidFeedUrl"),
+          t(
+            editingSource.kind === "telegram"
+              ? "invalidTelegramUrl"
+              : editingSource.kind === "telegram_group"
+                ? "invalidTelegramGroupUrl"
+                : "invalidFeedUrl",
+          ),
         );
         return;
       }
@@ -722,6 +738,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
             >
               <option value="rss">{t("rss")}</option>
               <option value="telegram">{t("telegram")}</option>
+              <option value="telegram_group">{t("telegramGroup")}</option>
               <option value="telegram_private">{t("telegramPrivate")}</option>
             </Select>
             <Input
@@ -744,7 +761,13 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               />
             ) : (
               <Input
-                label={t(kind === "telegram" ? "telegramUrl" : "url")}
+                label={t(
+                  kind === "telegram"
+                    ? "telegramUrl"
+                    : kind === "telegram_group"
+                      ? "telegramGroupUrl"
+                      : "url",
+                )}
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 inputMode="url"
@@ -753,10 +776,14 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               />
             )}
           </form>
-          {(kind === "telegram" || kind === "telegram_private") && (
+          {(kind === "telegram" || kind === "telegram_group" || kind === "telegram_private") && (
             <p className="mt-3 text-sm text-fg-secondary">
               {!telegramConnected && <>{t("telegramSetup")} </>}
-              {kind === "telegram_private" ? t("privateSetup") : t("publicSetup")}{" "}
+              {kind === "telegram_private"
+                ? t("privateSetup")
+                : kind === "telegram_group"
+                  ? t("groupSetup")
+                  : t("publicSetup")}{" "}
               <Link href={`/${locale}/settings/telegram`} className="underline">
                 {t("telegramSettings")}
               </Link>{" "}
@@ -807,9 +834,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                 <span>
                   {source.kind === "telegram_private"
                     ? t("telegramPrivate")
-                    : source.kind === "telegram"
-                      ? t("telegram")
-                      : t("rss")}{" "}
+                    : source.kind === "telegram_group"
+                      ? t("telegramGroup")
+                      : source.kind === "telegram"
+                        ? t("telegram")
+                        : t("rss")}{" "}
                   · {source.url} ·{" "}
                   {source.lastErrorCode
                     ? t(
@@ -1316,7 +1345,13 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               <p className="text-sm text-fg-secondary">{t("privateIdentityFixed")}</p>
             ) : (
               <Input
-                label={t(editingSource?.kind === "telegram" ? "telegramUrl" : "url")}
+                label={t(
+                  editingSource?.kind === "telegram"
+                    ? "telegramUrl"
+                    : editingSource?.kind === "telegram_group"
+                      ? "telegramGroupUrl"
+                      : "url",
+                )}
                 value={editUrl}
                 onChange={(event) => setEditUrl(event.target.value)}
                 inputMode="url"

@@ -750,6 +750,13 @@
       "when": 1790376081180,
       "tag": "0107_automatic_claim_evidence",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1790406329888,
+      "tag": "0108_public_telegram_groups",
+      "breakpoints": true
     }
   ]
 }

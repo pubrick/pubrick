@@ -56,10 +56,14 @@ export async function resolveJoinedPrivateChannel(
 }
 
 type History = Awaited<ReturnType<TelegramClient["getHistory"]>>;
-function postsFromHistory(history: History, link: (id: number) => string): ChannelPost[] {
+function postsFromHistory(
+  history: History,
+  link: (id: number) => string,
+  kind: "channel" | "group" = "channel",
+): ChannelPost[] {
   return history.flatMap((message) => {
     if (
-      !message.isChannelPost ||
+      (kind === "channel" && !message.isChannelPost) ||
       message.isService ||
       message.isContentProtected ||
       message.media?.type === "poll"
@@ -176,6 +180,69 @@ export async function readChannel(
         if (chat.chatType !== "channel") throw new Error("access_denied");
         const messages = await client.getHistory(handle, { limit: 50 });
         return postsFromHistory(messages, (id) => `https://t.me/${handle}/${id}`);
+      })(),
+      deadline,
+    ]);
+  } catch (error) {
+    if (error instanceof Error && error.message === "access_denied") throw error;
+    const code =
+      typeof error === "object" && error !== null && "text" in error ? String(error.text) : "";
+    if (
+      [
+        "CHANNEL_PRIVATE",
+        "CHAT_ADMIN_REQUIRED",
+        "USERNAME_NOT_OCCUPIED",
+        "AUTH_KEY_UNREGISTERED",
+        "SESSION_REVOKED",
+      ].includes(code)
+    )
+      throw new Error("access_denied");
+    throw new Error("unavailable");
+  } finally {
+    clearTimeout(timer);
+    await client.destroy().catch(() => undefined);
+  }
+}
+
+/** Read public discussion history through its username; never join or resolve an invite. */
+export async function readPublicGroup(
+  input: Credentials & { session: string; url: string },
+): Promise<ChannelPost[]> {
+  let handle: string;
+  try {
+    if (!/^https:\/\/t\.me\/[A-Za-z0-9_]{5,32}\/?$/.test(input.url)) throw new Error();
+    const parsed = new URL(input.url);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.hostname !== "t.me" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      !/^\/[A-Za-z0-9_]{5,32}\/?$/.test(parsed.pathname)
+    )
+      throw new Error();
+    handle = parsed.pathname.slice(1).replace(/\/$/, "");
+  } catch {
+    throw new Error("access_denied");
+  }
+  const client = createClient({ apiId: input.apiId, apiHash: input.apiHash });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      void client.destroy().catch(() => undefined);
+      reject(new Error("unavailable"));
+    }, 20_000);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        await client.importSession(input.session);
+        const chat = await client.getChat(handle);
+        if (chat.chatType !== "supergroup" || chat.isLikelyUnavailable)
+          throw new Error("access_denied");
+        const messages = await client.getHistory(handle, { limit: 50 });
+        return postsFromHistory(messages, (id) => `https://t.me/${handle}/${id}`, "group");
       })(),
       deadline,
     ]);

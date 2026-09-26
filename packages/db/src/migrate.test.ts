@@ -926,6 +926,63 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("adds public Telegram groups without rewriting existing sources", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0108_public_telegram_groups");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let sourceId: string;
+      let brandId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('group_upgrade', 'Group', 'group-upgrade')",
+        );
+        const brand = await old.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('group_upgrade', 'Brand') RETURNING id",
+        );
+        if (!brand.rows[0]) throw new Error("Brand fixture was not inserted");
+        brandId = brand.rows[0].id;
+        const source = await old.query<{ id: string }>(
+          "INSERT INTO news_sources (org_id, brand_id, name, kind, url) VALUES ('group_upgrade', $1, 'Channel', 'telegram', 'https://t.me/old_channel') RETURNING id",
+          [brandId],
+        );
+        if (!source.rows[0]) throw new Error("Source fixture was not inserted");
+        sourceId = source.rows[0].id;
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+
+      const current = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const channel = await current.query(
+          "SELECT id, kind, url FROM news_sources WHERE id = $1",
+          [sourceId],
+        );
+        expect(channel.rows).toEqual([
+          { id: sourceId, kind: "telegram", url: "https://t.me/old_channel" },
+        ]);
+        await current.query(
+          "INSERT INTO news_sources (org_id, brand_id, name, kind, url) VALUES ('group_upgrade', $1, 'Group', 'telegram_group', 'https://t.me/public_group')",
+          [brandId],
+        );
+        await expect(
+          current.query(
+            "INSERT INTO news_sources (org_id, brand_id, name, kind, url) VALUES ('group_upgrade', $1, 'Invalid', 'unknown', 'https://t.me/invalid_group')",
+            [brandId],
+          ),
+        ).rejects.toMatchObject({ code: "23514" });
+      } finally {
+        await current.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  }, 60_000);
+
   it("preserves a legacy encrypted Dzen token when adding manual channels", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0106_manual-publication-channels");

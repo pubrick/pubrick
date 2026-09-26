@@ -4,6 +4,7 @@ import {
   readComments,
   readPrivateChannel,
   readPrivateComments,
+  readPublicGroup,
   resolveJoinedPrivateChannel,
 } from "./index.js";
 
@@ -114,6 +115,90 @@ describe("Telegram source adapter", () => {
         session: "private",
         url: "https://t.me/example_channel",
       });
+      const failure = expect(reading).rejects.toThrow("unavailable");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await failure;
+      expect(fake.destroy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("public Telegram group adapter", () => {
+  const input = {
+    apiId: 1,
+    apiHash: "hash",
+    session: "workspace-session",
+    url: "https://t.me/public_group",
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    fake.importSession.mockResolvedValue(undefined);
+    fake.destroy.mockResolvedValue(undefined);
+  });
+
+  it("reads at most 50 messages from a public supergroup and skips unsafe content", async () => {
+    fake.getChat.mockResolvedValue({ chatType: "supergroup", isLikelyUnavailable: false });
+    fake.getHistory.mockResolvedValue([
+      {
+        id: 1,
+        isChannelPost: false,
+        isService: false,
+        isContentProtected: false,
+        media: null,
+        text: "A public discussion message with enough detail to retain as a story.",
+        date: new Date("2026-01-01"),
+      },
+      {
+        id: 2,
+        isService: true,
+        text: "A service message long enough to be skipped by the filter.",
+      },
+      { id: 3, isContentProtected: true, text: "A protected message long enough to be skipped." },
+      {
+        id: 4,
+        media: { type: "poll" },
+        text: "A poll description long enough to be skipped by the filter.",
+      },
+      { id: 5, text: "Short" },
+    ]);
+    expect(await readPublicGroup(input)).toEqual([
+      {
+        title: "A public discussion message with enough detail to retain as a story.",
+        summary: "A public discussion message with enough detail to retain as a story.",
+        url: "https://t.me/public_group/1",
+        publishedAt: new Date("2026-01-01"),
+      },
+    ]);
+    expect(fake.getHistory).toHaveBeenCalledWith("public_group", { limit: 50 });
+    expect(fake.call).not.toHaveBeenCalled();
+    expect(fake.destroy).toHaveBeenCalled();
+  });
+
+  it("rejects invites, message URLs and broadcast channels without reading history", async () => {
+    for (const url of [
+      "https://t.me/+PrivateSecret",
+      "https://t.me/joinchat/PrivateSecret",
+      "https://t.me/public_group/42",
+      "https://t.me/public_group?start=secret",
+      "https://user:secret@t.me/public_group",
+      "https://t.me\\@evil.example/public_group",
+    ])
+      await expect(readPublicGroup({ ...input, url })).rejects.toThrow("access_denied");
+    expect(fake.getChat).not.toHaveBeenCalled();
+    fake.getChat.mockResolvedValue({ chatType: "channel" });
+    await expect(readPublicGroup(input)).rejects.toThrow("access_denied");
+    expect(fake.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("times out after 20 seconds and closes the client", async () => {
+    vi.useFakeTimers();
+    try {
+      fake.getChat.mockResolvedValue({ chatType: "supergroup" });
+      fake.getHistory.mockReturnValue(new Promise(() => undefined));
+      const reading = readPublicGroup(input);
       const failure = expect(reading).rejects.toThrow("unavailable");
       await vi.advanceTimersByTimeAsync(20_000);
       await failure;

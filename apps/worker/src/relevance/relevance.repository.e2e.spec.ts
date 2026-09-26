@@ -87,6 +87,28 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       })
       .returning({ id: schema.newsItems.id });
     if (!privateItem) throw new Error("Private article seed failed");
+    const [groupSource] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        name: "Public group",
+        kind: "telegram_group",
+        url: "https://t.me/example_group",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!groupSource) throw new Error("Group source seed failed");
+    const [groupItem] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId: stamp,
+        brandId: brand.id,
+        sourceId: groupSource.id,
+        title: "Group discussion",
+        url: "https://t.me/example_group/1",
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!groupItem) throw new Error("Group item seed failed");
     await db.insert(schema.newsItems).values([
       {
         orgId: stamp,
@@ -215,6 +237,9 @@ describe.skipIf(!url)("RelevanceRepository (Postgres)", () => {
       irrelevant: [],
     });
     expect((await repo.unscored()).some((candidate) => candidate.itemId === privateItem.id)).toBe(
+      false,
+    );
+    expect((await repo.unscored()).some((candidate) => candidate.itemId === groupItem.id)).toBe(
       false,
     );
     expect((await repo.unscored()).some((candidate) => candidate.itemId === hiddenItem.id)).toBe(

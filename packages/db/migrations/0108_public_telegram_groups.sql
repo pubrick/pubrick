@@ -1,0 +1,2 @@
+ALTER TABLE "news_sources" DROP CONSTRAINT "news_sources_kind_check";--> statement-breakpoint
+ALTER TABLE "news_sources" ADD CONSTRAINT "news_sources_kind_check" CHECK ("news_sources"."kind" in ('rss', 'telegram', 'telegram_group', 'telegram_private'));

@@ -18,7 +18,7 @@ const source = {
   kind: "rss",
 };
 
-const telegram = { read: vi.fn(), readPrivate: vi.fn() };
+const telegram = { read: vi.fn(), readGroup: vi.fn(), readPrivate: vi.fn() };
 
 describe("RssService", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -130,5 +130,28 @@ describe("RssService", () => {
     await service.handle({ orgId: watched.orgId, sourceId: watched.id });
     await service.handle({ orgId: watched.orgId, sourceId: watched.id });
     expect(telegram.readPrivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls public groups through the group reader and records a safe source error", async () => {
+    const watched = { ...source, kind: "telegram_group", url: "https://t.me/public_group" };
+    const repo = {
+      get: vi.fn().mockResolvedValue(watched),
+      telegramSession: vi.fn().mockResolvedValue("encrypted-session"),
+      save: vi.fn(),
+      fail: vi.fn(),
+    };
+    telegram.readGroup.mockResolvedValueOnce([]);
+    const service = new RssService(repo as never, telegram as never);
+    await service.handle({ orgId: watched.orgId, sourceId: watched.id });
+    expect(telegram.readGroup).toHaveBeenCalledWith(watched.url, "encrypted-session");
+    expect(repo.save).toHaveBeenCalledWith(watched.orgId, watched.id, watched.url, []);
+    telegram.readGroup.mockRejectedValueOnce(new TelegramSourceError("telegram_access_denied"));
+    await service.handle({ orgId: watched.orgId, sourceId: watched.id });
+    expect(repo.fail).toHaveBeenCalledWith(
+      watched.orgId,
+      watched.id,
+      watched.url,
+      "telegram_access_denied",
+    );
   });
 });

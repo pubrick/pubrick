@@ -1,12 +1,18 @@
-# Telegram channel sources
+# Telegram channel and public group sources
 
-Pubrick reads public Telegram channels through [mtcute](https://mtcute.dev/guide/intro/sign-in), an MIT-licensed MTProto library. The integration uses Telegram's user authorization. The Bot API cannot read arbitrary competitor channel histories.
+Pubrick reads public Telegram channels and groups through [mtcute](https://mtcute.dev/guide/intro/sign-in), an MIT-licensed MTProto library. The integration uses Telegram's user authorization. The Bot API cannot read arbitrary channel or group histories.
 
 ## Connect a workspace
 
 1. Create a Telegram application at <https://my.telegram.org/apps>. Put its `api_id` and `api_hash` in `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` in **both the API and worker** environments. Keep the hash private. Both services need the same `DATABASE_URL` and `APP_ENCRYPTION_KEY` key ring.
 2. As a workspace owner or admin, open **Settings → Telegram source account**. Enter the phone number in international format, the code Telegram sends, and the account's 2FA password if requested. Reconnect and disconnect from that same screen. Only the verified session is stored as the workspace's active account; the previous account continues working during a reconnect attempt.
-3. In Brand → Sources, select Telegram and add a public channel URL such as `https://t.me/example_channel`. The first check is queued. The source row displays connection, configuration and access errors without showing Telegram's raw response.
+3. In Brand → Sources, select **Public Telegram channel** and add a URL such as `https://t.me/example_channel`, or select **Public Telegram group** and add its public username URL. The first check is queued. The source row displays connection, configuration and access errors without showing Telegram's raw response.
+
+## Monitor a public discussion group
+
+Choose **Public Telegram group** for a group with a public username, such as `https://t.me/example_group`. The connected workspace account must be able to read it. Pubrick does not join groups, accept private invite links, or expand access beyond the connected account. Each bounded check reads recent visible messages, skips service messages and polls, and links collected items back to their original group messages.
+
+Group messages appear in the brand news list for an editor to review and explicitly use as source material or score. They do not enter automatic relevance scoring, AI topic suggestions, or related-news generation context. The **Comments** action remains for channel posts: a group message is already part of a discussion. Review group rules and contributors' expectations before republishing or sending selected text to an AI provider.
 
 Each organization has one independently encrypted session in `telegram_source_accounts`. It is never returned through the API or browser. An operator with access to the database and encryption key can still recover it; protect and back up the key. The intermediate sign-in challenge is encrypted, belongs to the requesting workspace and actor, expires after ten minutes, and is never sent to the browser beyond its opaque ID and stage. Code requests have a one-minute workspace cooldown; code and password verification have a five-second cooldown and up to five attempts at each step. A different admin cannot replace an active challenge; its initiator may start over after the one-minute cooldown. Disconnect removes the account and invalidates an in-flight challenge without deleting sources or previously collected stories; polling those sources resumes after a new account is connected.
 

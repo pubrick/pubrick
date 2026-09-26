@@ -333,7 +333,8 @@ export class RelevanceRepository {
         and(
           eq(schema.newsItems.relevanceStatus, "unscored"),
           isNull(schema.newsItems.dismissedAt),
-          sql`${schema.newsSources.kind} <> 'telegram_private'`,
+          ne(schema.newsSources.kind, "telegram_private"),
+          ne(schema.newsSources.kind, "telegram_group"),
           ...(afterId ? [gt(schema.newsItems.id, afterId)] : []),
         ),
       )

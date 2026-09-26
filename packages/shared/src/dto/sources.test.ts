@@ -58,6 +58,25 @@ describe("watched source inputs", () => {
     );
   });
 
+  it("accepts only public username URLs for discussion groups", () => {
+    const input = { brandId, name: "Discussion", kind: "telegram_group" };
+    expect(newsSourceCreateSchema.parse({ ...input, url: "https://t.me/EXAMPLE_Group/" }).url).toBe(
+      "https://t.me/example_group",
+    );
+    for (const url of [
+      "https://t.me/+PrivateGroupSecret",
+      "https://t.me/joinchat/PrivateGroupSecret",
+      "https://t.me/c/12345/1",
+      "https://t.me/example_group/42",
+      "https://t.me/example_group?start=secret",
+      "https://user:secret@t.me/example_group",
+      "http://t.me/example_group",
+      "https://evil.example/example_group",
+    ]) {
+      expect(newsSourceCreateSchema.safeParse({ ...input, url }).success).toBe(false);
+    }
+  });
+
   it("never accepts a private invite or private kind through the public source DTO", () => {
     const input = {
       brandId,

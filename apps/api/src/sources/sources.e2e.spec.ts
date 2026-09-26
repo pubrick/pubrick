@@ -337,6 +337,29 @@ describe.skipIf(!url)("watched sources e2e", () => {
       })
       .expect(201);
     expect(telegram.body).toMatchObject({ kind: "telegram", url: "https://t.me/example_channel" });
+    const group = await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Public discussion",
+        kind: "telegram_group",
+        url: "https://t.me/EXAMPLE_Group/",
+      })
+      .expect(201);
+    expect(group.body).toMatchObject({
+      kind: "telegram_group",
+      url: "https://t.me/example_group",
+    });
+    await owner
+      .post("/api/sources")
+      .send({
+        brandId: a.body.id,
+        name: "Invite",
+        kind: "telegram_group",
+        url: "https://t.me/+PrivateGroupSecret",
+      })
+      .expect(400);
+    await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await owner
       .post("/api/sources")
       .send({
@@ -434,6 +457,18 @@ describe.skipIf(!url)("watched sources e2e", () => {
       .patch(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`)
       .send({ url: "https://example.com/feed.xml" })
       .expect(400);
+    await owner
+      .patch(`/api/sources/${group.body.id}?brandId=${a.body.id}`)
+      .send({ url: "https://example.com/feed.xml" })
+      .expect(400);
+    const changedGroup = await owner
+      .patch(`/api/sources/${group.body.id}?brandId=${a.body.id}`)
+      .send({ url: "https://t.me/OTHER_Group/" })
+      .expect(200);
+    expect(changedGroup.body).toMatchObject({
+      kind: "telegram_group",
+      url: "https://t.me/other_group",
+    });
 
     const list = await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200);
     expect(list.body.map((row: { id: string }) => row.id)).toContain(source.body.id);
@@ -589,6 +624,7 @@ describe.skipIf(!url)("watched sources e2e", () => {
     await owner.post(`/api/sources/${source.body.id}/refresh?brandId=${a.body.id}`).expect(409);
     await owner.delete(`/api/sources/${source.body.id}?brandId=${a.body.id}`).expect(200);
     await owner.delete(`/api/sources/${telegram.body.id}?brandId=${a.body.id}`).expect(200);
+    await owner.delete(`/api/sources/${group.body.id}?brandId=${a.body.id}`).expect(200);
     await owner.delete(`/api/sources/${privateSource.id}?brandId=${a.body.id}`).expect(200);
     expect((await owner.get(`/api/sources?brandId=${a.body.id}`).expect(200)).body).toEqual([]);
   });
