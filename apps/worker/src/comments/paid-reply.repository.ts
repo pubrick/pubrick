@@ -34,6 +34,7 @@ type Target = {
   automatic: boolean;
 };
 type Snapshot = { target: Target; title: string; comments: string[]; checkedAt: Date };
+type PrivateAccount = { connectedAt: Date; sessionEncrypted: string } | undefined;
 const encryptedRequestSchema = z.object({
   modelId: z.literal(PAID_REPLY_MODEL_ID),
   body: z.string().min(1),
@@ -55,7 +56,11 @@ function safeCredential(
 }
 
 /** All target locks follow org -> brand -> source/story or adaptation/channel/item/publication -> sample. */
-async function lockTarget(tx: Tx, target: Target): Promise<{ checkedAt: Date } | null> {
+async function lockTarget(
+  tx: Tx,
+  target: Target,
+  privateAccount?: PrivateAccount,
+): Promise<{ checkedAt: Date } | null> {
   if (target.kind === "source_comment") {
     const [hint] = await tx
       .select({ sourceId: schema.newsItems.sourceId })
@@ -63,23 +68,33 @@ async function lockTarget(tx: Tx, target: Target): Promise<{ checkedAt: Date } |
       .where(and(eq(schema.newsItems.orgId, target.orgId), eq(schema.newsItems.id, target.id)));
     if (!hint) return null;
     const [source] = await tx
-      .select({ id: schema.newsSources.id })
+      .select({
+        id: schema.newsSources.id,
+        kind: schema.newsSources.kind,
+        url: schema.newsSources.url,
+        privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
+      })
       .from(schema.newsSources)
       .where(
         and(
           eq(schema.newsSources.id, hint.sourceId),
           eq(schema.newsSources.orgId, target.orgId),
           eq(schema.newsSources.brandId, target.brandId),
-          eq(schema.newsSources.kind, "telegram"),
+          ...(target.automatic
+            ? [eq(schema.newsSources.kind, "telegram")]
+            : [sql`${schema.newsSources.kind} IN ('telegram', 'telegram_private')`]),
           eq(schema.newsSources.isActive, true),
         ),
       )
       .for("share");
     if (!source) return null;
+    if (source.kind === "telegram_private" && (!privateAccount || !source.privatePeerEncrypted))
+      return null;
     const [item] = await tx
       .select({
         checkedAt: schema.newsItems.commentsCheckedAt,
         url: schema.newsItems.url,
+        commentsStatus: schema.newsItems.commentsStatus,
       })
       .from(schema.newsItems)
       .where(
@@ -99,7 +114,25 @@ async function lockTarget(tx: Tx, target: Target): Promise<{ checkedAt: Date } |
         ),
       )
       .for("share");
-    if (!item?.checkedAt || !publicStoryUrl.test(item.url)) return null;
+    if (!item?.checkedAt) return null;
+    if (source.kind === "telegram_private") {
+      if (item.commentsStatus === "private" || item.commentsStatus === "unavailable") return null;
+      if (!item.url.startsWith(`${source.url}/`)) return null;
+      const [oldest] = await tx
+        .select({ createdAt: schema.newsComments.createdAt })
+        .from(schema.newsComments)
+        .where(
+          and(
+            eq(schema.newsComments.orgId, target.orgId),
+            eq(schema.newsComments.brandId, target.brandId),
+            eq(schema.newsComments.itemId, target.id),
+          ),
+        )
+        .orderBy(asc(schema.newsComments.createdAt))
+        .limit(1)
+        .for("share");
+      if (!oldest || !privateAccount || oldest.createdAt < privateAccount.connectedAt) return null;
+    } else if (!publicStoryUrl.test(item.url)) return null;
     return { checkedAt: item.checkedAt };
   }
   const [hint] = await tx
@@ -461,12 +494,25 @@ export class PaidReplyRepository {
         .where(eq(schema.organization.id, job.orgId))
         .for("no key update");
       if (!org) return null;
+      // The private collector locks account before brand, source and story.
+      // Keep this order even for public story attempts to avoid an inversion.
+      const [privateAccount] =
+        target.kind === "source_comment"
+          ? await tx
+              .select({
+                connectedAt: schema.telegramSourceAccounts.connectedAt,
+                sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted,
+              })
+              .from(schema.telegramSourceAccounts)
+              .where(eq(schema.telegramSourceAccounts.orgId, job.orgId))
+              .for("share")
+          : [];
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, job.orgId), eq(schema.brands.id, hint.brandId)))
         .for("key share");
-      const live = brand ? await lockTarget(tx, target) : null;
+      const live = brand ? await lockTarget(tx, target, privateAccount) : null;
       let reason: string | null = live ? null : "target_unavailable";
       const [orgSettings] = await tx
         .select()
@@ -721,12 +767,23 @@ export class PaidReplyRepository {
         .where(eq(schema.organization.id, job.orgId))
         .for("no key update");
       if (!org) return;
+      const [privateAccount] =
+        target.kind === "source_comment"
+          ? await tx
+              .select({
+                connectedAt: schema.telegramSourceAccounts.connectedAt,
+                sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted,
+              })
+              .from(schema.telegramSourceAccounts)
+              .where(eq(schema.telegramSourceAccounts.orgId, job.orgId))
+              .for("share")
+          : [];
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, job.orgId), eq(schema.brands.id, hint.brandId)))
         .for("key share");
-      const live = brand ? await lockTarget(tx, target) : null;
+      const live = brand ? await lockTarget(tx, target, privateAccount) : null;
       const [attempt] = await tx
         .select()
         .from(schema.paidReplyAnalysisAttempts)

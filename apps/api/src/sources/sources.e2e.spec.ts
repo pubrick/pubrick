@@ -558,10 +558,10 @@ describe.skipIf(!url)("watched sources e2e", () => {
     expect((await owner.post(privateRefresh).expect(201)).body).toEqual({ queued: true });
     await owner
       .get(`/api/sources/items/${privateItem.id}/comment-analysis?brandId=${a.body.id}`)
-      .expect(409);
+      .expect(200);
     await owner
       .post(`/api/sources/items/${privateItem.id}/comment-analysis?brandId=${a.body.id}`)
-      .expect(409);
+      .expect(400);
     await db.insert(schema.newsComments).values({
       orgId: ownerOrgId,
       brandId: a.body.id,
@@ -1342,6 +1342,133 @@ describe.skipIf(!url)("watched sources e2e", () => {
       current: { sampleVersion: newVersion },
       earlierAnalysis: { sampleVersion, result, sampleSize: 1 },
     });
+  });
+
+  it("requires current private sample consent before sending even token-count text to Google", async () => {
+    const { agent, orgId } = await orgAgent();
+    const { agent: other } = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Private replies" }).expect(201);
+    const { db } = await import("../db");
+    const [source] = await db
+      .insert(schema.newsSources)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        name: "Joined channel",
+        kind: "telegram_private",
+        url: "https://t.me/c/91700",
+        privatePeerEncrypted: "encrypted-private-peer",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!source) throw new Error("private source fixture missing");
+    await db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: "active-private-session",
+      connectedAt: new Date(Date.now() - 60_000),
+    });
+    const sampleVersion = randomUUID();
+    const [item] = await db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId: brand.body.id,
+        sourceId: source.id,
+        title: "Member story",
+        url: "https://t.me/c/91700/8",
+        commentsStatus: "available",
+        commentsSampleVersion: sampleVersion,
+        commentsCheckedAt: new Date(),
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("private item fixture missing");
+    await db.insert(schema.newsComments).values({
+      orgId,
+      brandId: brand.body.id,
+      itemId: item.id,
+      telegramMessageId: 9,
+      body: "Private member feedback",
+      publishedAt: new Date(),
+    });
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "test-key-never-used" })
+      .expect(200);
+    const countTokens = mockCountTokens();
+    const route = `/api/sources/items/${item.id}/comment-analysis?brandId=${brand.body.id}`;
+    await other.get(route).expect(404);
+    await other.post(route).send({ consent: true, sampleVersion }).expect(404);
+    expect((await agent.get(route).expect(200)).body).toMatchObject({
+      status: "not_analyzed",
+      current: { sampleVersion },
+    });
+    await agent.post(route).expect(400);
+    await agent.post(route).send({ consent: false, sampleVersion }).expect(400);
+    await agent.post(route).send({ consent: true, sampleVersion: randomUUID() }).expect(409);
+    expect(countTokens).not.toHaveBeenCalled();
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: false })
+      .where(eq(schema.newsSources.id, source.id));
+    expect(
+      (await agent.post(route).send({ consent: true, sampleVersion }).expect(201)).body.status,
+    ).toBe("unavailable");
+    expect(countTokens).not.toHaveBeenCalled();
+    await db
+      .update(schema.newsSources)
+      .set({ isActive: true })
+      .where(eq(schema.newsSources.id, source.id));
+    await db
+      .delete(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    expect(
+      (await agent.post(route).send({ consent: true, sampleVersion }).expect(201)).body.status,
+    ).toBe("unavailable");
+    expect(countTokens).not.toHaveBeenCalled();
+    await db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: "active-private-session",
+      connectedAt: new Date(Date.now() - 60_000),
+    });
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "reconnected", connectedAt: new Date(Date.now() + 60_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    expect(
+      (await agent.post(route).send({ consent: true, sampleVersion }).expect(201)).body.status,
+    ).toBe("unavailable");
+    expect(countTokens).not.toHaveBeenCalled();
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({
+        sessionEncrypted: "active-private-session",
+        connectedAt: new Date(Date.now() - 60_000),
+      })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    const admitted = await agent.post(route).send({ consent: true, sampleVersion }).expect(201);
+    expect(admitted.body.status).toBe("in_progress");
+    expect(countTokens).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(admitted.body)).not.toContain("encrypted-private-peer");
+    const [attempt] = await db
+      .select({
+        origin: schema.paidReplyAnalysisAttempts.origin,
+        targetKind: schema.paidReplyAnalysisAttempts.targetKind,
+        sampleVersion: schema.paidReplyAnalysisAttempts.sampleVersion,
+      })
+      .from(schema.paidReplyAnalysisAttempts)
+      .where(eq(schema.paidReplyAnalysisAttempts.targetId, item.id));
+    expect(attempt).toEqual({ origin: "manual", targetKind: "source_comment", sampleVersion });
+    await db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "replacement-session", connectedAt: new Date(Date.now() + 60_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    expect((await agent.get(route).expect(200)).body.status).toBe("unavailable");
+    const nextVersion = randomUUID();
+    await db
+      .update(schema.newsItems)
+      .set({ commentsSampleVersion: nextVersion })
+      .where(eq(schema.newsItems.id, item.id));
+    await agent.post(route).send({ consent: true, sampleVersion }).expect(409);
+    expect(countTokens).toHaveBeenCalledTimes(1);
   });
 
   it("keeps one attempt for concurrent manual requests and shares the rolling allowance", async () => {

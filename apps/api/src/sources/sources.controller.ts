@@ -279,7 +279,8 @@ export class SourcesController {
     @OrgId() orgId: string,
     @Param("itemId", ParseUUIDPipe) itemId: string,
     @Query("brandId", ParseUUIDPipe) brandId: string,
+    @Body() body?: unknown,
   ) {
-    return this.sources.analyzeComments(orgId, brandId, itemId);
+    return this.sources.analyzeComments(orgId, brandId, itemId, body);
   }
 }

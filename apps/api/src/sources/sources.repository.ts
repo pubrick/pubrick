@@ -17,6 +17,7 @@ import {
   type NewsSourceUpdate,
   newsSourceCreateSchema,
   type PrivateTelegramSourceCreate,
+  privateReplyAnalysisConsentSchema,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, desc, eq, gte, isNotNull, isNull, sql } from "drizzle-orm";
@@ -608,11 +609,14 @@ export class SourcesRepository {
         id: schema.newsItems.id,
         sourceId: schema.newsItems.sourceId,
         title: schema.newsItems.title,
+        url: schema.newsItems.url,
         commentsCheckedAt: schema.newsItems.commentsCheckedAt,
         commentsSampleVersion: schema.newsItems.commentsSampleVersion,
         commentsStatus: schema.newsItems.commentsStatus,
         sourceKind: schema.newsSources.kind,
         sourceActive: schema.newsSources.isActive,
+        sourceUrl: schema.newsSources.url,
+        privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
       })
       .from(schema.newsItems)
       .innerJoin(schema.newsSources, eq(schema.newsItems.sourceId, schema.newsSources.id))
@@ -631,6 +635,46 @@ export class SourcesRepository {
     if (item.sourceKind !== "telegram" && !(allowPrivate && item.sourceKind === "telegram_private"))
       throw new ConflictException("Comments are available for Telegram stories only");
     return item;
+  }
+
+  private async privateSampleCurrent(
+    orgId: string,
+    brandId: string,
+    item: Awaited<ReturnType<SourcesRepository["requireTelegramItem"]>>,
+    expectedSession?: string,
+  ) {
+    if (
+      item.sourceKind !== "telegram_private" ||
+      !item.sourceActive ||
+      !item.privatePeerEncrypted ||
+      !item.url.startsWith(`${item.sourceUrl}/`) ||
+      item.commentsStatus === "private" ||
+      item.commentsStatus === "unavailable"
+    )
+      return null;
+    const [account] = await db
+      .select({
+        sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted,
+        connectedAt: schema.telegramSourceAccounts.connectedAt,
+      })
+      .from(schema.telegramSourceAccounts)
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+      .limit(1);
+    if (!account || (expectedSession && account.sessionEncrypted !== expectedSession)) return null;
+    const [oldest] = await db
+      .select({ createdAt: schema.newsComments.createdAt })
+      .from(schema.newsComments)
+      .where(
+        and(
+          eq(schema.newsComments.orgId, orgId),
+          eq(schema.newsComments.brandId, brandId),
+          eq(schema.newsComments.itemId, item.id),
+        ),
+      )
+      .orderBy(schema.newsComments.createdAt)
+      .limit(1);
+    if (oldest && oldest.createdAt < account.connectedAt) return null;
+    return account;
   }
 
   async comments(orgId: string, brandId: string, itemId: string) {
@@ -711,7 +755,12 @@ export class SourcesRepository {
   }
 
   private async commentAnalysisCurrent(orgId: string, brandId: string, itemId: string) {
-    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
+    if (
+      item.sourceKind === "telegram_private" &&
+      !(await this.privateSampleCurrent(orgId, brandId, item))
+    )
+      return { status: "unavailable" as const };
     if (!item.commentsSampleVersion)
       return {
         status:
@@ -786,7 +835,16 @@ export class SourcesRepository {
 
   async commentAnalysis(orgId: string, brandId: string, itemId: string) {
     const current = await this.commentAnalysisCurrent(orgId, brandId, itemId);
-    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
+    if (item.sourceKind === "telegram_private" && current.status === "unavailable")
+      return {
+        ...current,
+        current: {
+          status: current.status,
+          sampleVersion: null,
+          collectionStatus: item.commentsStatus,
+        },
+      };
     const [saved] = await db
       .select({
         result: schema.newsCommentAnalyses.result,
@@ -827,7 +885,19 @@ export class SourcesRepository {
     };
   }
 
-  async analyzeComments(orgId: string, brandId: string, itemId: string) {
+  async analyzeComments(orgId: string, brandId: string, itemId: string, body?: unknown) {
+    const requestedItem = await this.requireTelegramItem(orgId, brandId, itemId, true);
+    const consent =
+      requestedItem.sourceKind === "telegram_private"
+        ? privateReplyAnalysisConsentSchema.safeParse(body)
+        : null;
+    if (consent && !consent.success)
+      throw new BadRequestException("Confirm this private reply sample before analysis");
+    if (consent?.success && consent.data.sampleVersion !== requestedItem.commentsSampleVersion)
+      throw new ConflictException("The reply sample changed; review and confirm it again");
+    const consentAccount = consent?.success
+      ? await this.privateSampleCurrent(orgId, brandId, requestedItem)
+      : null;
     const current = await this.commentAnalysis(orgId, brandId, itemId);
     if (
       current.status === "unavailable" ||
@@ -840,7 +910,7 @@ export class SourcesRepository {
       current.status === "unknown"
     )
       return current;
-    const item = await this.requireTelegramItem(orgId, brandId, itemId);
+    const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
     const sample = await this.analysisSample(orgId, brandId, itemId);
     if (!item.commentsSampleVersion || sample.length === 0)
       return { status: "no_comments" as const };
@@ -853,27 +923,83 @@ export class SourcesRepository {
       sampleCheckedAt: item.commentsCheckedAt ?? new Date(),
       title: item.title,
       comments: sample.map((row) => row.body),
+      validateBeforeProvider: consent?.success
+        ? async () => {
+            const latest = await this.requireTelegramItem(orgId, brandId, itemId, true);
+            return (
+              latest.sourceKind === "telegram_private" &&
+              latest.sourceId === item.sourceId &&
+              latest.title === item.title &&
+              latest.url === item.url &&
+              latest.privatePeerEncrypted === item.privatePeerEncrypted &&
+              latest.commentsSampleVersion === consent.data.sampleVersion &&
+              !!consentAccount &&
+              !!(await this.privateSampleCurrent(
+                orgId,
+                brandId,
+                latest,
+                consentAccount.sessionEncrypted,
+              ))
+            );
+          }
+        : undefined,
       credentials: this.aiCredentials,
       queue: this.queue,
       lockAndValidateTarget: async (tx) => {
         const [source] = await tx
-          .select({ id: schema.newsSources.id })
+          .select({
+            id: schema.newsSources.id,
+            privatePeerEncrypted: schema.newsSources.privatePeerEncrypted,
+          })
           .from(schema.newsSources)
           .where(
             and(
               eq(schema.newsSources.orgId, orgId),
               eq(schema.newsSources.brandId, brandId),
               eq(schema.newsSources.id, item.sourceId),
-              eq(schema.newsSources.kind, "telegram"),
+              eq(schema.newsSources.kind, item.sourceKind),
               eq(schema.newsSources.isActive, true),
             ),
           )
           .for("key share");
         if (!source) return false;
+        if (item.sourceKind === "telegram_private") {
+          const [account] = await tx
+            .select({
+              connectedAt: schema.telegramSourceAccounts.connectedAt,
+              sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted,
+            })
+            .from(schema.telegramSourceAccounts)
+            .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+            .limit(1);
+          const [oldest] = await tx
+            .select({ createdAt: schema.newsComments.createdAt })
+            .from(schema.newsComments)
+            .where(
+              and(
+                eq(schema.newsComments.orgId, orgId),
+                eq(schema.newsComments.brandId, brandId),
+                eq(schema.newsComments.itemId, itemId),
+              ),
+            )
+            .orderBy(schema.newsComments.createdAt)
+            .limit(1);
+          if (
+            !consentAccount ||
+            !account ||
+            account.sessionEncrypted !== consentAccount.sessionEncrypted ||
+            source.privatePeerEncrypted !== item.privatePeerEncrypted ||
+            !oldest ||
+            oldest.createdAt < account.connectedAt
+          )
+            return false;
+        }
         const [locked] = await tx
           .select({
             sampleVersion: schema.newsItems.commentsSampleVersion,
             dismissedAt: schema.newsItems.dismissedAt,
+            title: schema.newsItems.title,
+            commentsStatus: schema.newsItems.commentsStatus,
           })
           .from(schema.newsItems)
           .where(
@@ -885,7 +1011,13 @@ export class SourcesRepository {
             ),
           )
           .for("update");
-        return locked?.sampleVersion === item.commentsSampleVersion && !locked.dismissedAt;
+        return (
+          locked?.sampleVersion === item.commentsSampleVersion &&
+          locked.title === item.title &&
+          (item.sourceKind !== "telegram_private" ||
+            (locked.commentsStatus !== "private" && locked.commentsStatus !== "unavailable")) &&
+          !locked.dismissedAt
+        );
       },
     });
     return status.status === "in_progress" ? this.commentAnalysis(orgId, brandId, itemId) : status;

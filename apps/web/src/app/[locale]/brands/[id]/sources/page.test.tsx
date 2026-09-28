@@ -2,6 +2,7 @@ import {
   newsItemListQuerySchema,
   newsRerankRequestSchema,
   newsSourceCreateSchema,
+  privateReplyAnalysisConsentSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
@@ -732,9 +733,7 @@ describe("watched sources page", () => {
     await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
     const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
     expect(dialog.getByText(en.Sources.privateCommentsNotice)).toBeInTheDocument();
-    expect(
-      dialog.queryByRole("region", { name: en.Sources.analysisTitle }),
-    ).not.toBeInTheDocument();
+    expect(dialog.getByRole("region", { name: en.Sources.analysisTitle })).toBeInTheDocument();
     expect(
       dialog.queryByRole("button", { name: en.Sources.analyzeComments }),
     ).not.toBeInTheDocument();
@@ -748,7 +747,69 @@ describe("watched sources page", () => {
         ),
       ).toBe(true),
     );
-    expect(calls.some((call) => call.url.includes("comment-analysis"))).toBe(false);
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
+  });
+
+  it("requires a separate exact-sample confirmation before private reply analysis", async () => {
+    const sampleVersion = "e6551613-aa43-420e-a277-9a3aefb7d7e8";
+    const calls = install(
+      [
+        {
+          id: ITEM_ID,
+          brandId: BRAND_ID,
+          sourceId: SOURCE_ID,
+          title: "Member story",
+          summary: "Member story",
+          url: "https://t.me/c/123456/1",
+          publishedAt: null,
+          commentsStatus: "available",
+          commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+          commentsErrorCode: null,
+          createdAt: "2026-09-23T12:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: SOURCE_ID,
+          kind: "telegram_private",
+          isActive: true,
+          name: "Joined channel",
+          url: "https://t.me/c/123456",
+        },
+      ],
+      {
+        status: "not_analyzed",
+        current: { status: "not_analyzed", sampleVersion, collectionStatus: "available" },
+      },
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    await dialog.findByText(en.Sources.analysis_not_analyzed);
+    await user.click(dialog.getByRole("button", { name: en.Sources.analyzeComments }));
+    const confirmation = within(
+      screen.getByRole("dialog", {
+        name: en.Sources.privateAnalysisConfirmTitle,
+      }),
+    );
+    expect(confirmation.getByText("Member story")).toBeInTheDocument();
+    expect(confirmation.getByText(en.Sources.privateAnalysisConfirmBody)).toBeInTheDocument();
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
+    await user.click(
+      confirmation.getByRole("button", {
+        name: en.Sources.privateAnalysisConfirm,
+      }),
+    );
+    const posted = calls.find(
+      (call) => call.method === "POST" && call.url.includes("comment-analysis"),
+    );
+    expect(posted?.body).toEqual({ consent: true, sampleVersion });
+    expect(privateReplyAnalysisConsentSchema.parse(posted?.body)).toEqual(posted?.body);
   });
 
   it("starts a source run with the article summary, URL, and explicitly chosen channel", async () => {

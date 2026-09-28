@@ -158,6 +158,16 @@ claim. Queue insertion is last, so failure rolls back the money reservation
 without removing the free sample. The worker must take this same order before
 moving a queued attempt to dispatching and before writing a result.
 
+Private story paid analysis adds the connected account to the worker's source
+chain: `organization FOR NO KEY UPDATE` → `telegram_source_accounts FOR SHARE`
+→ `brands FOR KEY SHARE` → `news_sources FOR SHARE` → `news_items FOR SHARE`
+→ saved reply rows `FOR SHARE`. The worker also takes the account lock before
+brand for public source attempts so a public/private race cannot reverse the
+private collector's account → brand order. The API admission reads the account
+without a row lock after its brand/source check; the worker rechecks the account
+and sample epoch under locks immediately before a model call and before saving
+the aggregate. No network call holds these locks.
+
 Paid comment analysis admission has a short organization-scoped transaction:
 it locks `organization FOR NO KEY UPDATE`, expires any stale active admission
 for the target, counts the previous rolling hour's admissions across source

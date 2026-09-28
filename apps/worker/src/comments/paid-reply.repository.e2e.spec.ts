@@ -255,4 +255,165 @@ describe.skipIf(!url)("paid reply dispatch fence", () => {
       apiKey: "fixture-key",
     });
   });
+
+  it("rejects a private dispatch after reconnect and withholds a result after access changes", async () => {
+    const ai = await import("@pubrick/ai");
+    const { encryptJson } = await import("@pubrick/shared");
+    const [source] = await connection.db
+      .insert(schema.newsSources)
+      .values({
+        orgId,
+        brandId,
+        name: "Joined",
+        kind: "telegram_private",
+        url: "https://t.me/c/123456",
+        privatePeerEncrypted: "private-peer",
+      })
+      .returning({ id: schema.newsSources.id });
+    if (!source) throw new Error("private source fixture");
+    await connection.db.insert(schema.telegramSourceAccounts).values({
+      orgId,
+      sessionEncrypted: "first-session",
+      connectedAt: new Date(Date.now() - 60_000),
+    });
+    const [item] = await connection.db
+      .insert(schema.newsItems)
+      .values({
+        orgId,
+        brandId,
+        sourceId: source.id,
+        title: "Private story",
+        url: "https://t.me/c/123456/7",
+        commentsStatus: "available",
+        commentsCheckedAt: new Date(),
+        commentsSampleVersion: randomUUID(),
+      })
+      .returning({ id: schema.newsItems.id });
+    if (!item) throw new Error("private story fixture");
+    const privateItemId = item.id;
+    await connection.db.insert(schema.newsComments).values({
+      orgId,
+      brandId,
+      itemId: item.id,
+      telegramMessageId: 8,
+      body: "Member reply",
+      publishedAt: new Date(),
+    });
+    const request = ai.buildPaidReplyRequest({
+      title: "Private story",
+      comments: ["Member reply"],
+    });
+    const rate = ai.priceFor("google", request.modelId, new Date());
+    if (!rate) throw new Error("private rate fixture");
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    async function insertAttempt(version: string) {
+      const [admission] = await connection.db
+        .insert(schema.analysisAdmissions)
+        .values({
+          orgId,
+          targetKind: "source_comment",
+          targetId: privateItemId,
+          sampleCheckedAt: new Date(),
+          leaseUntil: new Date(Date.now() + 120_000),
+        })
+        .returning({ id: schema.analysisAdmissions.id });
+      if (!admission) throw new Error("private admission fixture");
+      const [attempt] = await connection.db
+        .insert(schema.paidReplyAnalysisAttempts)
+        .values({
+          orgId,
+          brandId,
+          targetKind: "source_comment",
+          targetId: privateItemId,
+          sampleVersion: version,
+          admissionId: admission.id,
+          origin: "manual",
+          status: "queued",
+          promptDigest: request.digest,
+          promptEncrypted: encryptJson(request, process.env.APP_ENCRYPTION_KEY as string),
+          sampleSize: 1,
+          modelId: request.modelId,
+          priceWindow: createHash("sha256").update(JSON.stringify(rate)).digest("hex"),
+          orgSettingsRevision: 0,
+          brandThresholdRevision: 0,
+          admissionLocalDate: start.toISOString().slice(0, 10),
+          admissionTimezone: "UTC",
+          dayStartUtc: start,
+          dayEndUtc: end,
+          reservedMaxUsd: "0.100000",
+        })
+        .returning({ id: schema.paidReplyAnalysisAttempts.id });
+      if (!attempt) throw new Error("private attempt fixture");
+      return attempt.id;
+    }
+    const [first] = await connection.db
+      .select({ version: schema.newsItems.commentsSampleVersion })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, item.id));
+    if (!first?.version) throw new Error("private version fixture");
+    const blockedId = await insertAttempt(first.version);
+    await connection.db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "replacement", connectedAt: new Date(Date.now() + 60_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    expect(await repo.claim({ orgId, attemptId: blockedId })).toBeNull();
+    const [blocked] = await connection.db
+      .select({ status: schema.paidReplyAnalysisAttempts.status })
+      .from(schema.paidReplyAnalysisAttempts)
+      .where(eq(schema.paidReplyAnalysisAttempts.id, blockedId));
+    expect(blocked?.status).toBe("canceled");
+    await connection.db
+      .update(schema.telegramSourceAccounts)
+      .set({ sessionEncrypted: "third-session", connectedAt: new Date(Date.now() - 60_000) })
+      .where(eq(schema.telegramSourceAccounts.orgId, orgId));
+    const secondVersion = randomUUID();
+    await connection.db
+      .update(schema.newsItems)
+      .set({ commentsSampleVersion: secondVersion })
+      .where(eq(schema.newsItems.id, item.id));
+    const admittedId = await insertAttempt(secondVersion);
+    const job = { orgId, attemptId: admittedId };
+    expect(await repo.claim(job)).toMatchObject({ apiKey: "fixture-key" });
+    await repo.recordUsage(job, {
+      provider: "google",
+      modelId: request.modelId,
+      attempt: 1,
+      inputTokens: 100,
+      outputTokens: 30,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+      costUsd: 0.0002,
+      costSource: "price_table",
+      responseMs: 10,
+      status: "ok",
+      outcome: "completed",
+    });
+    await connection.db
+      .update(schema.newsSources)
+      .set({ isActive: false })
+      .where(eq(schema.newsSources.id, source.id));
+    await repo.finish(job, {
+      ok: true,
+      result: {
+        summary: "Summary",
+        sentiment: { positive: 1, neutral: 0, negative: 0 },
+        themes: [],
+        feedback: [],
+      },
+    });
+    const [finished] = await connection.db
+      .select({ status: schema.paidReplyAnalysisAttempts.status })
+      .from(schema.paidReplyAnalysisAttempts)
+      .where(eq(schema.paidReplyAnalysisAttempts.id, admittedId));
+    expect(finished?.status).toBe("stale");
+    expect(
+      await connection.db
+        .select({ itemId: schema.newsCommentAnalyses.itemId })
+        .from(schema.newsCommentAnalyses)
+        .where(eq(schema.newsCommentAnalyses.itemId, item.id)),
+    ).toHaveLength(0);
+  });
 });

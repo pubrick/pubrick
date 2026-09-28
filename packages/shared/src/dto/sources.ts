@@ -273,6 +273,13 @@ export const newsCommentDtoSchema = z.object({
 });
 export type NewsCommentDto = z.infer<typeof newsCommentDtoSchema>;
 
+/** Explicit consent for one saved private story reply sample. */
+export const privateReplyAnalysisConsentSchema = z.strictObject({
+  consent: z.literal(true),
+  sampleVersion: z.string().uuid(),
+});
+export type PrivateReplyAnalysisConsent = z.infer<typeof privateReplyAnalysisConsentSchema>;
+
 /** Only aggregate observations are retained; no author or per-comment score. */
 const storableText = (value: string) => !value.includes("\u0000");
 export const commentAnalysisResultSchema = z.object({

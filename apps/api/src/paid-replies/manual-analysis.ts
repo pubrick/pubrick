@@ -21,6 +21,8 @@ export async function requestManualPaidReplyAnalysis(args: {
   sampleCheckedAt: Date;
   title: string;
   comments: readonly string[];
+  /** Private samples must be revalidated before countTokens sends text to Google. */
+  validateBeforeProvider?: () => Promise<boolean>;
   lockAndValidateTarget: PaidReplyAdmissionInput["lockAndValidateTarget"];
   credentials: AiCredentialsRepository;
   queue: QueueService;
@@ -36,6 +38,8 @@ export async function requestManualPaidReplyAnalysis(args: {
     throw error;
   }
   try {
+    if (args.validateBeforeProvider && !(await args.validateBeforeProvider()))
+      return { status: "stale" };
     const request = buildPaidReplyRequest({ title: args.title, comments: args.comments });
     let counted: Awaited<ReturnType<typeof countPaidReplyTokens>>;
     try {

@@ -13,6 +13,7 @@ import {
   newsRerankRequestSchema,
   newsSourceCreateSchema,
   newsSourceNameSchema,
+  privateReplyAnalysisConsentSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
 } from "@pubrick/shared";
@@ -127,6 +128,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [commentsError, setCommentsError] = useState<string | null>(null);
   const [commentAnalysis, setCommentAnalysis] = useState<CommentAnalysisDto | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [privateAnalysisConsent, setPrivateAnalysisConsent] = useState<{
+    itemId: string;
+    sampleVersion: string;
+    title: string;
+  } | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [itemActionBusy, setItemActionBusy] = useState<string | null>(null);
@@ -452,7 +458,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
 
   useEffect(() => {
     if (!commentsItem) return;
-    const isPublicChannel = commentsSourceKind === "telegram";
+    const isPublicChannel =
+      commentsSourceKind === "telegram" || commentsSourceKind === "telegram_private";
     loadComments(commentsItem.id);
     if (isPublicChannel) loadCommentAnalysis(commentsItem.id);
     const timer = window.setInterval(() => {
@@ -462,17 +469,31 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     return () => window.clearInterval(timer);
   }, [commentsItem, commentsSourceKind, loadComments, loadCommentAnalysis]);
 
-  async function analyzeComments(itemId: string) {
+  async function analyzeComments(itemId: string, sampleVersion?: string) {
     setAnalysisBusy(true);
     setAnalysisError(null);
     try {
       const result = await api<CommentAnalysisDto>(
         `/api/sources/items/${itemId}/comment-analysis?brandId=${id}`,
-        { method: "POST" },
+        {
+          method: "POST",
+          ...(sampleVersion
+            ? {
+                body: JSON.stringify(
+                  privateReplyAnalysisConsentSchema.parse({
+                    consent: true,
+                    sampleVersion,
+                  }),
+                ),
+              }
+            : {}),
+        },
       );
       setCommentAnalysis(result);
+      setPrivateAnalysisConsent(null);
     } catch (err) {
       setAnalysisError(describeError(err));
+      setPrivateAnalysisConsent(null);
     } finally {
       setAnalysisBusy(false);
     }
@@ -649,7 +670,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
 
   const closeRun = useCallback(() => setSelectedItem(null), []);
   const closeDelete = useCallback(() => setPendingDelete(null), []);
-  const closeComments = useCallback(() => setCommentsItem(null), []);
+  const closeComments = useCallback(() => {
+    setPrivateAnalysisConsent(null);
+    setCommentsItem(null);
+  }, []);
   const activeCommentsItem = items?.find((item) => item.id === commentsItem?.id) ?? commentsItem;
   const privateComments = commentsSourceKind === "telegram_private";
 
@@ -1167,7 +1191,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
       </Card>
 
       <Modal
-        open={commentsItem !== null}
+        open={commentsItem !== null && privateAnalysisConsent === null}
         onClose={closeComments}
         title={t("commentsTitle")}
         footer={
@@ -1241,75 +1265,109 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           activeCommentsItem?.commentsStatus !== "unavailable" && (
             <p className="mt-3 text-xs text-fg-secondary">{t("commentsSample")}</p>
           )}
-        {!privateComments && (
-          <section aria-label={t("analysisTitle")} className="mt-6 border-t border-line pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
-              <div className="flex flex-wrap gap-2">
-                {canManageSources &&
-                  activeCommentsItem &&
-                  commentAnalysis &&
-                  ["not_analyzed", "stale"].includes(
-                    commentAnalysis.current?.status ?? commentAnalysis.status,
-                  ) && (
-                    <Button
-                      size="sm"
-                      disabled={analysisBusy}
-                      onClick={() => analyzeComments(activeCommentsItem.id)}
-                    >
-                      {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
-                    </Button>
-                  )}
-                {activeCommentsItem && commentAnalysis && (
+        <section aria-label={t("analysisTitle")} className="mt-6 border-t border-line pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-fg">{t("analysisTitle")}</h3>
+            <div className="flex flex-wrap gap-2">
+              {canManageSources &&
+                activeCommentsItem &&
+                commentAnalysis &&
+                ["not_analyzed", "stale"].includes(
+                  commentAnalysis.current?.status ?? commentAnalysis.status,
+                ) && (
                   <Button
                     size="sm"
-                    variant="secondary"
-                    onClick={() => loadCommentAnalysis(activeCommentsItem.id)}
+                    disabled={analysisBusy}
+                    onClick={() => {
+                      const sampleVersion = commentAnalysis.current?.sampleVersion;
+                      if (privateComments && sampleVersion) {
+                        setPrivateAnalysisConsent({
+                          itemId: activeCommentsItem.id,
+                          sampleVersion,
+                          title: activeCommentsItem.title,
+                        });
+                      } else if (!privateComments) {
+                        void analyzeComments(activeCommentsItem.id);
+                      }
+                    }}
                   >
-                    {t("checkAnalysisResult")}
+                    {analysisBusy ? t("analysisWorking") : t("analyzeComments")}
                   </Button>
                 )}
-              </div>
-            </div>
-            {analysisError && (
-              <p role="alert" className="mt-2 text-sm text-danger">
-                {analysisError}
-              </p>
-            )}
-            {!commentAnalysis ? (
-              <Skeleton lines={2} />
-            ) : commentAnalysis.status === "ready" &&
-              (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
-              analysisResult(commentAnalysis)
-            ) : (
-              <p role="status" className="mt-2 text-sm text-fg-secondary">
-                {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
-              </p>
-            )}
-            {commentAnalysis?.current?.collectionStatus &&
-              ["error", "failed", "unavailable"].includes(
-                commentAnalysis.current.collectionStatus,
-              ) &&
-              commentAnalysis.current.status === "ready" && (
-                <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
+              {activeCommentsItem && commentAnalysis && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => loadCommentAnalysis(activeCommentsItem.id)}
+                >
+                  {t("checkAnalysisResult")}
+                </Button>
               )}
-            {commentAnalysis?.earlierAnalysis && (
-              <div className="mt-4 border-t border-line pt-4">
-                <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
-                {analysisResult(commentAnalysis.earlierAnalysis)}
-              </div>
+            </div>
+          </div>
+          {analysisError && (
+            <p role="alert" className="mt-2 text-sm text-danger">
+              {analysisError}
+            </p>
+          )}
+          {!commentAnalysis ? (
+            <Skeleton lines={2} />
+          ) : commentAnalysis.status === "ready" &&
+            (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
+            analysisResult(commentAnalysis)
+          ) : (
+            <p role="status" className="mt-2 text-sm text-fg-secondary">
+              {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
+            </p>
+          )}
+          {commentAnalysis?.current?.collectionStatus &&
+            ["error", "failed", "unavailable"].includes(commentAnalysis.current.collectionStatus) &&
+            commentAnalysis.current.status === "ready" && (
+              <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
             )}
-            {commentAnalysis?.status === "no_key" && (
-              <Link
-                href={`/${locale}/settings`}
-                className="mt-2 inline-block text-sm text-accent underline"
-              >
-                {t("analysisSetupKey")}
-              </Link>
-            )}
-            <p className="mt-3 text-xs text-fg-secondary">{t("analysisDisclaimer")}</p>
-          </section>
-        )}
+          {commentAnalysis?.earlierAnalysis && (
+            <div className="mt-4 border-t border-line pt-4">
+              <h4 className="text-sm font-semibold text-fg">{t("earlierAnalysis")}</h4>
+              {analysisResult(commentAnalysis.earlierAnalysis)}
+            </div>
+          )}
+          {commentAnalysis?.status === "no_key" && (
+            <Link
+              href={`/${locale}/settings`}
+              className="mt-2 inline-block text-sm text-accent underline"
+            >
+              {t("analysisSetupKey")}
+            </Link>
+          )}
+          <p className="mt-3 text-xs text-fg-secondary">
+            {t(privateComments ? "privateAnalysisDisclaimer" : "analysisDisclaimer")}
+          </p>
+        </section>
+      </Modal>
+
+      <Modal
+        open={privateAnalysisConsent !== null}
+        onClose={() => setPrivateAnalysisConsent(null)}
+        title={t("privateAnalysisConfirmTitle")}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setPrivateAnalysisConsent(null)}>
+              {t("close")}
+            </Button>
+            <Button
+              disabled={analysisBusy}
+              onClick={() =>
+                privateAnalysisConsent &&
+                analyzeComments(privateAnalysisConsent.itemId, privateAnalysisConsent.sampleVersion)
+              }
+            >
+              {analysisBusy ? t("analysisWorking") : t("privateAnalysisConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm font-medium text-fg">{privateAnalysisConsent?.title}</p>
+        <p className="mt-2 text-sm text-fg-secondary">{t("privateAnalysisConfirmBody")}</p>
       </Modal>
 
       {canManageSources && (
