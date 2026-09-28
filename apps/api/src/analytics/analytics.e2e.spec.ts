@@ -6,6 +6,7 @@ import { schema } from "@pubrick/db";
 import {
   analyticsDtoSchema,
   brandFormatSpendDtoSchema,
+  brandGenerationOriginsDtoSchema,
   brandOverviewDtoSchema,
   brandSpendHistoryDtoSchema,
   commentAnalysisDtoSchema,
@@ -96,6 +97,206 @@ describe.skipIf(!url)("publication analytics e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string };
   }
+
+  it("counts each run once by surviving origin evidence and exact publication links", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Origins" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Sibling" }).expect(201);
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const [draft] = await db
+      .insert(schema.contentItems)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, body: "Generated body" })
+      .returning({ id: schema.contentItems.id });
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({ orgId: owner.orgId, brandId: brand.body.id, platform: "vc_ru", name: "VC" })
+      .returning({ id: schema.channels.id });
+    if (!draft || !channel) throw new Error("Missing origin fixtures");
+    const [automatic, manual, ambiguous, other, old, siblingRun] = await db
+      .insert(schema.pipelineRuns)
+      .values([
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          contentItemId: draft.id,
+          input: { kind: "brief", text: "A", channelIds: [] },
+          status: "succeeded",
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "M", channelIds: [] },
+          status: "failed",
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Both", channelIds: [] },
+          status: "queued",
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Other", channelIds: [] },
+          status: "cancelled",
+          createdAt: ago(2),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: brand.body.id,
+          input: { kind: "brief", text: "Old", channelIds: [] },
+          status: "failed",
+          createdAt: ago(35),
+        },
+        {
+          orgId: owner.orgId,
+          brandId: sibling.body.id,
+          input: { kind: "brief", text: "Sibling", channelIds: [] },
+          status: "failed",
+          createdAt: ago(2),
+        },
+      ])
+      .returning({ id: schema.pipelineRuns.id });
+    if (!automatic || !manual || !ambiguous || !other || !old || !siblingRun)
+      throw new Error("Missing origin runs");
+    const [topicA, topicB] = await db
+      .insert(schema.topics)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, title: "Automatic topic" },
+        { orgId: owner.orgId, brandId: brand.body.id, title: "Ambiguous topic" },
+      ])
+      .returning({ id: schema.topics.id });
+    if (!topicA || !topicB) throw new Error("Missing origin topics");
+    await db.insert(schema.autopilotDispatches).values([
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: topicA.id,
+        runId: automatic.id,
+        localDate: "2026-09-20",
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: topicB.id,
+        runId: ambiguous.id,
+        localDate: "2026-09-21",
+      },
+    ]);
+    await db.insert(schema.autopilotManualAttempts).values([
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        runId: manual.id,
+        status: "completed",
+        decision: "dispatched",
+        completedAt: new Date(),
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        runId: manual.id,
+        status: "completed",
+        decision: "dispatched",
+        completedAt: new Date(),
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        runId: ambiguous.id,
+        status: "completed",
+        decision: "dispatched",
+        completedAt: new Date(),
+      },
+    ]);
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({
+        orgId: owner.orgId,
+        contentItemId: draft.id,
+        channelId: channel.id,
+        status: "published",
+      })
+      .returning({ id: schema.adaptations.id });
+    if (!adaptation) throw new Error("Missing origin adaptation");
+    await db.insert(schema.publications).values({
+      orgId: owner.orgId,
+      adaptationId: adaptation.id,
+      channelId: channel.id,
+      status: "published",
+    });
+
+    const path = `/api/analytics/brands/${brand.body.id}/generation-origins?days=7`;
+    const response = await owner.agent.get(path).expect(200);
+    const result = brandGenerationOriginsDtoSchema.parse(response.body);
+    expect(result.total).toBe(4);
+    expect(result.origins).toEqual([
+      {
+        origin: "automatic",
+        total: 1,
+        queued: 0,
+        running: 0,
+        succeeded: 1,
+        failed: 0,
+        cancelled: 0,
+        linkedDrafts: 1,
+        publishedRuns: 1,
+      },
+      {
+        origin: "manual",
+        total: 1,
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 1,
+        cancelled: 0,
+        linkedDrafts: 0,
+        publishedRuns: 0,
+      },
+      {
+        origin: "ambiguous",
+        total: 1,
+        queued: 1,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        linkedDrafts: 0,
+        publishedRuns: 0,
+      },
+      {
+        origin: "unattributed",
+        total: 1,
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 1,
+        linkedDrafts: 0,
+        publishedRuns: 0,
+      },
+    ]);
+    expect(result.recentFailedRuns).toEqual([
+      { id: manual.id, origin: "manual", createdAt: expect.any(String) },
+    ]);
+    await outsider.agent.get(path).expect(404);
+    await owner.agent
+      .get(`/api/analytics/brands/${sibling.body.id}/generation-origins?days=7`)
+      .expect(200)
+      .then(({ body }) => {
+        expect(brandGenerationOriginsDtoSchema.parse(body).total).toBe(1);
+      });
+    await db.delete(schema.topics).where(eq(schema.topics.id, topicA.id));
+    const afterDeletion = brandGenerationOriginsDtoSchema.parse(
+      (await owner.agent.get(path).expect(200)).body,
+    );
+    expect(afterDeletion.origins.find((row) => row.origin === "automatic")?.total).toBe(0);
+    expect(afterDeletion.origins.find((row) => row.origin === "unattributed")?.total).toBe(2);
+  });
 
   it("groups run spend by requested format without duplicating calls or leaking sibling links", async () => {
     const owner = await orgAgent();

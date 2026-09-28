@@ -22,6 +22,7 @@ import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { AutoReplies } from "./auto-replies";
 import { BrandOverview } from "./brand-overview";
+import { GenerationOrigins } from "./generation-origins";
 
 const PERIODS = [7, 30, 90] as const;
 type Period = (typeof PERIODS)[number];
@@ -301,6 +302,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
           onChange={(value) => setDays(Number(value) as Period)}
         />
         <BrandOverview brandId={id} days={days} />
+        <GenerationOrigins brandId={id} days={days} />
         {error && (
           <div role="alert" className="flex items-center gap-3 text-sm text-danger">
             <span>{error}</span>

@@ -4,6 +4,7 @@ import { readVkPostMetrics } from "@pubrick/integrations";
 import {
   type AnalyticsDto,
   type BrandFormatSpendDto,
+  type BrandGenerationOriginsDto,
   type BrandOverviewDto,
   type BrandSpendHistoryDto,
   CONTENT_TYPES,
@@ -388,6 +389,105 @@ export class AnalyticsRepository {
           };
         })
         .sort((a, b) => b.runCount - a.runCount || a.contentType.localeCompare(b.contentType)),
+    };
+  }
+
+  /** A run's creation clock defines the cohort; surviving links alone identify its origin. */
+  async generationOrigins(
+    orgId: string,
+    brandId: string,
+    days: 7 | 30 | 90,
+  ): Promise<BrandGenerationOriginsDto> {
+    await this.requireBrand(orgId, brandId);
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    const r = schema.pipelineRuns;
+    // Manual attempts may repeat a run ID. EXISTS keeps one run as one count.
+    // A contradictory pair of live links is visible as ambiguous, never silently
+    // credited to either kind. Dispatch links can vanish when a topic is deleted.
+    const automatic = sql`exists (
+      select 1 from autopilot_dispatches ad
+      where ad.run_id = ${r.id} and ad.org_id = ${orgId} and ad.brand_id = ${brandId}
+    )`;
+    const manual = sql`exists (
+      select 1 from autopilot_manual_attempts ma
+      where ma.run_id = ${r.id} and ma.org_id = ${orgId} and ma.brand_id = ${brandId}
+    )`;
+    const origin = sql<BrandGenerationOriginsDto["origins"][number]["origin"]>`case
+      when ${automatic} and ${manual} then 'ambiguous'
+      when ${automatic} then 'automatic'
+      when ${manual} then 'manual'
+      else 'unattributed'
+    end`;
+    const linkedDraft = sql`exists (
+      select 1 from content_items ci
+      where ci.id = ${r.contentItemId} and ci.org_id = ${orgId} and ci.brand_id = ${brandId}
+    )`;
+    // Count a conversion only with a surviving exact run -> draft -> adaptation
+    // -> published receipt chain. One draft may have several channel receipts.
+    const published = sql`exists (
+      select 1 from content_items ci
+      join adaptations a on a.content_item_id = ci.id and a.org_id = ${orgId}
+      join publications p on p.adaptation_id = a.id and p.org_id = ${orgId}
+        and p.channel_id = a.channel_id and p.status = 'published'
+      join channels c on c.id = a.channel_id and c.org_id = ${orgId}
+        and c.brand_id = ${brandId}
+      where ci.id = ${r.contentItemId} and ci.org_id = ${orgId} and ci.brand_id = ${brandId}
+    )`;
+    const scope = and(
+      eq(r.orgId, orgId),
+      eq(r.brandId, brandId),
+      gte(r.createdAt, from),
+      lt(r.createdAt, to),
+    );
+    const rows = await db
+      .select({
+        origin,
+        total: sql<string>`count(*)`,
+        queued: sql<string>`count(*) filter (where ${r.status} = 'queued')`,
+        running: sql<string>`count(*) filter (where ${r.status} = 'running')`,
+        succeeded: sql<string>`count(*) filter (where ${r.status} = 'succeeded')`,
+        failed: sql<string>`count(*) filter (where ${r.status} = 'failed')`,
+        cancelled: sql<string>`count(*) filter (where ${r.status} = 'cancelled')`,
+        linkedDrafts: sql<string>`count(*) filter (where ${linkedDraft})`,
+        publishedRuns: sql<string>`count(*) filter (where ${published})`,
+      })
+      .from(r)
+      .where(scope)
+      .groupBy(sql`1`);
+    const failed = await db
+      .select({ id: r.id, origin, createdAt: r.createdAt })
+      .from(r)
+      .where(and(scope, eq(r.status, "failed")))
+      .orderBy(desc(r.createdAt), desc(r.id))
+      .limit(6);
+    const order = ["automatic", "manual", "ambiguous", "unattributed"] as const;
+    const byOrigin = new Map(rows.map((row) => [row.origin, row]));
+    const origins = order.map((kind) => {
+      const row = byOrigin.get(kind);
+      return {
+        origin: kind,
+        total: count(row?.total),
+        queued: count(row?.queued),
+        running: count(row?.running),
+        succeeded: count(row?.succeeded),
+        failed: count(row?.failed),
+        cancelled: count(row?.cancelled),
+        linkedDrafts: count(row?.linkedDrafts),
+        publishedRuns: count(row?.publishedRuns),
+      };
+    });
+    return {
+      days,
+      from: from.toISOString(),
+      to: to.toISOString(),
+      total: origins.reduce((sum, row) => sum + row.total, 0),
+      origins,
+      recentFailedRuns: failed.map((row) => ({
+        id: row.id,
+        origin: row.origin,
+        createdAt: row.createdAt.toISOString(),
+      })),
     };
   }
 
