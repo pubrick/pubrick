@@ -1,5 +1,6 @@
 import {
   TOPIC_CONTENT_TYPES,
+  TOPIC_INSPIRATION_KINDS,
   TOPIC_ORIGINS,
   TOPIC_STATUSES,
   TOPIC_SUGGESTION_REQUEST_STATUSES,
@@ -50,6 +51,13 @@ export const topics = pgTable(
     priority: integer("priority").notNull().default(5),
     origin: text("origin", { enum: TOPIC_ORIGINS }).notNull().default("manual"),
     suggestionKey: text("suggestion_key"),
+    /** Immutable context snapshot for AI suggestions, independent of source retention. */
+    inspirationKind: text("inspiration_kind", { enum: TOPIC_INSPIRATION_KINDS })
+      .notNull()
+      .default("none"),
+    inspirationRefId: uuid("inspiration_ref_id"),
+    inspirationLabel: text("inspiration_label"),
+    inspirationDate: date("inspiration_date"),
     revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -69,6 +77,13 @@ export const topics = pgTable(
       sql`jsonb_typeof(${t.seoKeywords}) = 'array' and jsonb_array_length(${t.seoKeywords}) <= 8 and (${t.contentType} = 'expert_article' or ${t.seoKeywords} = '[]'::jsonb)`,
     ),
     enumCheck("topics_origin_check", t.origin, TOPIC_ORIGINS),
+    enumCheck("topics_inspiration_kind_check", t.inspirationKind, TOPIC_INSPIRATION_KINDS),
+    check(
+      "topics_inspiration_snapshot_check",
+      sql`(${t.inspirationKind} = 'none' and ${t.inspirationRefId} is null and ${t.inspirationLabel} is null and ${t.inspirationDate} is null)
+        or (${t.inspirationKind} = 'news' and ${t.inspirationRefId} is not null and ${t.inspirationLabel} is not null and ${t.inspirationDate} is null)
+        or (${t.inspirationKind} in ('editorial_placeholder', 'memorable_date') and ${t.inspirationRefId} is not null and ${t.inspirationLabel} is not null and ${t.inspirationDate} is not null)`,
+    ),
     check("topics_priority_check", sql`${t.priority} BETWEEN 1 AND 10`),
   ],
 );

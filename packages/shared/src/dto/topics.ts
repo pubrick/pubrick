@@ -4,6 +4,12 @@ import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 export const TOPIC_STATUSES = ["idea", "approved", "archived"] as const;
 export const TOPIC_ORIGINS = ["manual", "ai"] as const;
+export const TOPIC_INSPIRATION_KINDS = [
+  "none",
+  "news",
+  "editorial_placeholder",
+  "memorable_date",
+] as const;
 /** Formats that can be generated from a reviewed topic without separate source material. */
 export const TOPIC_CONTENT_TYPES = [
   "social_post",
@@ -128,6 +134,10 @@ export const topicDtoSchema = z.object({
   contentType: z.enum(TOPIC_CONTENT_TYPES),
   seoKeywords: storedKeywords,
   origin: z.enum(TOPIC_ORIGINS),
+  inspirationKind: z.enum(TOPIC_INSPIRATION_KINDS),
+  inspirationRefId: z.string().uuid().nullable(),
+  inspirationLabel: z.string().nullable(),
+  inspirationDate: plannedDate.nullable(),
   revision: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),

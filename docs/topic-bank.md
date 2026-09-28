@@ -7,8 +7,14 @@ Pubrick does not read the linked page. Saving the same article twice returns
 the existing topic.
 
 **Suggest topics with AI** requests up to three brand-specific ideas. The worker
-uses the brand profile, up to 30 approved bank entries, and up to 10 scored news
-articles as context. Explicit Irrelevant feedback excludes an article; Relevant
+uses the brand profile, up to 30 approved bank entries, up to 10 scored news
+articles, up to 10 unfilled editorial reservations in the next 14 brand-local
+days, and up to 10 active memorable dates occurring in the next 28 days while
+their configured lead windows are open. The brand's validated IANA timezone
+determines today; a missing or invalid stored timezone falls back to UTC.
+Only structured reservation metadata is sent to the model; freeform reservation
+notes are excluded. These calendar signals are suggestions, not due jobs.
+Explicit Irrelevant feedback excludes an article; Relevant
 feedback can admit it even if its score is low. Otherwise, a bounded headline
 feedback adjustment influences which scored articles reach the context list.
 Feed summaries are untrusted source material; Pubrick does not
@@ -20,6 +26,19 @@ usage ledger using the organization's AI key. Repeated titles are skipped.
 The request status shows queued, running, completed, or failed; zero new ideas
 means the results were repeats or reviewer-blocked near matches, not that the
 model failed.
+
+Each AI idea may retain one validated source: scored news, an editorial opening,
+a memorable date, or none. The model may return only an ID included in that
+request's brand-scoped context; foreign, invented, or multiple references are
+discarded. Pubrick saves the source kind, ID, server-built label, and calendar
+date as a snapshot so the chip remains meaningful if the source is later
+edited or deleted. A source chip indicates inspiration, not verification.
+Calendar-inspired ideas remain unapproved, with no target date; they never fill
+the reservation or create a slot, run, draft, or publication. Calendar context
+adds no model call. Each attempt makes at most one physical suggestion-text
+call; an automatic request never retries that call, while a manual request can
+be retried after a transient provider failure. Invalid structured output fails
+without a paid repair call.
 
 For a **manual** request, and for an **automatic** request whose owner or admin
 enabled the paid semantic filter before the scanner queued it, Pubrick also

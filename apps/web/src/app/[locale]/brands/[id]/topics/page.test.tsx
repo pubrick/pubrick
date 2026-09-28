@@ -29,6 +29,80 @@ describe("topic bank page", () => {
     vi.stubGlobal("fetch", vi.fn());
   });
 
+  it("shows calendar and news inspiration as neutral source chips", async () => {
+    const base = {
+      id: TOPIC_ID,
+      brandId: BRAND_ID,
+      newsItemId: null,
+      description: "Brief",
+      sourceUrl: null,
+      status: "idea",
+      origin: "ai",
+      plannedDate: null,
+      priority: 5,
+      contentType: "social_post",
+      seoKeywords: [],
+      revision: 1,
+      createdAt: "2026-09-23T12:00:00Z",
+      updatedAt: "2026-09-23T12:00:00Z",
+    };
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics/outcomes?")) return response(200, []);
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            ...base,
+            title: "Opening plan",
+            inspirationKind: "editorial_placeholder",
+            inspirationRefId: EMPTY_TOPIC_ID,
+            inspirationLabel: "Editorial opening",
+            inspirationDate: "2026-10-02",
+          },
+          {
+            ...base,
+            id: EMPTY_TOPIC_ID,
+            title: "Seasonal plan",
+            inspirationKind: "memorable_date",
+            inspirationRefId: TOPIC_ID,
+            inspirationLabel: "Seasonal day",
+            inspirationDate: "2026-10-03",
+          },
+          {
+            ...base,
+            id: CHANNEL_ID,
+            title: "News plan",
+            inspirationKind: "news",
+            inspirationRefId: CHANNEL_ID,
+            inspirationLabel: "Cafes expand",
+            inspirationDate: null,
+          },
+        ]);
+      return response(200, {});
+    });
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(
+      await screen.findByText(
+        en.Topics.inspiration_editorial_placeholder.replace("{date}", "2026-10-02"),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        en.Topics.inspiration_memorable_date
+          .replace("{label}", "Seasonal day")
+          .replace("{date}", "2026-10-03"),
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(en.Topics.inspiration_news.replace("{label}", "Cafes expand")),
+    ).toBeInTheDocument();
+  });
+
   it("approves a saved topic and sends its id and chosen channel to the existing run path", async () => {
     const calls: { url: string; method: string; body: unknown }[] = [];
     let status = "idea";

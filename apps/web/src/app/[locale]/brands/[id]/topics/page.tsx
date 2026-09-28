@@ -603,6 +603,23 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                     </>
                   )}
                   {topic.origin === "ai" && <> · {t("aiSuggestion")}</>}
+                  {topic.inspirationKind && topic.inspirationKind !== "none" && (
+                    <>
+                      {" · "}
+                      <span className="inline-flex rounded-control border border-border-soft px-2 py-0.5 text-xs text-fg-secondary">
+                        {topic.inspirationKind === "news"
+                          ? t("inspiration_news", { label: topic.inspirationLabel ?? "" })
+                          : topic.inspirationKind === "editorial_placeholder"
+                            ? t("inspiration_editorial_placeholder", {
+                                date: topic.inspirationDate ?? "",
+                              })
+                            : t("inspiration_memorable_date", {
+                                label: topic.inspirationLabel ?? "",
+                                date: topic.inspirationDate ?? "",
+                              })}
+                      </span>
+                    </>
+                  )}
                   {topic.contentType && topic.contentType !== "social_post" && (
                     <> · {tc(`contentType.${topic.contentType}`)}</>
                   )}

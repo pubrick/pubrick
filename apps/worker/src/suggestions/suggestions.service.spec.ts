@@ -6,10 +6,14 @@ import type { SuggestionsRepository } from "./suggestions.repository";
 
 const job = { orgId: "org-1", brandId: "brand-1", requestId: "request-1" };
 const newsId = "11111111-1111-4111-8111-111111111111";
+const placeholderId = "22222222-2222-4222-8222-222222222222";
+const memorableId = "33333333-3333-4333-8333-333333333333";
 const input = {
   origin: "manual" as const,
   attempt: 1,
   localDate: null,
+  calendarToday: "2026-01-02",
+  calendar: { placeholders: [], memorable: [] },
   brand: {
     name: "Kettle",
     description: "Coffee tools",
@@ -41,6 +45,14 @@ describe("SuggestionsService", () => {
     process.env.DATABASE_URL ??= "postgres://unused:unused@127.0.0.1:5432/unused";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
     ({ SuggestionsService: Service } = await import("./suggestions.service"));
+  });
+
+  it("uses the validated brand IANA timezone and falls back to UTC for bad stored zones", async () => {
+    const { brandLocalDay } = await import("./suggestions.repository");
+    const instant = new Date("2026-12-31T23:30:00Z");
+    expect(brandLocalDay(instant, "Asia/Tokyo")).toBe("2027-01-01");
+    expect(brandLocalDay(instant, "America/Los_Angeles")).toBe("2026-12-31");
+    expect(brandLocalDay(instant, "Not/A_Timezone")).toBe("2026-12-31");
   });
 
   function harness(reply: string | Error) {
@@ -105,11 +117,61 @@ describe("SuggestionsService", () => {
       job.brandId,
       job.requestId,
       [suggestion],
-      [{ id: newsId, url: "https://example.com/rule" }],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
       1,
       { titles: [], state: "[]" },
+      input.calendar,
     );
     expect(repo.failed).not.toHaveBeenCalled();
+  });
+
+  it("offers bounded calendar context without leaking placeholder notes or buying a second call", async () => {
+    const suggestion = {
+      title: "A New Year planning guide",
+      description: "Offer practical preparation steps.",
+      newsItemId: null,
+      editorialPlaceholderId: null,
+      memorableDateId: memorableId,
+    };
+    const { service, repo, calls } = harness(JSON.stringify({ suggestions: [suggestion] }));
+    const calendar = {
+      placeholders: [
+        {
+          id: placeholderId,
+          date: "2026-01-05",
+          platform: "telegram",
+          contentType: "social_post",
+          timeOfDay: "09:00",
+          notes: "SECRET FREEFORM NOTES",
+        },
+      ],
+      memorable: [
+        {
+          id: memorableId,
+          title: "New Year celebration",
+          date: "2026-01-06",
+          daysUntil: 4,
+          suggestedContentTypes: ["social_post"],
+        },
+      ],
+    };
+    repo.claim.mockResolvedValue({ ...input, calendar });
+    await service.handle(job);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.user).toContain(placeholderId);
+    expect(calls[0]?.user).toContain(memorableId);
+    expect(calls[0]?.user).not.toContain("SECRET FREEFORM NOTES");
+    expect(calls[0]?.system).toContain("untrusted data");
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [suggestion],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
+      1,
+      { titles: [], state: "[]" },
+      calendar,
+    );
   });
 
   it("records missing key without a provider call", async () => {
@@ -178,7 +240,7 @@ describe("SuggestionsService", () => {
     repo.claim.mockResolvedValue({ ...input, origin: "automatic", localDate: "2026-01-02" });
     await service.handle(job);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.user).toContain("TODAY: 2026-01-02");
+    expect(calls[0]?.user).toContain("TODAY IN BRAND TIMEZONE: 2026-01-02");
     expect(repo.recordUsage).toHaveBeenCalledOnce();
     expect(repo.failed).toHaveBeenCalledWith(
       job.orgId,
@@ -238,9 +300,10 @@ describe("SuggestionsService", () => {
       job.brandId,
       job.requestId,
       [suggestions[1]],
-      [{ id: newsId, url: "https://example.com/rule" }],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
       1,
       { titles: [blocked], state: "blocked-state" },
+      input.calendar,
     );
   });
 
@@ -321,9 +384,10 @@ describe("SuggestionsService", () => {
       job.brandId,
       job.requestId,
       [],
-      [{ id: newsId, url: "https://example.com/rule" }],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
       1,
       { titles: blockers, state: "all-blockers" },
+      input.calendar,
     );
   });
 
@@ -352,9 +416,10 @@ describe("SuggestionsService", () => {
         job.brandId,
         job.requestId,
         [suggestions[1]],
-        [{ id: newsId, url: "https://example.com/rule" }],
+        [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
         1,
         { titles: ["Blocked angle"], state: "state" },
+        input.calendar,
       );
     },
   );
@@ -443,9 +508,10 @@ describe("SuggestionsService", () => {
       job.brandId,
       job.requestId,
       [suggestion],
-      [{ id: newsId, url: "https://example.com/rule" }],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
       1,
       undefined,
+      input.calendar,
     );
   });
 
@@ -487,9 +553,10 @@ describe("SuggestionsService", () => {
       job.brandId,
       job.requestId,
       [suggestions[1]],
-      [{ id: newsId, url: "https://example.com/rule" }],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
       1,
       { titles: ["Cafe extraction guide"], state: "blocked-state" },
+      input.calendar,
     );
   });
 

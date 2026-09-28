@@ -13,6 +13,11 @@ semantics. The editorial day is stored as a SQL `date`, preserving its
 `YYYY-MM-DD` label across browser timezones. Past dates are allowed so teams can
 record historical plans.
 
+The topic suggestion worker reads at most 10 future reservations in the next
+14 brand-local days as optional editorial openings. It sends only their ID,
+date, platform, format, and clock label to the model; freeform notes stay out
+of the prompt. A suggested topic does not fill or dispatch the reservation.
+
 `GET /api/calendar/editorial-placeholders?brandId=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD`
 returns up to a 93-day date range, inclusive of `from` and exclusive of `to`.
 `POST` accepts `brandId`, `date`, and nullable `platform`, `contentType`,
@@ -113,6 +118,11 @@ so a suggestion does not drift when an editor opens the UI from another zone.
 February 29 appears only in leap years, with no February 28 substitute. Lead
 windows cross New Year and the next actual occurrence is used. For example,
 January 1 with a 14-day lead appears from December 18 of the previous year.
+
+Active dates can also inspire AI topic suggestions when their next actual
+occurrence is within 28 brand-local days and their lead window is open. The
+worker sends at most 10 such dates, stores a source snapshot only when the
+model cites a supplied date ID, and leaves the idea unapproved and unscheduled.
 
 The secondary **Manage dates** control opens the CRUD panel. The calendar's
 primary Add action still plans a generation slot.

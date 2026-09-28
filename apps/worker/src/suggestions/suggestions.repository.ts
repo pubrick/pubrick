@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { Injectable } from "@nestjs/common";
 import { KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
 import { newsRankScore, schema } from "@pubrick/db";
-import { decryptJson, parseStoredAiCredential, toLedgerCostUsd } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import {
+  daysUntilMemorableDate,
+  decryptJson,
+  parseStoredAiCredential,
+  toLedgerCostUsd,
+} from "@pubrick/shared";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 
@@ -13,7 +18,62 @@ export function topicKey(title: string): string {
     .digest("hex");
 }
 
-export type Suggestion = { title: string; description: string; newsItemId: string | null };
+export type Suggestion = {
+  title: string;
+  description: string;
+  newsItemId: string | null;
+  editorialPlaceholderId?: string | null;
+  memorableDateId?: string | null;
+};
+
+type CalendarSignals = {
+  placeholders: Array<{
+    id: string;
+    date: string;
+    platform: string | null;
+    contentType: string | null;
+    timeOfDay: string | null;
+  }>;
+  memorable: Array<{
+    id: string;
+    title: string;
+    date: string;
+    daysUntil: number;
+    suggestedContentTypes: string[];
+  }>;
+};
+
+const DAY_MS = 86_400_000;
+const PLACEHOLDER_HORIZON_DAYS = 14;
+const MEMORABLE_HORIZON_DAYS = 28;
+
+function addCalendarDays(day: string, count: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10);
+}
+
+export function brandLocalDay(now: Date, timezone: string | null): string {
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone ?? "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+  }
+  const parts = Object.fromEntries(
+    formatter.formatToParts(now).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 
 // Three proposal titles and all twenty recent reviewer blocks fit in three
 // ten-text embedding calls. Overflow refuses a semantic request before AI spend.
@@ -74,6 +134,14 @@ export class SuggestionsRepository {
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
       .limit(1);
     if (!brands[0]) return null;
+    const [config] = await db
+      .select({ timezone: schema.autopilotConfigs.timezone })
+      .from(schema.autopilotConfigs)
+      .where(
+        and(eq(schema.autopilotConfigs.orgId, orgId), eq(schema.autopilotConfigs.brandId, brandId)),
+      )
+      .limit(1);
+    const calendarToday = brandLocalDay(new Date(), config?.timezone ?? null);
     const topics = await db
       .select({
         title: schema.topics.title,
@@ -121,12 +189,65 @@ export class SuggestionsRepository {
       )
       .orderBy(desc(newsRankScore), desc(schema.newsItems.createdAt))
       .limit(40);
+    const placeholders = await db
+      .select({
+        id: schema.editorialPlaceholders.id,
+        date: schema.editorialPlaceholders.date,
+        platform: schema.editorialPlaceholders.platform,
+        contentType: schema.editorialPlaceholders.contentType,
+        timeOfDay: schema.editorialPlaceholders.timeOfDay,
+      })
+      .from(schema.editorialPlaceholders)
+      .where(
+        and(
+          eq(schema.editorialPlaceholders.orgId, orgId),
+          eq(schema.editorialPlaceholders.brandId, brandId),
+          gte(schema.editorialPlaceholders.date, calendarToday),
+          lt(
+            schema.editorialPlaceholders.date,
+            addCalendarDays(calendarToday, PLACEHOLDER_HORIZON_DAYS),
+          ),
+        ),
+      )
+      .orderBy(asc(schema.editorialPlaceholders.date), asc(schema.editorialPlaceholders.id))
+      .limit(10);
+    // Generate real calendar dates in PostgreSQL: Jan 1 sorts after Dec 31,
+    // and Feb 29 exists only in leap years. Filter the lead window before
+    // LIMIT so many out-of-window rows cannot hide eligible dates.
+    const memorableRows = await db.execute<{
+      id: string;
+      month_day: string;
+      title: string;
+      suggested_content_types: string[];
+      occurrence_date: string;
+      days_until: number;
+    }>(sql`
+      SELECT d.id, d.month_day, d.title, d.suggested_content_types,
+        (${calendarToday}::date + offsets.days)::text AS occurrence_date,
+        offsets.days AS days_until
+      FROM generate_series(0, ${MEMORABLE_HORIZON_DAYS}) AS offsets(days)
+      JOIN memorable_dates d ON d.month_day = to_char(${calendarToday}::date + offsets.days, 'MM-DD')
+      WHERE d.org_id = ${orgId} AND d.brand_id = ${brandId}
+        AND d.is_active AND d.lead_days >= offsets.days
+      ORDER BY offsets.days, d.id LIMIT 10
+    `);
+    const memorable = memorableRows.rows
+      .filter((row) => daysUntilMemorableDate(row.month_day, calendarToday) === row.days_until)
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        date: row.occurrence_date,
+        daysUntil: row.days_until,
+        suggestedContentTypes: row.suggested_content_types,
+      }));
     return {
       origin: claimed[0].origin,
       localDate: claimed[0].localDate,
       semanticFilterBlockedTopics: claimed[0].semanticFilterBlockedTopics,
       attempt: claimed[0].attempts,
       brand: brands[0],
+      calendarToday,
+      calendar: { placeholders, memorable },
       topics,
       news: news
         .filter(
@@ -273,9 +394,10 @@ export class SuggestionsRepository {
     brandId: string,
     requestId: string,
     suggestions: Suggestion[],
-    news: Array<{ id: string; url: string }>,
+    news: Array<{ id: string; url: string; title: string }>,
     expectedAttempt?: number,
     blockedSnapshot?: BlockedTopicSnapshot,
+    calendar: CalendarSignals = { placeholders: [], memorable: [] },
   ) {
     return db.transaction(async (tx) => {
       // Block/unblock and topic edits take this same lock before touching
@@ -340,15 +462,46 @@ export class SuggestionsRepository {
         .from(schema.topics)
         .where(and(eq(schema.topics.orgId, orgId), eq(schema.topics.brandId, brandId)));
       const seen = new Set(existing.map((topic) => topicKey(topic.title)));
-      const allowedNews = new Map(news.map((item) => [item.id, item.url]));
+      const allowedNews = new Map(news.map((item) => [item.id, item]));
+      const allowedPlaceholders = new Map(calendar.placeholders.map((item) => [item.id, item]));
+      const allowedMemorable = new Map(calendar.memorable.map((item) => [item.id, item]));
       let count = 0;
       for (const suggestion of suggestions.slice(0, 3)) {
         const key = topicKey(suggestion.title);
         if (seen.has(key)) continue;
+        const references = [
+          suggestion.newsItemId,
+          suggestion.editorialPlaceholderId,
+          suggestion.memorableDateId,
+        ].filter((id) => id !== null && id !== undefined);
+        if (references.length > 1) continue;
+        const newsItem =
+          suggestion.newsItemId != null ? allowedNews.get(suggestion.newsItemId) : undefined;
+        const placeholder =
+          suggestion.editorialPlaceholderId != null
+            ? allowedPlaceholders.get(suggestion.editorialPlaceholderId)
+            : undefined;
+        const memorableDate =
+          suggestion.memorableDateId != null
+            ? allowedMemorable.get(suggestion.memorableDateId)
+            : undefined;
+        if (suggestion.newsItemId != null && !newsItem?.title.trim()) continue;
+        if (suggestion.editorialPlaceholderId != null && !placeholder) continue;
+        if (suggestion.memorableDateId != null && !memorableDate) continue;
         seen.add(key);
-        const sourceUrl = suggestion.newsItemId
-          ? (allowedNews.get(suggestion.newsItemId) ?? null)
-          : null;
+        const inspirationKind = newsItem
+          ? "news"
+          : placeholder
+            ? "editorial_placeholder"
+            : memorableDate
+              ? "memorable_date"
+              : "none";
+        const inspirationRefId = newsItem?.id ?? placeholder?.id ?? memorableDate?.id ?? null;
+        const inspirationLabel =
+          newsItem?.title.slice(0, 500) ??
+          memorableDate?.title.slice(0, 500) ??
+          (placeholder ? "Editorial opening" : null);
+        const inspirationDate = placeholder?.date ?? memorableDate?.date ?? null;
         const rows = await tx
           .insert(schema.topics)
           .values({
@@ -356,7 +509,11 @@ export class SuggestionsRepository {
             brandId,
             title: suggestion.title,
             description: suggestion.description,
-            sourceUrl,
+            sourceUrl: newsItem?.url ?? null,
+            inspirationKind,
+            inspirationRefId,
+            inspirationLabel,
+            inspirationDate,
             origin: "ai",
             suggestionKey: key,
           })

@@ -53,6 +53,40 @@ describe.skipIf(!url)("topic bank e2e", () => {
     return { agent, orgId: org.body.id as string, userId: signUp.body.user.id as string };
   }
 
+  it("returns only the server-saved inspiration snapshot to the owning brand", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent
+      .post("/api/brands")
+      .send({ name: "Calendar ideas" })
+      .expect(201);
+    const [topic] = await db
+      .insert(schema.topics)
+      .values({
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        title: "Seasonal preparation",
+        description: "Practical guide",
+        origin: "ai",
+        inspirationKind: "memorable_date",
+        inspirationRefId: randomUUID(),
+        inspirationLabel: "Seasonal occasion",
+        inspirationDate: "2026-12-31",
+      })
+      .returning({ id: schema.topics.id });
+    if (!topic) throw new Error("Topic insert returned no row");
+    const rows = await owner.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(200);
+    expect(topicDtoSchema.parse(rows.body[0])).toMatchObject({
+      id: topic.id,
+      inspirationKind: "memorable_date",
+      inspirationLabel: "Seasonal occasion",
+      inspirationDate: "2026-12-31",
+      status: "idea",
+      plannedDate: null,
+    });
+    await outsider.agent.get(`/api/topics?brandId=${brand.body.id}`).expect(404);
+  });
+
   it("reports linked topic outcomes without duplicate drafts, unknown counters, or tenant leakage", async () => {
     const owner = await orgAgent();
     const outsider = await orgAgent();
