@@ -762,6 +762,12 @@
     "saveError": "Não foi possível atualizar o feed."
   },
   "Publish": {
+    "intent": {
+      "review": "Revise o rascunho salvo abaixo. Abrir este link não o aprovou nem publicou.",
+      "schedule": "Escolha um horário abaixo e confirme o agendamento no Pubrick. Abrir este link não o agendou.",
+      "publish": "Revise o rascunho e use Publicar agora para confirmar o envio. Abrir este link não o publicou.",
+      "unavailable": "Esta ação não está mais disponível para esta publicação ou para seu papel. Você ainda pode ler a publicação aqui."
+    },
     "costReceiptTitle": "Custos de IA registrados desta publicação",
     "costReceiptLoading": "Carregando os custos de IA desta publicação…",
     "costReceiptAtLeast": "{amount} registrados · chamadas com custo desconhecido: {count}",

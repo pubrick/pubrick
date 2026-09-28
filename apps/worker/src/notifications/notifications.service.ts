@@ -28,7 +28,11 @@ function notificationLine(value: string | null, fallback: string, limit: number)
   );
 }
 
-export function draftReviewUrl(rawOrigin: string, itemId: string): string | null {
+export function draftReviewUrl(
+  rawOrigin: string,
+  itemId: string,
+  intent?: "review" | "schedule" | "publish",
+): string | null {
   let origin: URL;
   try {
     origin = new URL(rawOrigin);
@@ -44,7 +48,9 @@ export function draftReviewUrl(rawOrigin: string, itemId: string): string | null
     origin.hash
   )
     return null;
-  return new URL(`/en/content/${encodeURIComponent(itemId)}`, origin.origin).toString();
+  const url = new URL(`/en/content/${encodeURIComponent(itemId)}`, origin.origin);
+  if (intent) url.searchParams.set("intent", intent);
+  return url.toString();
 }
 
 @Injectable()
@@ -383,20 +389,30 @@ export class NotificationsService {
                   "Draft ready for review",
                   `Brand: ${notificationLine(draft.brandName, "Unknown brand", 100)}`,
                   `Title: ${notificationLine(draft.title, "Untitled draft", 160)}`,
-                  "Open Pubrick to read and decide. This link takes no action.",
+                  "Open Pubrick to read and decide. Links do not approve, schedule, or publish.",
                 ].join("\n")
               : (digest?.message ?? COPY[event.event]);
             attemptedSend = true;
             const result = await sendTelegramNotification(credentials, message, {
               baseUrl: env.TELEGRAM_API_BASE_URL,
-              button: {
-                text: draft
-                  ? "Review draft"
-                  : event.event === "morning_digest"
-                    ? "Open brand"
-                    : "Open post",
-                url,
-              },
+              ...(draft
+                ? {
+                    buttons: (["review", "schedule", "publish"] as const).map((intent) => ({
+                      text:
+                        intent === "review"
+                          ? "Review"
+                          : intent === "schedule"
+                            ? "Schedule"
+                            : "Publish",
+                      url: `${url}?intent=${intent}`,
+                    })),
+                  }
+                : {
+                    button: {
+                      text: event.event === "morning_digest" ? "Open brand" : "Open post",
+                      url,
+                    },
+                  }),
             });
             status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
           }

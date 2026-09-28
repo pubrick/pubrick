@@ -21,8 +21,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import type { ContentOrigin } from "@/lib/origin";
-import { signedInSession } from "@/test/auth-client.stub";
-import { routerMock } from "@/test/next-navigation.stub";
+import { pendingSession, signedInSession } from "@/test/auth-client.stub";
+import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import ru from "../../../../../messages/ru.json";
@@ -275,6 +275,157 @@ beforeEach(() => {
     },
     isPending: false,
   } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+});
+
+describe("Telegram review links", () => {
+  it.each([
+    ["review", "review-draft", en.Publish.intent.review],
+    ["schedule", "scheduledAt", en.Publish.intent.schedule],
+    ["publish", "publish-action", en.Publish.intent.publish],
+  ])("points %s at its control without making a decision", async (intent, targetId, copy) => {
+    navigationState.searchParams = new URLSearchParams(`intent=${intent}`);
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(copy)).toHaveAttribute("role", "status");
+    await waitFor(() => expect(document.getElementById(targetId)).toHaveFocus());
+    expect(
+      calls.filter((call) => call.method === "POST" && call.path.endsWith("/approve")),
+    ).toEqual([]);
+    expect(calls.filter((call) => call.method === "POST" && call.path.endsWith("/reject"))).toEqual(
+      [],
+    );
+  });
+
+  it("waits for the session before deciding whether its action is available", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=publish");
+    pendingSession();
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.queryByText(en.Publish.intent.unavailable)).toBeNull();
+
+    await act(async () => {
+      signedInSession();
+    });
+    expect(await screen.findByText(en.Publish.intent.publish)).toBeVisible();
+    expect(document.getElementById("publish-action")).toHaveFocus();
+    expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
+  });
+
+  it("updates its cue after a delivery changes without moving focus again", async () => {
+    vi.useFakeTimers();
+    try {
+      navigationState.searchParams = new URLSearchParams("intent=publish");
+      const served = {
+        current: makeItem({
+          status: "approved",
+          adaptations: [
+            makeAdaptation({ status: "failed", deliveryOutcome: "failed" }),
+            makeAdaptation({
+              id: "a2",
+              channelId: "ch2",
+              status: "queued",
+              deliveryOutcome: "queued",
+            }),
+          ],
+        }),
+      };
+      const calls: Call[] = [];
+      installBaseHandlers(served, calls, undefined, [
+        channel,
+        { id: "ch2", platform: "telegram", name: "Second channel" },
+      ]);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      expect(screen.getByText(en.Publish.intent.publish)).toBeVisible();
+      const reviewCard = document.getElementById("review-draft");
+      reviewCard?.focus();
+
+      served.current = makeItem({
+        status: "published",
+        adaptations: [
+          makeAdaptation({ status: "published", deliveryOutcome: "published" }),
+          makeAdaptation({
+            id: "a2",
+            channelId: "ch2",
+            status: "published",
+            deliveryOutcome: "published",
+          }),
+        ],
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      });
+      expect(screen.getByText(en.Publish.intent.unavailable)).toBeVisible();
+      expect(reviewCard).toHaveFocus();
+      expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("explains a role or status change without focusing an unavailable action", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=publish");
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "viewer", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.intent.unavailable)).toBeVisible();
+    expect(document.getElementById("publish-action")).toBeNull();
+    expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
+  });
+
+  it("does not offer scheduling for a post that was published since the alert", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=schedule");
+    const served = {
+      current: makeItem({
+        status: "published",
+        adaptations: [makeAdaptation({ status: "published", deliveryOutcome: "published" })],
+      }),
+    };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.intent.unavailable)).toBeVisible();
+    expect(document.getElementById("scheduledAt")).toBeDisabled();
+    expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
+  });
+
+  it.each(["unknown", "partial"] as const)(
+    "does not promise a schedule while delivery is %s",
+    async (deliveryOutcome) => {
+      navigationState.searchParams = new URLSearchParams("intent=schedule");
+      const served = {
+        current: makeItem({
+          status: "failed",
+          adaptations: [makeAdaptation({ status: "failed", deliveryOutcome })],
+        }),
+      };
+      installBaseHandlers(served, []);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      expect(await screen.findByText(en.Publish.intent.unavailable)).toBeVisible();
+      expect(document.getElementById("scheduledAt")).not.toHaveFocus();
+    },
+  );
+
+  it("ignores an unknown intent", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=delete");
+    const served = { current: makeItem() };
+    installBaseHandlers(served, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByRole("heading", { name: "Launch post" })).toBeVisible();
+    expect(screen.queryByText(en.Publish.intent.unavailable)).toBeNull();
+  });
 });
 
 describe("editorial roles on content detail", () => {

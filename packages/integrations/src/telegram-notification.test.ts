@@ -35,4 +35,23 @@ describe("sendTelegramNotification", () => {
     expect(result).toBe("unknown");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("sends several URL-only buttons while preserving the single-button contract", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const buttons = [
+      { text: "Review", url: "https://pubrick.example/en/content/one?intent=review" },
+      { text: "Publish", url: "https://pubrick.example/en/content/one?intent=publish" },
+    ];
+    expect(
+      await sendTelegramNotification(credentials, "Draft", {
+        buttons: buttons.map((button) => ({ ...button, callback_data: "unsafe" })),
+        fetchImpl,
+      }),
+    ).toBe("sent");
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).reply_markup).toEqual({ inline_keyboard: [buttons] });
+    expect(JSON.stringify(init.body)).not.toContain("callback_data");
+  });
 });

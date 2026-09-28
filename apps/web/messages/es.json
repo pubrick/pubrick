@@ -762,6 +762,12 @@
     "saveError": "No se pudo actualizar el feed."
   },
   "Publish": {
+    "intent": {
+      "review": "Revisa el borrador guardado abajo. Abrir este enlace no lo aprobó ni publicó.",
+      "schedule": "Elige una hora abajo y confirma la programación en Pubrick. Abrir este enlace no lo programó.",
+      "publish": "Revisa el borrador y usa Publicar ahora para confirmar el envío. Abrir este enlace no lo publicó.",
+      "unavailable": "Esta acción ya no está disponible para esta publicación o tu rol. Aún puedes leerla aquí."
+    },
     "costReceiptTitle": "Costes de IA registrados de esta publicación",
     "costReceiptLoading": "Cargando los costes de IA de esta publicación…",
     "costReceiptAtLeast": "{amount} registrados · llamadas con coste desconocido: {count}",

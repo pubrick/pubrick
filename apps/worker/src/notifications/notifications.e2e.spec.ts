@@ -107,14 +107,25 @@ describe.skipIf(!url)("notification outbox", () => {
     expect(requests[0]?.path).toBe("/bot123:secret/sendMessage");
     expect(requests[0]?.body).toEqual({
       chat_id: "-10042",
-      text: "Draft ready for review\nBrand: North <Acme>\nTitle: Launch <new> & safer\nOpen Pubrick to read and decide. This link takes no action.",
+      text: "Draft ready for review\nBrand: North <Acme>\nTitle: Launch <new> & safer\nOpen Pubrick to read and decide. Links do not approve, schedule, or publish.",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Review draft", url: `https://pubrick.example/en/content/${targetId}` }],
+          [
+            { text: "Review", url: `https://pubrick.example/en/content/${targetId}?intent=review` },
+            {
+              text: "Schedule",
+              url: `https://pubrick.example/en/content/${targetId}?intent=schedule`,
+            },
+            {
+              text: "Publish",
+              url: `https://pubrick.example/en/content/${targetId}?intent=publish`,
+            },
+          ],
         ],
       },
     });
     expect(requests[0]?.body).not.toHaveProperty("parse_mode");
+    expect(JSON.stringify(requests[0]?.body)).not.toContain("callback_data");
     expect(
       (
         await direct.db
@@ -134,6 +145,9 @@ describe.skipIf(!url)("notification outbox", () => {
     const itemId = crypto.randomUUID();
     expect(draftReviewUrl("https://pubrick.example", itemId)).toBe(
       `https://pubrick.example/en/content/${itemId}`,
+    );
+    expect(draftReviewUrl("https://pubrick.example", itemId, "publish")).toBe(
+      `https://pubrick.example/en/content/${itemId}?intent=publish`,
     );
     expect(draftReviewUrl("http://pubrick.example", itemId)).toBeNull();
     expect(draftReviewUrl("https://user:secret@pubrick.example", itemId)).toBeNull();

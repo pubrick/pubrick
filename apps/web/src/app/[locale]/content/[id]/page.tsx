@@ -25,7 +25,7 @@ import {
   withHashtags,
 } from "@pubrick/shared";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
@@ -270,6 +270,13 @@ function toDatetimeLocalValue(date: Date): string {
 
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const requestedIntentValue = useSearchParams().get("intent");
+  const requestedIntent =
+    requestedIntentValue === "review" ||
+    requestedIntentValue === "schedule" ||
+    requestedIntentValue === "publish"
+      ? requestedIntentValue
+      : null;
   const t = useTranslations("Publish");
   const tm = useTranslations("Media");
   const tc = useTranslations("Content");
@@ -290,8 +297,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
-  const { data: session } = authClient.useSession();
-  const { data: organization } = authClient.useActiveOrganization();
+  const { data: session, isPending: sessionPending } = authClient.useSession();
+  const { data: organization, isPending: organizationPending } = authClient.useActiveOrganization();
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
@@ -300,6 +307,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const canManageFeed = ["owner", "admin", "member"].includes(role ?? "");
 
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelsLoadedFor, setChannelsLoadedFor] = useState<string | null>(null);
+  const handledIntent = useRef<string | null>(null);
   const [showMedia, setShowMedia] = useState(false);
   const [mediaVersion, setMediaVersion] = useState(0);
   const [channelsFailed, setChannelsFailed] = useState(false);
@@ -471,17 +480,87 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         if (stale) return;
         setChannels(cs);
         setChannelsFailed(false);
+        setChannelsLoadedFor(brandId);
       })
       .catch((err) => {
         // Except when the account has no active organization: the item read
         // fails the same way, the redirect is already under way, and an alert
         // on the way out is noise about a screen the reader never had.
-        if (!stale) setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg));
+        if (!stale) {
+          setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg));
+          setChannelsLoadedFor(brandId);
+        }
       });
     return () => {
       stale = true;
     };
   }, [brandId]);
+
+  // A cue follows the current item and role. Polls can change the delivery
+  // state after the notification was sent, so availability cannot be latched
+  // when the link first opens. A timed decision must reach every channel.
+  const intentAvailable =
+    !item ||
+    !requestedIntent ||
+    sessionPending ||
+    organizationPending ||
+    !session ||
+    !organization ||
+    (requestedIntent === "schedule" && channelsLoadedFor !== item.brandId)
+      ? null
+      : requestedIntent === "review"
+        ? canManageDraft &&
+          ["draft", "rejected", "failed", "partially_published"].includes(item.status)
+        : requestedIntent === "schedule"
+          ? canDecideDelivery &&
+            item.status !== "published" &&
+            item.status !== "archived" &&
+            !channelsFailed &&
+            item.adaptations.length > 0 &&
+            item.adaptations.every((adaptation) => {
+              const channel = channels.find((entry) => entry.id === adaptation.channelId);
+              return (
+                ["pending", "failed", "scheduled"].includes(adaptation.status) &&
+                adaptation.deliveryOutcome !== "unknown" &&
+                adaptation.deliveryOutcome !== "partial" &&
+                channel !== undefined &&
+                !isManualPlatform(channel.platform)
+              );
+            })
+          : canDecideDelivery &&
+            item.status !== "published" &&
+            item.status !== "archived" &&
+            item.adaptations.some(
+              (adaptation) =>
+                ["pending", "failed", "scheduled"].includes(adaptation.status) &&
+                adaptation.deliveryOutcome !== "unknown" &&
+                adaptation.deliveryOutcome !== "partial",
+            );
+
+  // Telegram buttons only navigate. Focus once after the item and permissions
+  // load; a later poll must never drag the editor away from the reader's work.
+  useEffect(() => {
+    if (!item || !requestedIntent || intentAvailable === null) return;
+    const key = `${item.id}:${requestedIntent}`;
+    if (handledIntent.current === key) return;
+    handledIntent.current = key;
+    if (!intentAvailable) return;
+    const target = document.getElementById(
+      requestedIntent === "review"
+        ? "review-draft"
+        : requestedIntent === "schedule"
+          ? "scheduledAt"
+          : "publish-action",
+    );
+    if (!target) return;
+    if (
+      document.activeElement === document.body ||
+      document.activeElement === document.documentElement
+    ) {
+      target.scrollIntoView?.({ block: "center" });
+      target.focus({ preventScroll: true });
+    }
+  }, [item, requestedIntent, intentAvailable]);
 
   /**
    * The editable drafts are seeded ONCE per item, not on every read.
@@ -1831,6 +1910,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           ) : undefined
         ) : canDecideDelivery ? (
           <Button
+            id="publish-action"
             variant="primary"
             onClick={() => approve(false)}
             disabled={
@@ -1933,6 +2013,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {error}
         </p>
       )}
+      {requestedIntent && intentAvailable !== null && (
+        <p role="status" className="mb-4 text-sm text-fg-secondary">
+          {intentAvailable ? t(`intent.${requestedIntent}`) : t("intent.unavailable")}
+        </p>
+      )}
       {blockTopicNotice && (
         <p role="status" className="mb-4 text-sm text-fg-secondary">
           {t("blockTopicSuccess")}
@@ -1951,7 +2036,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         </p>
       )}
 
-      <Card className="mb-6">
+      <Card
+        id="review-draft"
+        tabIndex={-1}
+        className="mb-6 focus:outline-2 focus:outline-offset-2 focus:outline-accent"
+      >
         <SourceStrip input={item.runInput} />
         <PostCostReceipt contentItemId={item.id} />
         {item.linkPolicyWebsite && (
