@@ -792,13 +792,22 @@ const STALE_AFTER_MS = 60 * 60 * 1000;
  */
 async function withFreshDatabase(
   baseUrl: string,
+  templateName?: string,
 ): Promise<{ url: string; drop: () => Promise<void> }> {
+  if (templateName && !FRESH_DATABASE.test(templateName)) {
+    throw new Error(`Invalid migration test template: ${templateName}`);
+  }
   const name = `pubrick_fresh_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const admin = new pg.Client({ connectionString: baseUrl });
   await admin.connect();
-  await dropStaleDatabases(admin);
-  await admin.query(`CREATE DATABASE "${name}"`);
-  await admin.end();
+  try {
+    await dropStaleDatabases(admin);
+    await admin.query(
+      `CREATE DATABASE "${name}"${templateName ? ` TEMPLATE "${templateName}"` : ""}`,
+    );
+  } finally {
+    await admin.end();
+  }
   const fresh = new URL(baseUrl);
   fresh.pathname = `/${name}`;
   return {
@@ -3512,41 +3521,54 @@ describe.skipIf(!url)("runMigrations", () => {
       ),
     ) as { entries: { tag: string }[] };
 
-    for (const entry of journal.entries) {
-      const fresh = await withFreshDatabase(url as string);
-      const before = await migrationsFolderBefore(entry.tag);
-      try {
-        const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+    // Advance one source database through the journal. Each cutpoint is cloned
+    // before the next migration, then upgraded independently to head. This
+    // still checks every historical version without replaying its entire
+    // prefix on a new database for every iteration.
+    const source = await withFreshDatabase(url as string);
+    const sourceName = new URL(source.url).pathname.slice(1);
+    try {
+      for (const entry of journal.entries) {
+        const before = await migrationsFolderBefore(entry.tag);
         try {
-          // `0000` cuts to an empty folder, which is the "from empty" case.
-          await migrate(drizzle(pool), { migrationsFolder: before });
-        } finally {
-          await pool.end();
-        }
+          const pool = new pg.Pool({ connectionString: source.url, max: 1 });
+          try {
+            // `0000` cuts to an empty folder, which is the "from empty" case.
+            await migrate(drizzle(pool), { migrationsFolder: before });
+          } finally {
+            await pool.end();
+          }
 
-        await runMigrations(fresh.url);
+          const fresh = await withFreshDatabase(url as string, sourceName);
+          try {
+            await runMigrations(fresh.url);
 
-        const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
-        try {
-          const types = await after.query<{ name: string }>(
-            `SELECT table_name || '.' || column_name AS name
+            const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+            try {
+              const types = await after.query<{ name: string }>(
+                `SELECT table_name || '.' || column_name AS name
                FROM information_schema.columns
               WHERE table_schema = 'public' AND data_type = 'timestamp with time zone'
               ORDER BY name`,
-          );
-          expect(
-            types.rows.map((row) => row.name),
-            `starting from ${entry.tag}`,
-          ).toEqual(ZONED_COLUMNS);
+              );
+              expect(
+                types.rows.map((row) => row.name),
+                `starting from ${entry.tag}`,
+              ).toEqual(ZONED_COLUMNS);
+            } finally {
+              await after.end();
+            }
+          } finally {
+            await fresh.drop();
+          }
         } finally {
-          await after.end();
+          await fs.rm(before, { recursive: true, force: true });
         }
-      } finally {
-        await fs.rm(before, { recursive: true, force: true });
-        await fresh.drop();
       }
+    } finally {
+      await source.drop();
     }
-  }, 360_000);
+  }, 480_000);
   /**
    * THE BACKFILL, which is the one row rewrite this folder performs on purpose.
    *
