@@ -810,6 +810,98 @@ describe("rendering by adaptation status (Step 1)", () => {
     expect(served.current.adaptations[1]).toBe(sibling);
   });
 
+  it("confirms cancellation of one channel and sends its displayed time as the fence", async () => {
+    const first = new Date(`${scheduleValue()}:00`).toISOString();
+    const target = makeAdaptation({ status: "scheduled", scheduledAt: first });
+    const sibling = makeAdaptation({
+      id: "a2",
+      channelId: "ch2",
+      status: "scheduled",
+      scheduledAt: first,
+    });
+    const served = { current: makeItem({ status: "approved", adaptations: [target, sibling] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(
+      served,
+      calls,
+      (path, method) => {
+        if (method === "POST" && path === "/api/content/c1/adaptations/a1/cancel-schedule") {
+          served.current = {
+            ...served.current,
+            adaptations: [{ ...target, status: "pending", scheduledAt: null }, sibling],
+          };
+          return served.current;
+        }
+        return undefined;
+      },
+      [channel, { id: "ch2", platform: "telegram", name: "Second" }],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(
+      within(resultsList()).getAllByRole("button", {
+        name: en.Publish.cancelScheduleAction,
+      })[0] as HTMLElement,
+    );
+    expect(screen.getByText(/Other channels keep their schedules/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Publish.cancelScheduleKeep }));
+    expect(calls.some((call) => call.path.endsWith("/cancel-schedule"))).toBe(false);
+    await user.click(
+      within(resultsList()).getAllByRole("button", {
+        name: en.Publish.cancelScheduleAction,
+      })[0] as HTMLElement,
+    );
+    await user.click(
+      within(resultsList()).getAllByRole("button", {
+        name: en.Publish.cancelScheduleAction,
+      })[0] as HTMLElement,
+    );
+    await waitFor(() =>
+      expect(
+        within(resultsList()).getByText(
+          `${en.Publish.scheduledFor} ${new Date(first).toLocaleString("en")}`,
+        ),
+      ).toBeInTheDocument(),
+    );
+    const call = calls.find((row) => row.path === "/api/content/c1/adaptations/a1/cancel-schedule");
+    expect(call?.method).toBe("POST");
+    expect(JSON.parse(call?.body ?? "")).toEqual({ expectedScheduledAt: first });
+    expect(served.current.adaptations[1]).toBe(sibling);
+  });
+
+  it("shows a localized stale cancellation refusal and refreshes the scheduled channel", async () => {
+    const first = new Date(`${scheduleValue()}:00`).toISOString();
+    const moved = new Date(`${scheduleValue(2)}:00`).toISOString();
+    const target = makeAdaptation({ status: "scheduled", scheduledAt: first });
+    const served = { current: makeItem({ status: "approved", adaptations: [target] }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/cancel-schedule") {
+        served.current = {
+          ...served.current,
+          adaptations: [{ ...target, scheduledAt: moved }],
+        };
+        throw new ApiError(409, "Raw server text", false, "schedule_changed");
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, { locale: "ru" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: ru.Publish.cancelScheduleAction }));
+    await user.click(screen.getByRole("button", { name: ru.Publish.cancelScheduleAction }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(ru.Errors.schedule_changed),
+    );
+    expect(screen.queryByText("Raw server text")).not.toBeInTheDocument();
+    const results = screen.getByRole("heading", {
+      name: ru.Publish.resultsTitle,
+    }).nextElementSibling;
+    expect(results).toHaveTextContent(new Date(moved).toLocaleString("ru"));
+    expect(calls.find((row) => row.path.endsWith("/cancel-schedule"))?.body).toBe(
+      JSON.stringify({ expectedScheduledAt: first }),
+    );
+  });
+
   /**
    * THE OUTAGE, WHILE IT IS STILL HAPPENING. A slot that has come and gone with
    * nothing delivered leaves the row `scheduled` until the worker's bound runs
@@ -915,6 +1007,83 @@ describe("channel label fallback (F5)", () => {
 });
 
 describe("approve now (Step 2)", () => {
+  it.each(["now", "schedule"] as const)(
+    "confirms the global %s action before changing a sibling's scheduled delivery",
+    async (mode) => {
+      const first = new Date(`${scheduleValue()}:00`).toISOString();
+      const target = makeAdaptation({ status: "pending", scheduledAt: null });
+      const sibling = makeAdaptation({
+        id: "a2",
+        channelId: "ch2",
+        status: "scheduled",
+        scheduledAt: first,
+      });
+      const served = {
+        current: makeItem({ status: "approved", adaptations: [target, sibling] }),
+      };
+      const calls: Call[] = [];
+      installBaseHandlers(
+        served,
+        calls,
+        (path, method) => {
+          if (method === "POST" && path === "/api/content/c1/approve") return served.current;
+          return undefined;
+        },
+        [channel, { id: "ch2", platform: "telegram", name: "Second" }],
+      );
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      const chosen = scheduleValue(2);
+      if (mode === "schedule") {
+        fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+          target: { value: chosen },
+        });
+      }
+      const openConfirmation = async () => {
+        await userEvent.setup().click(
+          screen.getByRole("button", {
+            name: mode === "now" ? en.Publish.approveNow : en.Publish.approveScheduled,
+          }),
+        );
+      };
+      await openConfirmation();
+      let dialog = screen.getByRole("dialog", {
+        name:
+          mode === "now"
+            ? en.Publish.approvalConfirmNowTitle
+            : en.Publish.approvalConfirmScheduledTitle,
+      });
+      expect(dialog).toHaveTextContent("Second");
+      expect(dialog).toHaveTextContent(
+        mode === "now" ? "sends those channels now" : new Date(chosen).toLocaleString("en"),
+      );
+      expect(calls.some((call) => call.path === "/api/content/c1/approve")).toBe(false);
+      await userEvent
+        .setup()
+        .click(within(dialog).getByRole("button", { name: en.Publish.approvalConfirmCancel }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(calls.some((call) => call.path === "/api/content/c1/approve")).toBe(false);
+
+      await openConfirmation();
+      dialog = screen.getByRole("dialog");
+      await userEvent.setup().click(
+        within(dialog).getByRole("button", {
+          name:
+            mode === "now"
+              ? en.Publish.approvalConfirmNowAction
+              : en.Publish.approvalConfirmScheduledAction,
+        }),
+      );
+      await waitFor(() =>
+        expect(calls.filter((call) => call.path === "/api/content/c1/approve")).toHaveLength(1),
+      );
+      expect(calls.find((call) => call.path === "/api/content/c1/approve")?.body).toBe(
+        mode === "now"
+          ? JSON.stringify({})
+          : JSON.stringify({ scheduledAt: new Date(chosen).toISOString() }),
+      );
+    },
+  );
+
   it("POSTs approve with no scheduledAt and reflects the returned state", async () => {
     const served = { current: makeItem({ status: "draft" }) };
     const calls: Call[] = [];

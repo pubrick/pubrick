@@ -204,6 +204,14 @@ type ContentItem = {
   runInput: RunInput | null;
 };
 
+function scheduledDeliveryFingerprint(item: ContentItem): string {
+  return item.adaptations
+    .filter((adaptation) => adaptation.status === "scheduled")
+    .map((adaptation) => `${adaptation.id}:${adaptation.scheduledAt ?? ""}`)
+    .sort()
+    .join("|");
+}
+
 /** Match the API's edit gate for a channel and its parent post. */
 function canEditChannel(item: ContentItem, adaptation: Adaptation): boolean {
   return (
@@ -310,6 +318,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const bodyBaselines = useRef<Record<string, string>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
+  const [approvalConfirmation, setApprovalConfirmation] = useState<{
+    mode: "now" | "schedule";
+    body: string;
+    channels: string;
+    scheduledFingerprint: string;
+    scheduledAtMs: number | null;
+    date: string;
+  } | null>(null);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [channelSchedule, setChannelSchedule] = useState<{
     adaptationId: string;
     expectedScheduledAt: string;
@@ -317,6 +334,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   } | null>(null);
   const [channelScheduleBusy, setChannelScheduleBusy] = useState(false);
   const [channelScheduleError, setChannelScheduleError] = useState<string | null>(null);
+  const [cancelScheduleConfirm, setCancelScheduleConfirm] = useState<{
+    adaptationId: string;
+    expectedScheduledAt: string;
+  } | null>(null);
+  const [cancelScheduleBusy, setCancelScheduleBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [retractBusy, setRetractBusy] = useState(false);
@@ -964,8 +986,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function submitApproval(body: string) {
+    if (approvalBusy) return;
+    setApprovalBusy(true);
+    try {
+      await api(`/api/content/${id}/approve`, { method: "POST", body });
+      await reload();
+    } catch (err) {
+      handleError(err);
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
   async function approve(withSchedule: boolean, delayMinutes?: 30) {
-    if (!canDecideDelivery) return;
+    if (!canDecideDelivery || approvalBusy) return;
     setActionError(null);
     const chosen =
       withSchedule && delayMinutes === undefined && scheduledAt ? new Date(scheduledAt) : null;
@@ -990,21 +1025,44 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setActionError(te("schedule_in_past"));
       return;
     }
-    try {
-      await api(`/api/content/${id}/approve`, {
-        method: "POST",
-        body: JSON.stringify(
-          delayMinutes === 30
-            ? { delayMinutes }
-            : chosen
-              ? { scheduledAt: chosen.toISOString() }
-              : {},
-        ),
+    const body = JSON.stringify(
+      delayMinutes === 30 ? { delayMinutes } : chosen ? { scheduledAt: chosen.toISOString() } : {},
+    );
+    const scheduled =
+      item?.adaptations.filter((adaptation) => adaptation.status === "scheduled") ?? [];
+    if (item && scheduled.length > 0) {
+      setApprovalConfirmation({
+        mode: withSchedule ? "schedule" : "now",
+        body,
+        channels: scheduled.map((adaptation) => channelLabel(adaptation.channelId)).join(", "),
+        scheduledFingerprint: scheduledDeliveryFingerprint(item),
+        scheduledAtMs: chosen?.getTime() ?? null,
+        date: chosen ? chosen.toLocaleString(locale) : t("approvalConfirmInThirtyMinutes"),
       });
-      await reload();
-    } catch (err) {
-      handleError(err);
+      return;
     }
+    await submitApproval(body);
+  }
+
+  async function confirmApproval() {
+    if (!approvalConfirmation || !item || approvalBusy) return;
+    if (scheduledDeliveryFingerprint(item) !== approvalConfirmation.scheduledFingerprint) {
+      setApprovalConfirmation(null);
+      setActionError(t("approvalScheduleChanged"));
+      await reload();
+      return;
+    }
+    if (
+      approvalConfirmation.scheduledAtMs !== null &&
+      approvalConfirmation.scheduledAtMs <= Date.now()
+    ) {
+      setApprovalConfirmation(null);
+      setActionError(te("schedule_in_past"));
+      return;
+    }
+    const { body } = approvalConfirmation;
+    setApprovalConfirmation(null);
+    await submitApproval(body);
   }
 
   async function rescheduleChannel() {
@@ -1039,6 +1097,28 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       await reload();
     } finally {
       setChannelScheduleBusy(false);
+    }
+  }
+
+  async function cancelScheduledChannel() {
+    if (!canDecideDelivery || !cancelScheduleConfirm || cancelScheduleBusy) return;
+    setCancelScheduleBusy(true);
+    setActionError(null);
+    try {
+      await api(
+        `/api/content/${id}/adaptations/${cancelScheduleConfirm.adaptationId}/cancel-schedule`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expectedScheduledAt: cancelScheduleConfirm.expectedScheduledAt }),
+        },
+      );
+      setCancelScheduleConfirm(null);
+      await reload();
+    } catch (err) {
+      setActionError(errorMessage(err, t("genericError"), te));
+      await reload();
+    } finally {
+      setCancelScheduleBusy(false);
     }
   }
 
@@ -1753,7 +1833,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <Button
             variant="primary"
             onClick={() => approve(false)}
-            disabled={isPublished || manualReadyWithoutApprovalTargets || archiveBusy}
+            disabled={
+              isPublished || manualReadyWithoutApprovalTargets || archiveBusy || approvalBusy
+            }
           >
             {/*
             The same button, saying what it will do to THIS post. "Publish now"
@@ -2526,13 +2608,21 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 variant="secondary"
                 onClick={() => approve(true)}
                 disabled={
-                  isPublished || !scheduledAt || scheduledAtIsPast || manualAdaptations.length > 0
+                  isPublished ||
+                  !scheduledAt ||
+                  scheduledAtIsPast ||
+                  manualAdaptations.length > 0 ||
+                  approvalBusy
                 }
               >
                 {t("approveScheduled")}
               </Button>
               {canApproveAfterThirtyMinutes && (
-                <Button variant="secondary" onClick={() => approve(true, 30)}>
+                <Button
+                  variant="secondary"
+                  onClick={() => approve(true, 30)}
+                  disabled={approvalBusy}
+                >
                   {t("approveAfterThirtyMinutes")}
                 </Button>
               )}
@@ -2599,6 +2689,37 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
         </Modal>
       )}
+
+      <Modal
+        open={approvalConfirmation !== null}
+        onClose={() => setApprovalConfirmation(null)}
+        title={
+          approvalConfirmation?.mode === "now"
+            ? t("approvalConfirmNowTitle")
+            : t("approvalConfirmScheduledTitle")
+        }
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setApprovalConfirmation(null)}>
+              {t("approvalConfirmCancel")}
+            </Button>
+            <Button variant="primary" onClick={() => void confirmApproval()}>
+              {approvalConfirmation?.mode === "now"
+                ? t("approvalConfirmNowAction")
+                : t("approvalConfirmScheduledAction")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">
+          {approvalConfirmation?.mode === "now"
+            ? t("approvalConfirmNowBody", { channels: approvalConfirmation.channels })
+            : t("approvalConfirmScheduledBody", {
+                channels: approvalConfirmation?.channels ?? "",
+                date: approvalConfirmation?.date ?? "",
+              })}
+        </p>
+      </Modal>
 
       <Modal
         open={blockTopicOpen}
@@ -3044,7 +3165,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               a.scheduledAt &&
               (item.status === "approved" || item.status === "partially_published") &&
               !isManualPlatform(channelPlatform(a.channelId)) &&
-              (channelSchedule?.adaptationId === a.id ? (
+              (cancelScheduleConfirm?.adaptationId === a.id ? (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-fg-secondary">
+                    {t("cancelScheduleConfirm", { channel: channelLabel(a.channelId) })}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="danger"
+                      onClick={() => void cancelScheduledChannel()}
+                      disabled={cancelScheduleBusy}
+                    >
+                      {t("cancelScheduleAction")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setCancelScheduleConfirm(null)}
+                      disabled={cancelScheduleBusy}
+                    >
+                      {t("cancelScheduleKeep")}
+                    </Button>
+                  </div>
+                </div>
+              ) : channelSchedule?.adaptationId === a.id ? (
                 <div className="flex flex-col gap-2">
                   <Input
                     type="datetime-local"
@@ -3082,20 +3225,34 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   </div>
                 </div>
               ) : (
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setChannelSchedule({
-                      adaptationId: a.id,
-                      expectedScheduledAt: a.scheduledAt as string,
-                      value: toDatetimeLocalValue(new Date(a.scheduledAt as string)),
-                    });
-                    setChannelScheduleError(null);
-                  }}
-                  disabled={channelScheduleBusy}
-                >
-                  {t("rescheduleChannel")}
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setChannelSchedule({
+                        adaptationId: a.id,
+                        expectedScheduledAt: a.scheduledAt as string,
+                        value: toDatetimeLocalValue(new Date(a.scheduledAt as string)),
+                      });
+                      setChannelScheduleError(null);
+                    }}
+                    disabled={channelScheduleBusy || cancelScheduleBusy}
+                  >
+                    {t("rescheduleChannel")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() =>
+                      setCancelScheduleConfirm({
+                        adaptationId: a.id,
+                        expectedScheduledAt: a.scheduledAt as string,
+                      })
+                    }
+                    disabled={channelScheduleBusy || cancelScheduleBusy}
+                  >
+                    {t("cancelScheduleAction")}
+                  </Button>
+                </div>
               ))}
           </li>
         ))}

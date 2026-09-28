@@ -6264,6 +6264,38 @@ export class ContentRepository {
     expectedScheduledAt: Date,
     scheduledAt: Date,
   ) {
+    return this.changeAdaptationSchedule(
+      orgId,
+      contentItemId,
+      adaptationId,
+      expectedScheduledAt,
+      scheduledAt,
+    );
+  }
+
+  /** Stop only this channel's future send; an explicit later approval may schedule it again. */
+  async cancelAdaptationSchedule(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    expectedScheduledAt: Date,
+  ) {
+    return this.changeAdaptationSchedule(
+      orgId,
+      contentItemId,
+      adaptationId,
+      expectedScheduledAt,
+      null,
+    );
+  }
+
+  private async changeAdaptationSchedule(
+    orgId: string,
+    contentItemId: string,
+    adaptationId: string,
+    expectedScheduledAt: Date,
+    scheduledAt: Date | null,
+  ) {
     await db.transaction(async (tx) => {
       // The publish worker claims this same row before any external call. A
       // second request must wait for the first reschedule, then compare the
@@ -6325,13 +6357,13 @@ export class ContentRepository {
       ) {
         throw conflict(
           "schedule_not_scheduled",
-          "This channel has no scheduled automatic delivery to move",
+          "This channel has no scheduled automatic delivery to change",
         );
       }
       if (current.scheduledAt.getTime() !== expectedScheduledAt.getTime()) {
         throw conflict(
           "schedule_changed",
-          "This channel's scheduled time changed; reload before moving it",
+          "This channel's scheduled time changed; reload before changing it",
         );
       }
       // A previous known failure is evidence that nothing was delivered, and
@@ -6381,11 +6413,13 @@ export class ContentRepository {
       // past startAfter immediately; a short guard also avoids changing a job
       // already due in the next dispatch window.
       const now = current.nowMs;
-      if (scheduledAt.getTime() <= now) {
+      if (scheduledAt && scheduledAt.getTime() <= now) {
         throw badRequest("schedule_in_past", "scheduledAt must be in the future");
       }
       if (
-        Math.min(current.scheduledAt.getTime(), scheduledAt.getTime()) <=
+        (scheduledAt
+          ? Math.min(current.scheduledAt.getTime(), scheduledAt.getTime())
+          : current.scheduledAt.getTime()) <=
         now + MIN_RESCHEDULE_LEAD_MS
       ) {
         throw conflict(
@@ -6393,7 +6427,7 @@ export class ContentRepository {
           "Choose a time at least one minute away before this delivery is due",
         );
       }
-      if (scheduledAt.getTime() === current.scheduledAt.getTime()) return;
+      if (scheduledAt?.getTime() === current.scheduledAt.getTime()) return;
 
       // Cancellation and replacement share this transaction with the row.
       // The cancelled pg-boss id remains, so a fresh attempt count is required.
@@ -6401,7 +6435,11 @@ export class ContentRepository {
       const attemptCount = current.attemptCount + 1;
       await tx
         .update(schema.adaptations)
-        .set({ scheduledAt, attemptCount })
+        .set({
+          scheduledAt,
+          attemptCount,
+          ...(scheduledAt === null ? { status: "pending" as const } : {}),
+        })
         .where(
           and(
             eq(schema.adaptations.orgId, orgId),
@@ -6409,11 +6447,15 @@ export class ContentRepository {
             eq(schema.adaptations.id, adaptationId),
           ),
         );
-      await this.queue.enqueuePublish(
-        tx,
-        { id: adaptationId, orgId, channelId: current.channelId, attemptCount },
-        scheduledAt,
-      );
+      if (scheduledAt) {
+        await this.queue.enqueuePublish(
+          tx,
+          { id: adaptationId, orgId, channelId: current.channelId, attemptCount },
+          scheduledAt,
+        );
+      }
+      // A cancelled channel is pending, so nextItemStatus has no terminal
+      // verdict. Keep approved/partially_published and every sibling untouched.
     });
     return this.get(orgId, contentItemId);
   }

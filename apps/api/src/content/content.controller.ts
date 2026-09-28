@@ -15,9 +15,11 @@ import {
 } from "@nestjs/common";
 import {
   type AcceptedClaimCorrectionListQuery,
+  type AdaptationCancelSchedule,
   type AdaptationReschedule,
   type AdaptationUpdate,
   acceptedClaimCorrectionListQuerySchema,
+  adaptationCancelScheduleSchema,
   adaptationRescheduleSchema,
   adaptationUpdateSchema,
   type ClaimCorrectionProposalDto,
@@ -547,6 +549,24 @@ export class ContentController {
       adaptationId,
       new Date(body.expectedScheduledAt),
       new Date(body.scheduledAt),
+    );
+  }
+
+  @Post(":id/adaptations/:adaptationId/cancel-schedule")
+  @EditorialCapability("editor")
+  @BrandScope({ kind: "resource", resource: "adaptation", key: "adaptationId" })
+  @HttpCode(200)
+  cancelAdaptationSchedule(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("adaptationId", ParseUUIDPipe) adaptationId: string,
+    @Body(new ZodValidationPipe(adaptationCancelScheduleSchema)) body: AdaptationCancelSchedule,
+  ) {
+    return this.content.cancelAdaptationSchedule(
+      orgId,
+      id,
+      adaptationId,
+      new Date(body.expectedScheduledAt),
     );
   }
 
