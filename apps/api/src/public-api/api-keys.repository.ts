@@ -84,7 +84,7 @@ export class ApiKeysRepository {
   }
 
   /** Authentication has no org id yet; the indexed prefix is the lookup boundary. */
-  async authenticate(key: string, scope: string): Promise<string | null> {
+  async authenticate(key: string, scope: ApiKeyCreate["scope"]): Promise<string | null> {
     const match = /^pbrk_([a-f0-9]{24})_([A-Za-z0-9_-]{43})$/.exec(key);
     if (!match) return null;
     const prefix = match[1];

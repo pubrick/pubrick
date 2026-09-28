@@ -935,6 +935,56 @@ async function seedFanOuts(
 }
 
 describe.skipIf(!url)("runMigrations", () => {
+  it("widens API key scopes on a populated database without rewriting existing keys", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0113_glossy_reptil");
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('key_upgrade', 'Keys', 'key-upgrade')",
+        );
+        await pool.query(
+          `INSERT INTO organization_api_keys (org_id, name, prefix, key_hash, scope)
+           VALUES ('key_upgrade', 'Existing', 'aabbccddeeff001122334455', repeat('a', 64), 'content:read')`,
+        );
+        const old = await pool.query("SELECT id, scope, created_at FROM organization_api_keys");
+        expect(
+          await refusal(
+            pool,
+            `INSERT INTO organization_api_keys (org_id, name, prefix, key_hash, scope)
+             VALUES ('key_upgrade', 'Too early', 'aabbccddeeff001122334456', repeat('b', 64), 'publications:read')`,
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await runMigrations(fresh.url);
+        const existing = await pool.query(
+          "SELECT id, scope, created_at FROM organization_api_keys",
+        );
+        expect(existing.rows).toEqual(old.rows);
+        expect(
+          await refusal(
+            pool,
+            `INSERT INTO organization_api_keys (org_id, name, prefix, key_hash, scope)
+             VALUES ('key_upgrade', 'New', 'aabbccddeeff001122334456', repeat('b', 64), 'publications:read')`,
+          ),
+        ).toBeNull();
+        expect(
+          await refusal(
+            pool,
+            `INSERT INTO organization_api_keys (org_id, name, prefix, key_hash, scope)
+             VALUES ('key_upgrade', 'Unknown', 'aabbccddeeff001122334457', repeat('c', 64), 'publications:write')`,
+          ),
+        ).toBe(CHECK_VIOLATION);
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
   it("adds public Telegram groups without rewriting existing sources", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0108_public_telegram_groups");

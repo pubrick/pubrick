@@ -210,4 +210,172 @@ describe.skipIf(!url)("organization API keys and public content API", () => {
       .send({ name: "Replacement", scope: "content:read" })
       .expect(201);
   });
+
+  it("separates publication and content key scopes and returns a narrow tenant-scoped publication page", async () => {
+    const mine = await orgAgent();
+    const other = await orgAgent();
+    const brand = await mine.agent.post("/api/brands").send({ name: "Publishing" }).expect(201);
+    const emptyBrand = await mine.agent.post("/api/brands").send({ name: "Empty" }).expect(201);
+    const foreignBrand = await other.agent
+      .post("/api/brands")
+      .send({ name: "Foreign" })
+      .expect(201);
+    const channel = await mine.agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Updates",
+        credentials: { botToken: "123:abc", chatId: "-1001234567890" },
+      })
+      .expect(201);
+    const adaptations: string[] = [];
+    for (const title of ["Unknown", "Scheduled", "Published", "Pending"]) {
+      const created = await mine.agent
+        .post("/api/content")
+        .send({
+          brandId: brand.body.id,
+          title,
+          body: `Private prose for ${title}`,
+          channelIds: [channel.body.id],
+        })
+        .expect(201);
+      adaptations.push(created.body.adaptations[0].id as string);
+    }
+    const [unknownId, scheduledId, publishedId, pendingId] = adaptations as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    await db
+      .update(schema.adaptations)
+      .set({ status: "failed", failureReason: "outcome_unknown", lastError: "raw provider secret" })
+      .where(eq(schema.adaptations.id, unknownId));
+    await db.insert(schema.publications).values({
+      orgId: mine.orgId,
+      adaptationId: unknownId,
+      channelId: channel.body.id,
+      status: "unknown",
+      attempt: 1,
+      partialFollowupText: "unpublished private reply",
+      partialFollowupOutcome: "unknown",
+    });
+    await db
+      .update(schema.adaptations)
+      .set({ status: "scheduled", scheduledAt: new Date("2026-10-01T12:00:00Z") })
+      .where(eq(schema.adaptations.id, scheduledId));
+    await db
+      .update(schema.adaptations)
+      .set({ status: "published" })
+      .where(eq(schema.adaptations.id, publishedId));
+    await db.insert(schema.publications).values({
+      orgId: mine.orgId,
+      adaptationId: publishedId,
+      channelId: channel.body.id,
+      status: "published",
+      attempt: 1,
+      externalUrl: "https://t.me/example/123",
+    });
+    // Multiple rows in a single transaction can have the same full-precision instant.
+    await pool.query(
+      "UPDATE adaptations SET created_at = $1::timestamptz WHERE id = ANY($2::uuid[])",
+      ["2026-09-28T12:34:56.123456Z", adaptations],
+    );
+
+    const contentKey = await mine.agent
+      .post("/api/api-keys")
+      .send({ name: "Content", scope: "content:read" })
+      .expect(201);
+    const publicationKey = await mine.agent
+      .post("/api/api-keys")
+      .send({ name: "Publications", scope: "publications:read" })
+      .expect(201);
+    const target = request(app.getHttpServer());
+    const route = `/api/v1/brands/${brand.body.id}/publications`;
+    const bearer = { Authorization: `Bearer ${publicationKey.body.key}` };
+    await mine.agent.get(route).expect(401); // Browser cookie alone cannot authorize.
+    await target.get(route).expect(401);
+    await target.get(route).set("Authorization", `Bearer ${contentKey.body.key}`).expect(401);
+    await target.get("/api/v1/content").set("Authorization", bearer.Authorization).expect(401);
+    await target
+      .get("/api/v1/content")
+      .set("Authorization", `Bearer ${contentKey.body.key}`)
+      .expect(200);
+    await target.get(route).set("Authorization", `Bearer ${publicationKey.body.key}x`).expect(401);
+
+    const attention = await target.get(route).set(bearer).expect(200);
+    expect(attention.headers["cache-control"]).toContain("no-store");
+    expect(attention.body).toHaveLength(1);
+    expect(attention.body[0]).toMatchObject({
+      id: unknownId,
+      deliveryOutcome: "partial",
+      failureReason: "outcome_unknown",
+      externalUrl: null,
+    });
+    expect(Object.keys(attention.body[0]).sort()).toEqual(
+      [
+        "id",
+        "contentItemId",
+        "channelId",
+        "platform",
+        "deliveryOutcome",
+        "failureReason",
+        "scheduledAt",
+        "publishedAt",
+        "externalUrl",
+        "assertedAt",
+        "createdAt",
+      ].sort(),
+    );
+    expect(JSON.stringify(attention.body)).not.toMatch(
+      /raw provider secret|private reply|Private prose|credentials|assertedByName/,
+    );
+    expect((await target.get(`${route}?filter=scheduled`).set(bearer).expect(200)).body[0].id).toBe(
+      scheduledId,
+    );
+    const published = await target.get(`${route}?filter=published`).set(bearer).expect(200);
+    expect(published.body[0]).toMatchObject({
+      id: publishedId,
+      externalUrl: "https://t.me/example/123",
+    });
+    expect(published.body[0].publishedAt).toEqual(expect.any(String));
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await target
+        .get(`${route}?filter=all&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)
+        .set(bearer)
+        .expect(200);
+      seen.push(page.body[0].id);
+      cursor = page.headers[NEXT_CURSOR_HEADER.toLowerCase()] as string | undefined;
+    } while (cursor);
+    expect(seen).toEqual([...adaptations].sort().reverse());
+    expect(seen).toContain(pendingId);
+    expect(
+      (
+        await target
+          .get(`/api/v1/brands/${emptyBrand.body.id}/publications`)
+          .set(bearer)
+          .expect(200)
+      ).body,
+    ).toEqual([]);
+    await target.get(`/api/v1/brands/${foreignBrand.body.id}/publications`).set(bearer).expect(404);
+    await target
+      .get(`/api/v1/brands/00000000-0000-4000-8000-000000000000/publications`)
+      .set(bearer)
+      .expect(404);
+    for (const suffix of [
+      "?filter=retry",
+      "?limit=0",
+      "?limit=101",
+      "?limit=1e2",
+      "?cursor=bad",
+      "?cursor=a&cursor=b",
+    ]) {
+      await target.get(`${route}${suffix}`).set(bearer).expect(400);
+    }
+    await mine.agent.delete(`/api/api-keys/${publicationKey.body.id}`).expect(204);
+    await target.get(route).set(bearer).expect(401);
+  });
 });

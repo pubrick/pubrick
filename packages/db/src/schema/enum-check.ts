@@ -60,8 +60,8 @@ export function enumSqlLiterals(values: readonly string[]) {
  * generating a migration rather than emitting one.
  */
 function assertQuotable(value: string): string {
-  if (!/^[a-z][a-z0-9_]*$/.test(value)) {
-    throw new Error(`enumCheck: ${JSON.stringify(value)} is not a plain lower_snake identifier`);
+  if (!/^[a-z][a-z0-9_:]*$/.test(value)) {
+    throw new Error(`enumCheck: ${JSON.stringify(value)} is not a safe enum literal`);
   }
   return `'${value}'`;
 }

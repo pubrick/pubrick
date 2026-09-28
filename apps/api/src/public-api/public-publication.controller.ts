@@ -12,34 +12,28 @@ import { NEXT_CURSOR_HEADER } from "@pubrick/shared";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { ApiKeyGuard } from "./api-key.guard";
 import { ApiKeyOrgId } from "./api-key-org-id.decorator";
-import { PublicContentRepository } from "./public-content.repository";
+import { PublicPublicationRepository } from "./public-publication.repository";
 import { RequiredApiKeyScope } from "./required-api-key-scope.decorator";
 
-/** Bearer-only v1 surface. Cookie sessions have no authority here. */
-@Controller("v1/content")
+@Controller("v1/brands/:brandId/publications")
 @AllowAnonymous()
 @UseGuards(ApiKeyGuard)
-@RequiredApiKeyScope("content:read")
-export class PublicContentController {
-  constructor(private readonly content: PublicContentRepository) {}
+@RequiredApiKeyScope("publications:read")
+export class PublicPublicationController {
+  constructor(private readonly publications: PublicPublicationRepository) {}
 
   @Get()
   @Header("Cache-Control", "private, no-store")
   async list(
     @ApiKeyOrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
     @Res({ passthrough: true }) response: { setHeader: (name: string, value: string) => void },
-    @Query("status") status?: string,
+    @Query("filter") filter?: string,
     @Query("limit") limit?: string,
     @Query("cursor") cursor?: string,
   ) {
-    const page = await this.content.list(orgId, status, limit, cursor);
+    const page = await this.publications.list(orgId, brandId, filter, limit, cursor);
     if (page.nextCursor) response.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
     return page.rows;
-  }
-
-  @Get(":id")
-  @Header("Cache-Control", "private, no-store")
-  get(@ApiKeyOrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
-    return this.content.get(orgId, id);
   }
 }

@@ -160,6 +160,41 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "v1/brands/:brandId/publications",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Public delivery status.", channelIds: [channelId] })
+        .expect(201);
+      const adaptationId = item.body.adaptations[0].id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { eq } = await import("drizzle-orm");
+      const { db, pool } = createDb(url as string);
+      const [adaptation] = await db
+        .update(schema.adaptations)
+        .set({ status: "failed", failureReason: "platform_rejected" })
+        .where(eq(schema.adaptations.id, adaptationId))
+        .returning({ createdAt: schema.adaptations.createdAt });
+      await pool.end();
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "Publication list ratchet", scope: "publications:read" })
+        .expect(201);
+      return {
+        id: adaptationId,
+        bearer: key.body.key as string,
+        paths: [
+          `/api/v1/brands/${brandId}/publications`,
+          `/api/v1/brands/${brandId}/publications?filter=all`,
+          `/api/v1/brands/${brandId}/publications?cursor=${encodeURIComponent(justAfter(adaptation?.createdAt.toISOString() as string))}`,
+        ],
+      };
+    },
+  },
+  {
     controller: "calendar/memorable-dates",
     identify: id,
     rows: (body) => (body as { dates: Record<string, unknown>[] }).dates,
@@ -484,7 +519,9 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // the parameter alone and prove nothing.
       for (const path of theirs.paths) {
         if (endpoint.foreignBrandNotFound) {
-          await stranger.get(path).expect(404);
+          const query = stranger.get(path);
+          if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
+          await query.expect(404);
         } else {
           const query = stranger.get(path);
           if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);

@@ -1384,7 +1384,7 @@
   "ApiKeys": {
     "title": "Claves API",
     "back": "Volver a ajustes",
-    "hint": "Las claves pueden leer el contenido de este espacio mediante la API pública. Solo los propietarios y administradores pueden gestionarlas.",
+    "hint": "Elige un permiso de lectura para cada clave de la API pública. Solo los propietarios y administradores pueden gestionarlas.",
     "limit": "{count} de {max} claves activas",
     "add": "Añadir",
     "retry": "Reintentar",
@@ -1398,6 +1398,7 @@
     "name": "Nombre",
     "scope": "Permiso",
     "contentRead": "Leer contenido",
+    "publicationsRead": "Leer publicaciones",
     "scopeHint": "Esta clave no puede publicar, editar ni aprobar contenido.",
     "invalidName": "Introduce un nombre de entre 1 y 80 caracteres.",
     "oneTimeHint": "Copia esta clave ahora. Pubrick no volverá a mostrarla cuando cierres este cuadro.",

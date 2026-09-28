@@ -3,7 +3,7 @@
   "info": {
     "title": "Pubrick public read API",
     "version": "1.0.0",
-    "description": "Organization-scoped content reads. A human review remains required before publication. See docs/public-api.md for key management and pagination.",
+    "description": "Organization-scoped content and publication reads. A human review remains required before publication. See docs/public-api.md for key management and pagination.",
     "license": {
       "name": "AGPL-3.0-only",
       "url": "https://github.com/pubrick/pubrick/blob/main/LICENSE"
@@ -14,6 +14,10 @@
     {
       "name": "Content",
       "description": "Read content in the organization that owns the Bearer key."
+    },
+    {
+      "name": "Publications",
+      "description": "Read current per-channel delivery outcomes for a brand in the key's organization."
     }
   ],
   "security": [{ "organizationKey": [] }],
@@ -104,6 +108,68 @@
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
+    },
+    "/api/v1/brands/{brandId}/publications": {
+      "get": {
+        "tags": ["Publications"],
+        "operationId": "listBrandPublications",
+        "summary": "List current publication operations for one brand",
+        "description": "Requires a publications:read Bearer key. A missing or foreign brand returns 404. This read cannot publish, retry, or resolve a delivery.",
+        "parameters": [
+          {
+            "name": "brandId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["needs_attention", "scheduled", "published", "all"],
+              "default": "needs_attention"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque X-Next-Cursor from the same filter.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current channel adaptations, newest first by creation time and ID. An empty brand returns [].",
+            "headers": {
+              "X-Next-Cursor": {
+                "description": "Present only when another page exists.",
+                "schema": { "type": "string" }
+              },
+              "Cache-Control": { "schema": { "type": "string", "const": "private, no-store" } }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/PublicPublication" }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
     }
   },
   "components": {
@@ -111,10 +177,85 @@
       "organizationKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A one-time organization API key with content:read scope. Browser cookies are not accepted."
+        "description": "A one-time organization API key with the endpoint's exact read scope. Browser cookies are not accepted."
       }
     },
     "schemas": {
+      "PublicPublication": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "contentItemId",
+          "channelId",
+          "platform",
+          "deliveryOutcome",
+          "failureReason",
+          "scheduledAt",
+          "publishedAt",
+          "externalUrl",
+          "assertedAt",
+          "createdAt"
+        ],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "contentItemId": { "type": "string", "format": "uuid" },
+          "channelId": { "type": "string", "format": "uuid" },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "vk",
+              "dzen",
+              "vc_ru",
+              "instagram",
+              "youtube",
+              "rutube",
+              "tenchat",
+              "t_j",
+              "max",
+              "bluesky",
+              "mastodon",
+              "x"
+            ]
+          },
+          "deliveryOutcome": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "manual_ready",
+              "scheduled",
+              "queued",
+              "publishing",
+              "published",
+              "failed",
+              "unknown",
+              "partial"
+            ]
+          },
+          "failureReason": {
+            "type": ["string", "null"],
+            "enum": [
+              "schedule_missed",
+              "no_adapter",
+              "credentials_unreadable",
+              "credentials_missing",
+              "credentials_invalid",
+              "platform_rejected",
+              "rejected_before_send",
+              "retries_exhausted",
+              "send_abandoned",
+              "outcome_unknown",
+              null
+            ]
+          },
+          "scheduledAt": { "type": ["string", "null"], "format": "date-time" },
+          "publishedAt": { "type": ["string", "null"], "format": "date-time" },
+          "externalUrl": { "type": ["string", "null"], "format": "uri" },
+          "assertedAt": { "type": ["string", "null"], "format": "date-time" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
       "ContentStatus": {
         "type": "string",
         "enum": ["draft", "approved", "partially_published", "rejected", "published", "failed"]

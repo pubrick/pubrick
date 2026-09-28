@@ -69,4 +69,37 @@ describe("API key settings", () => {
     );
     expect(screen.queryByRole("button", { name: "Добавить" })).not.toBeInTheDocument();
   });
+
+  it("creates a publications-only key when that explicit scope is selected", async () => {
+    const user = userEvent.setup();
+    request.mockImplementation(async (path, init) => {
+      if (path === "/api/api-keys" && !init) return [];
+      if (path === "/api/api-keys" && init?.method === "POST") {
+        return {
+          id: keyId,
+          name: "Publication reader",
+          prefix: "0123456789abcdef01234567",
+          scope: "publications:read",
+          createdAt: "2026-09-24T00:00:00.000Z",
+          revokedAt: null,
+          key,
+        };
+      }
+      throw new Error("Unexpected request");
+    });
+    render(<ApiKeysPage />);
+    await screen.findByText("No API keys yet");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    const dialog = screen.getByRole("dialog", { name: "Add API key" });
+    await user.type(within(dialog).getByLabelText("Name"), "Publication reader");
+    await user.selectOptions(within(dialog).getByLabelText("Scope"), "publications:read");
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    const post = request.mock.calls.find(
+      ([path, init]) => path === "/api/api-keys" && init?.method === "POST",
+    );
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      name: "Publication reader",
+      scope: "publications:read",
+    });
+  });
 });

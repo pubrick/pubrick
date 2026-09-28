@@ -1384,7 +1384,7 @@
   "ApiKeys": {
     "title": "API keys",
     "back": "Back to settings",
-    "hint": "Keys can read this workspace's content through the public API. Only owners and admins can manage them.",
+    "hint": "Choose a read scope for each public API key. Only owners and admins can manage keys.",
     "limit": "{count} of {max} active keys",
     "add": "Add",
     "retry": "Retry",
@@ -1398,6 +1398,7 @@
     "name": "Name",
     "scope": "Scope",
     "contentRead": "Read content",
+    "publicationsRead": "Read publications",
     "scopeHint": "This key cannot publish, edit, or approve content.",
     "invalidName": "Enter a name between 1 and 80 characters.",
     "oneTimeHint": "Copy this key now. Pubrick will not show it again after you close this dialog.",

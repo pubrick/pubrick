@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const MAX_ACTIVE_API_KEYS = 20;
-export const API_KEY_SCOPES = ["content:read"] as const;
+export const API_KEY_SCOPES = ["content:read", "publications:read"] as const;
 
 export const apiKeyCreateSchema = z.strictObject({
   name: z.string().trim().min(1).max(80),

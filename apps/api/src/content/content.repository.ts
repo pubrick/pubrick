@@ -30,7 +30,6 @@ import {
   type ContentStatus,
   type ContentUpdate,
   type ContentVersionRestore,
-  type DeliveryOutcome,
   type DraftRevisionImagePlan,
   type DraftRevisionProposal,
   type DraftRevisionRequest,
@@ -87,6 +86,7 @@ import { QueueService } from "../queue/queue.service";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
 import { assertImagesFitBody } from "./content-images.repository";
+import { deliveryOutcomeSql } from "./delivery-outcome.sql";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
 import { ReadaptCaller } from "./readapt.caller";
@@ -812,9 +812,9 @@ const ADAPTATION_COLUMNS = {
    * `failed` invites the re-approval that posts a SECOND copy, which is the
    * whole reason the distinction exists.
    *
-   * Computed HERE, in SQL, rather than in either browser screen:
+   * Computed in the shared server-side SQL helper, rather than in either browser screen:
    *
-   * - It is one expression in `ADAPTATION_COLUMNS`, so every reader gets it —
+   * - It is one expression used by `ADAPTATION_COLUMNS`, so every reader gets it —
    *   the list, the item, and `updateAdaptation`'s RETURNING — and a future
    *   one cannot forget to apply it. (The correlated subquery works in both
    *   SELECT and RETURNING; `externalUrl` above relies on the same.)
@@ -835,22 +835,7 @@ const ADAPTATION_COLUMNS = {
    * a claim is written before the platform is called, so it is a record that
    * someone is sending, not a record of how it ended.
    */
-  deliveryOutcome: sql<DeliveryOutcome>`(
-    case
-      when adaptations.status = 'failed' then coalesce((
-        select case
-          when p.status = 'unknown' and p.partial_followup_text is not null then 'partial'
-          when p.status = 'unknown' then 'unknown'
-          else null
-        end
-        from publications p
-        where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-        order by p.created_at desc
-        limit 1
-      ), adaptations.status)
-      else adaptations.status
-    end
-  )`,
+  deliveryOutcome: deliveryOutcomeSql,
   /** The last unresolved Telegram multipart receipt, never reconstructed from log prose. */
   partialTelegram: sql<{
     primaryKind: "photo" | "message" | null;
@@ -1221,14 +1206,13 @@ export class ContentRepository {
     if (query.cursor !== undefined && cursor === null) {
       throw badRequest("invalid_request", "Malformed publication cursor");
     }
-    const outcome = ADAPTATION_COLUMNS.deliveryOutcome;
     const filter =
       query.filter === "needs_attention"
-        ? inArray(outcome, ["manual_ready", "failed", "unknown", "partial"] as DeliveryOutcome[])
+        ? inArray(schema.adaptations.status, ["manual_ready", "failed"])
         : query.filter === "scheduled"
-          ? eq(outcome, "scheduled")
+          ? eq(schema.adaptations.status, "scheduled")
           : query.filter === "published"
-            ? eq(outcome, "published")
+            ? eq(schema.adaptations.status, "published")
             : undefined;
     const cursorAt = sql<string>`to_char(${schema.adaptations.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
     const rows = await db
@@ -1239,7 +1223,7 @@ export class ContentRepository {
         channelId: schema.channels.id,
         channelName: schema.channels.name,
         platform: schema.channels.platform,
-        deliveryOutcome: outcome,
+        deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
         failureReason: schema.adaptations.failureReason,
         scheduledAt: schema.adaptations.scheduledAt,
         publishedAt: sql<Date | null>`(

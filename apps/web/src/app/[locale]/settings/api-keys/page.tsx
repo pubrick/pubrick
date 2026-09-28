@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api, apiVoid, errorMessage } from "@/lib/api";
 
@@ -32,6 +33,7 @@ export default function ApiKeysPage() {
   const locale = useLocale();
   const [keys, setKeys] = useState<KeyRow[] | null>(null);
   const [name, setName] = useState("");
+  const [scope, setScope] = useState<ApiKeyCreate["scope"]>("content:read");
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<CreatedKey | null>(null);
   const [revokeId, setRevokeId] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export default function ApiKeysPage() {
   async function create(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
-    const parsed = apiKeyCreateSchema.safeParse({ name, scope: "content:read" });
+    const parsed = apiKeyCreateSchema.safeParse({ name, scope });
     if (!parsed.success) {
       setError(t("invalidName"));
       return;
@@ -84,6 +86,7 @@ export default function ApiKeysPage() {
       });
       setCreated(result);
       setName("");
+      setScope("content:read");
       await load();
     } catch (err) {
       setError(errorMessage(err, t("genericError"), te));
@@ -247,9 +250,14 @@ export default function ApiKeysPage() {
               required
               autoFocus
             />
-            <p className="text-sm text-fg-secondary">
-              {t("scope")}: {t("contentRead")}
-            </p>
+            <Select
+              label={t("scope")}
+              value={scope}
+              onChange={(event) => setScope(event.target.value as ApiKeyCreate["scope"])}
+            >
+              <option value="content:read">{t("contentRead")}</option>
+              <option value="publications:read">{t("publicationsRead")}</option>
+            </Select>
             <p className="text-sm text-fg-tertiary">{t("scopeHint")}</p>
           </form>
         )}
