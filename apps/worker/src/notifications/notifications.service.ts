@@ -31,7 +31,7 @@ function notificationLine(value: string | null, fallback: string, limit: number)
 export function draftReviewUrl(
   rawOrigin: string,
   itemId: string,
-  intent?: "review" | "schedule" | "publish",
+  intent?: "review" | "schedule" | "publish" | "reject",
 ): string | null {
   let origin: URL;
   try {
@@ -389,7 +389,7 @@ export class NotificationsService {
                   "Draft ready for review",
                   `Brand: ${notificationLine(draft.brandName, "Unknown brand", 100)}`,
                   `Title: ${notificationLine(draft.title, "Untitled draft", 160)}`,
-                  "Open Pubrick to read and decide. Links do not approve, schedule, or publish.",
+                  "Open Pubrick to read and decide. Links do not approve, schedule, publish, or reject.",
                 ].join("\n")
               : (digest?.message ?? COPY[event.event]);
             attemptedSend = true;
@@ -397,15 +397,16 @@ export class NotificationsService {
               baseUrl: env.TELEGRAM_API_BASE_URL,
               ...(draft
                 ? {
-                    buttons: (["review", "schedule", "publish"] as const).map((intent) => ({
-                      text:
-                        intent === "review"
-                          ? "Review"
-                          : intent === "schedule"
-                            ? "Schedule"
-                            : "Publish",
-                      url: `${url}?intent=${intent}`,
-                    })),
+                    buttonRows: [
+                      [
+                        { text: "Review", url: `${url}?intent=review` },
+                        { text: "Schedule", url: `${url}?intent=schedule` },
+                      ],
+                      [
+                        { text: "Publish", url: `${url}?intent=publish` },
+                        { text: "Reject", url: `${url}?intent=reject` },
+                      ],
+                    ],
                   }
                 : {
                     button: {

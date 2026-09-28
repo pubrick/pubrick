@@ -274,7 +274,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const requestedIntent =
     requestedIntentValue === "review" ||
     requestedIntentValue === "schedule" ||
-    requestedIntentValue === "publish"
+    requestedIntentValue === "publish" ||
+    requestedIntentValue === "reject"
       ? requestedIntentValue
       : null;
   const t = useTranslations("Publish");
@@ -527,15 +528,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 !isManualPlatform(channel.platform)
               );
             })
-          : canDecideDelivery &&
-            item.status !== "published" &&
-            item.status !== "archived" &&
-            item.adaptations.some(
-              (adaptation) =>
-                ["pending", "failed", "scheduled"].includes(adaptation.status) &&
-                adaptation.deliveryOutcome !== "unknown" &&
-                adaptation.deliveryOutcome !== "partial",
-            );
+          : requestedIntent === "publish"
+            ? canDecideDelivery &&
+              item.status !== "published" &&
+              item.status !== "archived" &&
+              item.adaptations.some(
+                (adaptation) =>
+                  ["pending", "failed", "scheduled"].includes(adaptation.status) &&
+                  adaptation.deliveryOutcome !== "unknown" &&
+                  adaptation.deliveryOutcome !== "partial",
+              )
+            : canDecideDelivery &&
+              item.status === "draft" &&
+              item.adaptations.every(
+                (adaptation) =>
+                  !["published", "unknown", "partial"].includes(adaptation.deliveryOutcome) &&
+                  adaptation.status !== "publishing",
+              );
 
   // Telegram buttons only navigate. Focus once after the item and permissions
   // load; a later poll must never drag the editor away from the reader's work.
@@ -550,7 +559,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ? "review-draft"
         : requestedIntent === "schedule"
           ? "scheduledAt"
-          : "publish-action",
+          : requestedIntent === "publish"
+            ? "publish-action"
+            : "reject-action",
     );
     if (!target) return;
     if (
@@ -2015,7 +2026,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
       {requestedIntent && intentAvailable !== null && (
         <p role="status" className="mb-4 text-sm text-fg-secondary">
-          {intentAvailable ? t(`intent.${requestedIntent}`) : t("intent.unavailable")}
+          {intentAvailable
+            ? t(`intent.${requestedIntent}`)
+            : requestedIntent === "reject" && item.status !== "draft"
+              ? t("intent.rejectStale")
+              : t("intent.unavailable")}
         </p>
       )}
       {blockTopicNotice && (
@@ -2719,6 +2734,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 <p className="text-sm text-fg-tertiary">{t("manualScheduleHint")}</p>
               )}
               <Button
+                id="reject-action"
                 variant="danger"
                 onClick={reject}
                 disabled={isPublished || (partlyLive && !hasOutstanding) || archiveBusy}

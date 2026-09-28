@@ -8,12 +8,21 @@ export async function sendTelegramNotification(
     baseUrl?: string;
     button?: { text: string; url: string };
     buttons?: readonly { text: string; url: string }[];
+    buttonRows?: readonly (readonly { text: string; url: string }[])[];
     fetchImpl?: typeof fetch;
   } = {},
 ): Promise<TelegramNotificationResult> {
-  const buttons = (
-    options.buttons?.length ? options.buttons : options.button ? [options.button] : []
-  ).map(({ text, url }) => ({ text, url }));
+  const buttonRows = (
+    options.buttonRows?.length
+      ? options.buttonRows
+      : options.buttons?.length
+        ? [options.buttons]
+        : options.button
+          ? [[options.button]]
+          : []
+  )
+    .map((row) => row.map(({ text, url }) => ({ text, url })))
+    .filter((row) => row.length > 0);
   try {
     const response = await (options.fetchImpl ?? fetch)(
       `${options.baseUrl ?? "https://api.telegram.org"}/bot${credentials.botToken}/sendMessage`,
@@ -23,7 +32,7 @@ export async function sendTelegramNotification(
         body: JSON.stringify({
           chat_id: credentials.chatId,
           text,
-          ...(buttons.length ? { reply_markup: { inline_keyboard: [buttons] } } : {}),
+          ...(buttonRows.length ? { reply_markup: { inline_keyboard: buttonRows } } : {}),
         }),
         signal: AbortSignal.timeout(10_000),
       },

@@ -54,4 +54,31 @@ describe("sendTelegramNotification", () => {
     expect(JSON.parse(String(init.body)).reply_markup).toEqual({ inline_keyboard: [buttons] });
     expect(JSON.stringify(init.body)).not.toContain("callback_data");
   });
+
+  it("uses explicit rows for four URL-only actions and drops callback data", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const buttonRows = [
+      [
+        { text: "Review", url: "https://pubrick.example/en/content/one?intent=review" },
+        { text: "Schedule", url: "https://pubrick.example/en/content/one?intent=schedule" },
+      ],
+      [
+        { text: "Publish", url: "https://pubrick.example/en/content/one?intent=publish" },
+        { text: "Reject", url: "https://pubrick.example/en/content/one?intent=reject" },
+      ],
+    ];
+    expect(
+      await sendTelegramNotification(credentials, "Draft", {
+        buttonRows: buttonRows.map((row) =>
+          row.map((button) => ({ ...button, callback_data: "unsafe" })),
+        ),
+        fetchImpl,
+      }),
+    ).toBe("sent");
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).reply_markup).toEqual({ inline_keyboard: buttonRows });
+    expect(JSON.stringify(init.body)).not.toContain("callback_data");
+  });
 });
