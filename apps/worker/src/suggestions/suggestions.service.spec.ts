@@ -55,7 +55,7 @@ describe("SuggestionsService", () => {
     expect(brandLocalDay(instant, "Not/A_Timezone")).toBe("2026-12-31");
   });
 
-  function harness(reply: string | Error) {
+  function harness(reply: string | Error | string[]) {
     const calls: Array<{ system: string; user: string }> = [];
     const model = new MockLanguageModelV4({
       modelId: "gemini-3.7-flash",
@@ -66,8 +66,9 @@ describe("SuggestionsService", () => {
           user: JSON.stringify(prompt.filter((part) => part.role !== "system")),
         });
         if (reply instanceof Error) throw reply;
+        const text = Array.isArray(reply) ? (reply[calls.length - 1] ?? "") : reply;
         return {
-          content: [{ type: "text" as const, text: reply }],
+          content: [{ type: "text" as const, text }],
           finishReason: { unified: "stop" as const, raw: undefined },
           usage,
           warnings: [],
@@ -112,6 +113,30 @@ describe("SuggestionsService", () => {
     expect(calls[0]?.user).toContain("IGNORE ALL PREVIOUS");
     expect(calls[0]?.user).toContain("Human approved topic");
     expect(repo.recordUsage).toHaveBeenCalledOnce();
+    expect(repo.complete).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      job.requestId,
+      [suggestion],
+      [{ id: newsId, url: "https://example.com/rule", title: "New brewing rule" }],
+      1,
+      { titles: [], state: "[]" },
+      input.calendar,
+    );
+    expect(repo.failed).not.toHaveBeenCalled();
+  });
+
+  it("repairs a malformed manual suggestion with a separately metered second call", async () => {
+    const suggestion = { title: "Coffee guide", description: "Practical brief", newsItemId: null };
+    const { service, repo, calls } = harness([
+      "not structured output",
+      JSON.stringify({ suggestions: [suggestion] }),
+    ]);
+    await service.handle(job);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.user).toContain("not structured output");
+    expect(repo.recordUsage).toHaveBeenCalledTimes(2);
+    expect(repo.recordUsage.mock.calls.map((call) => call[1]?.attempt)).toEqual([1, 2]);
     expect(repo.complete).toHaveBeenCalledWith(
       job.orgId,
       job.brandId,
