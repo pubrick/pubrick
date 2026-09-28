@@ -9,29 +9,16 @@ import { AppShell } from "@/components/app-shell";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { AutopilotDiagnostics } from "./diagnostics";
-import { ManualPlanningAttempts } from "./manual-planning-attempts";
 import { AutopilotManualTrigger } from "./manual-trigger";
-import { AutopilotScheduledChecks } from "./scheduled-checks";
+import { AutopilotOperations } from "./operations";
 
 type Channel = { id: string; name: string; platform: string };
-type Dispatch = {
-  id: string;
-  topicId: string;
-  topicTitle: string;
-  runId: string;
-  localDate: string;
-  runStatus: string;
-  createdAt: string;
-};
 const FORM_ID = "autopilot-settings-form";
 const HOURS = Array.from({ length: 24 }, (_, value) => ({
   value,
@@ -48,14 +35,13 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
   const [persistedConfig, setPersistedConfig] = useState<AutopilotConfig | null>(null);
   const [dirty, setDirty] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [history, setHistory] = useState<Dispatch[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [planning, setPlanning] = useState(false);
   const [planQueued, setPlanQueued] = useState(false);
-  const [planningHistoryVersion, setPlanningHistoryVersion] = useState(0);
+  const [operationsVersion, setOperationsVersion] = useState(0);
 
   const describeError = useCallback(
     (err: unknown, fallback = t("genericError")) => {
@@ -72,14 +58,12 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
     Promise.all([
       api<AutopilotConfig>(`/api/brands/${id}/autopilot`),
       api<Channel[]>(`/api/channels?brandId=${id}`),
-      api<Dispatch[]>(`/api/brands/${id}/autopilot/history`),
     ])
-      .then(([nextConfig, nextChannels, nextHistory]) => {
+      .then(([nextConfig, nextChannels]) => {
         setConfig(nextConfig);
         setPersistedConfig(nextConfig);
         setDirty(false);
         setChannels(nextChannels);
-        setHistory(nextHistory);
         setError(null);
       })
       .catch((err) => setError(describeError(err)));
@@ -130,7 +114,7 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
     try {
       await api<unknown>(`/api/brands/${id}/autopilot/plan-topics`, { method: "POST" });
       setPlanQueued(true);
-      setPlanningHistoryVersion((value) => value + 1);
+      setOperationsVersion((value) => value + 1);
       setPlanOpen(false);
     } catch (err) {
       setPlanOpen(false);
@@ -357,43 +341,12 @@ export default function AutopilotPage({ params }: { params: Promise<{ id: string
         </Card>
       )}
       <AutopilotDiagnostics brandId={id} />
-      <AutopilotManualTrigger brandId={id} disabled={busy || dirty || !persistedConfig} />
-      <ManualPlanningAttempts brandId={id} refreshVersion={planningHistoryVersion} />
-      <AutopilotScheduledChecks brandId={id} />
-      <h2 className="mt-8 mb-3 text-lg font-semibold text-fg">{t("history")}</h2>
-      <Card padded={false}>
-        {history.length === 0 ? (
-          <EmptyState title={t("emptyHistory")} />
-        ) : (
-          history.map((entry) => (
-            <ListRow
-              key={entry.id}
-              title={
-                <Link
-                  href={`/${locale}/content/runs/${entry.runId}`}
-                  className="text-accent underline"
-                >
-                  {entry.topicTitle || t("runLink", { date: entry.localDate })}
-                </Link>
-              }
-              meta={`${entry.localDate} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
-              trailing={
-                <StatusBadge
-                  status={
-                    entry.runStatus === "succeeded"
-                      ? "published"
-                      : entry.runStatus === "failed"
-                        ? "failed"
-                        : "draft"
-                  }
-                >
-                  {entry.runStatus}
-                </StatusBadge>
-              }
-            />
-          ))
-        )}
-      </Card>
+      <AutopilotManualTrigger
+        brandId={id}
+        disabled={busy || dirty || !persistedConfig}
+        onRequested={() => setOperationsVersion((value) => value + 1)}
+      />
+      <AutopilotOperations key={`${id}:${operationsVersion}`} brandId={id} />
       <Modal
         open={planOpen}
         onClose={() => {

@@ -1958,6 +1958,55 @@
     "quietStart": "Inicio del horario de descanso",
     "quietEnd": "Fin del horario de descanso",
     "quietHint": "El período puede cruzar la medianoche. Usa la misma hora de inicio y fin para desactivarlo.",
+    "operations": {
+      "title": "Operaciones",
+      "hint": "Un solo registro de comprobaciones programadas, envíos de borradores, comprobaciones manuales, planificación del calendario e ideas. Un envío indica que se admitió la generación; la ejecución enlazada muestra el resultado final.",
+      "empty": "Todavía no hay operaciones de Autopilot.",
+      "restricted": "Solo quien gestione esta marca y sea propietario o administrador del espacio puede ver las operaciones.",
+      "error": "No se pudieron cargar las operaciones de Autopilot. Inténtalo de nuevo.",
+      "loading": "Cargando operaciones…",
+      "loadingMore": "Cargando más…",
+      "loadMore": "Cargar más",
+      "admission": "Decisión de admisión",
+      "decisionPending": "Decisión pendiente",
+      "runOutcome": "Resultado de la generación",
+      "noRun": "Esta comprobación no inició una generación",
+      "runUnavailable": "El resultado de la ejecución enlazada no está disponible",
+      "openTopic": "Abrir banco de temas",
+      "openRun": "Abrir informe de ejecución",
+      "openTopics": "Revisar ideas de temas",
+      "suggestionCount": "Ideas creadas: {count}",
+      "requested": "Comprobación solicitada. La decisión aparecerá pronto en operaciones.",
+      "kind": {
+        "scheduled_scan": "Comprobación de generación programada",
+        "automatic_dispatch": "Envío automático de borrador",
+        "manual_generation": "Comprobación manual de generación",
+        "manual_topic_plan": "Planificación manual del calendario",
+        "topic_suggestions": "Solicitud de ideas de temas"
+      },
+      "origin": {
+        "manual": "Solicitud manual",
+        "automatic": "Solicitud diaria"
+      },
+      "suggestionStatus": {
+        "queued": "En cola",
+        "running": "En curso",
+        "succeeded": "Completada",
+        "failed": "Fallida"
+      },
+      "runStatus": {
+        "queued": "En cola",
+        "running": "En curso",
+        "succeeded": "Borrador listo",
+        "failed": "Fallida",
+        "cancelled": "Cancelada"
+      },
+      "suggestionError": {
+        "no_api_key": "No hay una clave de IA configurada. Añádela en Ajustes.",
+        "unreadable_key": "No se puede leer la clave de IA guardada. Sustitúyela en Ajustes.",
+        "model_failed": "El modelo no pudo completar esta solicitud."
+      }
+    },
     "scanTitle": "Comprobaciones programadas",
     "scanHint": "Cada comprobación registra la decisión del planificador en ese momento. Un envío indica que se solicitó la generación; abre la ejecución para ver el resultado. Solo se comprueban las marcas activadas. El historial se conserva 14 días.",
     "scanDispatchDecision": "Enviado para generar borrador",

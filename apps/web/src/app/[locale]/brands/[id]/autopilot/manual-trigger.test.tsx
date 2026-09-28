@@ -32,7 +32,7 @@ function attempt(overrides: Partial<AutopilotManualAttempt> = {}): AutopilotManu
 describe("manual Autopilot check", () => {
   beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 
-  it("requires confirmation with cost disclosure, then shows the queued attempt and prevents a second request", async () => {
+  it("requires confirmation with cost disclosure, reports the request, and prevents a second request", async () => {
     const requests: string[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       requests.push(`${init?.method ?? "GET"} ${String(input)}`);
@@ -50,11 +50,11 @@ describe("manual Autopilot check", () => {
     await waitFor(() =>
       expect(requests).toContain(`POST /api/brands/${BRAND_ID}/autopilot/trigger`),
     );
-    expect(await screen.findByText(en.Autopilot.triggerDecision.queued)).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(en.Autopilot.operations.requested);
     expect(screen.getByRole("button", { name: en.Autopilot.triggerAction })).toBeDisabled();
   });
 
-  it("shows a closed refusal, keeps the action in cooldown, and never links a nonexistent run", async () => {
+  it("uses a recent closed refusal for cooldown without duplicating history", async () => {
     vi.mocked(fetch).mockResolvedValue(
       response(200, [
         attempt({
@@ -65,7 +65,7 @@ describe("manual Autopilot check", () => {
       ]),
     );
     render(<AutopilotManualTrigger brandId={BRAND_ID} disabled={false} />);
-    expect(await screen.findByText(en.Autopilot.triggerDecision.quiet_hours)).toBeInTheDocument();
+    expect(await screen.findByText(en.Autopilot.triggerCooldown)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: en.Autopilot.triggerRun })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: en.Autopilot.triggerAction })).toBeDisabled();
   });

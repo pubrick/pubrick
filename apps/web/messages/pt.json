@@ -1958,6 +1958,55 @@
     "quietStart": "Início do horário de silêncio",
     "quietEnd": "Fim do horário de silêncio",
     "quietHint": "O período pode atravessar a meia-noite. Use o mesmo horário no início e no fim para desativá-lo.",
+    "operations": {
+      "title": "Operações",
+      "hint": "Um registo único de verificações agendadas, envios de rascunhos, verificações manuais, planeamento do calendário e ideias. Um envio significa que a geração foi admitida; a execução associada mostra o resultado final.",
+      "empty": "Ainda não há operações de Autopilot.",
+      "restricted": "Só um gestor da marca que seja proprietário ou administrador deste espaço pode ver as operações.",
+      "error": "Não foi possível carregar as operações de Autopilot. Tente novamente.",
+      "loading": "A carregar operações…",
+      "loadingMore": "A carregar mais…",
+      "loadMore": "Carregar mais",
+      "admission": "Decisão de admissão",
+      "decisionPending": "Decisão pendente",
+      "runOutcome": "Resultado da geração",
+      "noRun": "Esta verificação não iniciou uma geração",
+      "runUnavailable": "O resultado da execução associada não está disponível",
+      "openTopic": "Abrir banco de temas",
+      "openRun": "Abrir comprovativo da execução",
+      "openTopics": "Rever ideias de temas",
+      "suggestionCount": "Ideias criadas: {count}",
+      "requested": "Verificação solicitada. A decisão aparecerá em breve nas operações.",
+      "kind": {
+        "scheduled_scan": "Verificação de geração agendada",
+        "automatic_dispatch": "Envio automático de rascunho",
+        "manual_generation": "Verificação manual de geração",
+        "manual_topic_plan": "Planeamento manual do calendário",
+        "topic_suggestions": "Pedido de ideias de temas"
+      },
+      "origin": {
+        "manual": "Pedido manual",
+        "automatic": "Pedido diário"
+      },
+      "suggestionStatus": {
+        "queued": "Na fila",
+        "running": "Em curso",
+        "succeeded": "Concluído",
+        "failed": "Falhou"
+      },
+      "runStatus": {
+        "queued": "Na fila",
+        "running": "Em curso",
+        "succeeded": "Rascunho pronto",
+        "failed": "Falhou",
+        "cancelled": "Cancelado"
+      },
+      "suggestionError": {
+        "no_api_key": "Não existe uma chave de IA configurada. Adicione-a nas Definições.",
+        "unreadable_key": "Não é possível ler a chave de IA guardada. Substitua-a nas Definições.",
+        "model_failed": "O modelo não conseguiu concluir este pedido."
+      }
+    },
     "scanTitle": "Verificações agendadas",
     "scanHint": "Cada checagem registra a decisão do agendador naquele momento. Um envio indica que a geração foi solicitada; abra a execução para ver o resultado. Apenas marcas ativadas entram no agendamento. O histórico é mantido por 14 dias.",
     "scanDispatchDecision": "Enviado para gerar rascunho",

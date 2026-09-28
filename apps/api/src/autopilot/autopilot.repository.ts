@@ -1,16 +1,20 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  AUTOPILOT_OPERATION_KINDS,
   type AutopilotConfig,
   type AutopilotManualAttempt,
+  type AutopilotOperation,
+  type AutopilotOperationsQuery,
   type AutopilotScanQuery,
   autopilotDefaults,
   autopilotManualAttemptSchema,
+  autopilotOperationsPageSchema,
   autopilotScanPageSchema,
   LIVE_RUN_STATUSES,
   manualTopicPlanAttemptSchema,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { type AnyColumn, and, asc, desc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
@@ -61,6 +65,47 @@ function attemptDto(
     startedAt: row.startedAt?.toISOString() ?? null,
     completedAt: row.completedAt?.toISOString() ?? null,
   });
+}
+
+type OperationKind = AutopilotOperation["kind"];
+type OperationCursor = { kind: OperationKind; id: string; at: string };
+
+/** Keep PostgreSQL's microseconds so adjacent events never swap at a page boundary. */
+function operationTime(column: AnyColumn) {
+  return sql<string>`to_char(${column} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
+
+function encodeOperationCursor(row: AutopilotOperation): string {
+  return Buffer.from(`v1|${row.kind}|${row.id}`).toString("base64url");
+}
+
+function decodeOperationCursor(value: string): { kind: OperationKind; id: string } {
+  const decoded = Buffer.from(value, "base64url").toString("utf8");
+  const match =
+    /^v1\|([a-z_]+)\|([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+      decoded,
+    );
+  if (!match || Buffer.from(decoded).toString("base64url") !== value) {
+    throw badRequest("invalid_request", "Operation cursor is unavailable");
+  }
+  const kind = match[1];
+  if (!AUTOPILOT_OPERATION_KINDS.some((candidate) => candidate === kind)) {
+    throw badRequest("invalid_request", "Operation cursor is unavailable");
+  }
+  return { kind: kind as OperationKind, id: match[2] as string };
+}
+
+/** Same timestamp may exist in several event tables; kind and UUID break ties. */
+function operationCutoff(
+  at: AnyColumn,
+  id: AnyColumn,
+  kind: OperationKind,
+  cursor: OperationCursor | undefined,
+) {
+  if (!cursor) return undefined;
+  if (kind < cursor.kind) return sql`${at} <= ${cursor.at}::timestamptz`;
+  if (kind > cursor.kind) return sql`${at} < ${cursor.at}::timestamptz`;
+  return sql`(${at}, ${id}) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
 }
 
 @Injectable()
@@ -584,6 +629,401 @@ export class AutopilotRepository {
         finishedAt: row.finishedAt.toISOString(),
       })),
       nextCursor: rows.length > query.limit ? page.at(-1)?.id : null,
+    });
+  }
+
+  /** An admission is not a generation outcome; linked run state is separate. */
+  async operations(orgId: string, brandId: string, query: AutopilotOperationsQuery) {
+    await this.requireBrand(orgId, brandId);
+    let cursor: OperationCursor | undefined;
+    if (query.cursor) {
+      const parsed = decodeOperationCursor(query.cursor);
+      let at: string | undefined;
+      switch (parsed.kind) {
+        case "scheduled_scan": {
+          const [row] = await db
+            .select({ at: operationTime(schema.autopilotScanEvents.finishedAt) })
+            .from(schema.autopilotScanEvents)
+            .where(
+              and(
+                eq(schema.autopilotScanEvents.orgId, orgId),
+                eq(schema.autopilotScanEvents.brandId, brandId),
+                eq(schema.autopilotScanEvents.id, parsed.id),
+              ),
+            )
+            .limit(1);
+          at = row?.at;
+          break;
+        }
+        case "automatic_dispatch": {
+          const [row] = await db
+            .select({ at: operationTime(schema.autopilotDispatches.createdAt) })
+            .from(schema.autopilotDispatches)
+            .where(
+              and(
+                eq(schema.autopilotDispatches.orgId, orgId),
+                eq(schema.autopilotDispatches.brandId, brandId),
+                eq(schema.autopilotDispatches.id, parsed.id),
+                notExists(
+                  db
+                    .select({ id: schema.autopilotScanEvents.id })
+                    .from(schema.autopilotScanEvents)
+                    .where(
+                      and(
+                        eq(schema.autopilotScanEvents.orgId, orgId),
+                        eq(schema.autopilotScanEvents.brandId, brandId),
+                        eq(schema.autopilotScanEvents.runId, schema.autopilotDispatches.runId),
+                      ),
+                    ),
+                ),
+              ),
+            )
+            .limit(1);
+          at = row?.at;
+          break;
+        }
+        case "manual_generation": {
+          const [row] = await db
+            .select({ at: operationTime(schema.autopilotManualAttempts.createdAt) })
+            .from(schema.autopilotManualAttempts)
+            .where(
+              and(
+                eq(schema.autopilotManualAttempts.orgId, orgId),
+                eq(schema.autopilotManualAttempts.brandId, brandId),
+                eq(schema.autopilotManualAttempts.id, parsed.id),
+              ),
+            )
+            .limit(1);
+          at = row?.at;
+          break;
+        }
+        case "manual_topic_plan": {
+          const [row] = await db
+            .select({ at: operationTime(schema.manualTopicPlanAttempts.createdAt) })
+            .from(schema.manualTopicPlanAttempts)
+            .where(
+              and(
+                eq(schema.manualTopicPlanAttempts.orgId, orgId),
+                eq(schema.manualTopicPlanAttempts.brandId, brandId),
+                eq(schema.manualTopicPlanAttempts.id, parsed.id),
+              ),
+            )
+            .limit(1);
+          at = row?.at;
+          break;
+        }
+        case "topic_suggestions": {
+          const [row] = await db
+            .select({ at: operationTime(schema.topicSuggestionRequests.createdAt) })
+            .from(schema.topicSuggestionRequests)
+            .where(
+              and(
+                eq(schema.topicSuggestionRequests.orgId, orgId),
+                eq(schema.topicSuggestionRequests.brandId, brandId),
+                eq(schema.topicSuggestionRequests.id, parsed.id),
+              ),
+            )
+            .limit(1);
+          at = row?.at;
+          break;
+        }
+      }
+      if (!at) throw badRequest("invalid_request", "Operation cursor is unavailable");
+      cursor = { ...parsed, at };
+    }
+
+    const pageSize = query.limit + 1;
+    const [scans, dispatches, attempts, plans, suggestions] = await Promise.all([
+      db
+        .select({
+          id: schema.autopilotScanEvents.id,
+          occurredAt: operationTime(schema.autopilotScanEvents.finishedAt),
+          status: schema.autopilotScanEvents.status,
+          decision: schema.autopilotScanEvents.decision,
+          runId: schema.pipelineRuns.id,
+          runStatus: schema.pipelineRuns.status,
+          topicId: schema.topics.id,
+          topicTitle: schema.topics.title,
+        })
+        .from(schema.autopilotScanEvents)
+        .leftJoin(
+          schema.pipelineRuns,
+          and(
+            eq(schema.autopilotScanEvents.runId, schema.pipelineRuns.id),
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+          ),
+        )
+        .leftJoin(
+          schema.topics,
+          and(
+            eq(schema.pipelineRuns.topicId, schema.topics.id),
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.autopilotScanEvents.orgId, orgId),
+            eq(schema.autopilotScanEvents.brandId, brandId),
+            operationCutoff(
+              schema.autopilotScanEvents.finishedAt,
+              schema.autopilotScanEvents.id,
+              "scheduled_scan",
+              cursor,
+            ),
+          ),
+        )
+        .orderBy(desc(schema.autopilotScanEvents.finishedAt), desc(schema.autopilotScanEvents.id))
+        .limit(pageSize),
+      db
+        .select({
+          id: schema.autopilotDispatches.id,
+          occurredAt: operationTime(schema.autopilotDispatches.createdAt),
+          runId: schema.pipelineRuns.id,
+          runStatus: schema.pipelineRuns.status,
+          topicId: schema.topics.id,
+          topicTitle: schema.topics.title,
+        })
+        .from(schema.autopilotDispatches)
+        .innerJoin(
+          schema.pipelineRuns,
+          and(
+            eq(schema.autopilotDispatches.runId, schema.pipelineRuns.id),
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+          ),
+        )
+        .innerJoin(
+          schema.topics,
+          and(
+            eq(schema.autopilotDispatches.topicId, schema.topics.id),
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.autopilotDispatches.orgId, orgId),
+            eq(schema.autopilotDispatches.brandId, brandId),
+            notExists(
+              db
+                .select({ id: schema.autopilotScanEvents.id })
+                .from(schema.autopilotScanEvents)
+                .where(
+                  and(
+                    eq(schema.autopilotScanEvents.orgId, orgId),
+                    eq(schema.autopilotScanEvents.brandId, brandId),
+                    eq(schema.autopilotScanEvents.runId, schema.autopilotDispatches.runId),
+                  ),
+                ),
+            ),
+            operationCutoff(
+              schema.autopilotDispatches.createdAt,
+              schema.autopilotDispatches.id,
+              "automatic_dispatch",
+              cursor,
+            ),
+          ),
+        )
+        .orderBy(desc(schema.autopilotDispatches.createdAt), desc(schema.autopilotDispatches.id))
+        .limit(pageSize),
+      db
+        .select({
+          id: schema.autopilotManualAttempts.id,
+          occurredAt: operationTime(schema.autopilotManualAttempts.createdAt),
+          status: schema.autopilotManualAttempts.status,
+          decision: schema.autopilotManualAttempts.decision,
+          runId: schema.pipelineRuns.id,
+          runStatus: schema.pipelineRuns.status,
+          topicId: schema.topics.id,
+          topicTitle: schema.topics.title,
+        })
+        .from(schema.autopilotManualAttempts)
+        .leftJoin(
+          schema.pipelineRuns,
+          and(
+            eq(schema.autopilotManualAttempts.runId, schema.pipelineRuns.id),
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.brandId, brandId),
+          ),
+        )
+        .leftJoin(
+          schema.topics,
+          and(
+            eq(schema.pipelineRuns.topicId, schema.topics.id),
+            eq(schema.topics.orgId, orgId),
+            eq(schema.topics.brandId, brandId),
+          ),
+        )
+        .where(
+          and(
+            eq(schema.autopilotManualAttempts.orgId, orgId),
+            eq(schema.autopilotManualAttempts.brandId, brandId),
+            operationCutoff(
+              schema.autopilotManualAttempts.createdAt,
+              schema.autopilotManualAttempts.id,
+              "manual_generation",
+              cursor,
+            ),
+          ),
+        )
+        .orderBy(
+          desc(schema.autopilotManualAttempts.createdAt),
+          desc(schema.autopilotManualAttempts.id),
+        )
+        .limit(pageSize),
+      db
+        .select({
+          id: schema.manualTopicPlanAttempts.id,
+          occurredAt: operationTime(schema.manualTopicPlanAttempts.createdAt),
+          status: schema.manualTopicPlanAttempts.status,
+          errorCode: schema.manualTopicPlanAttempts.errorCode,
+          createdCount: schema.manualTopicPlanAttempts.createdCount,
+        })
+        .from(schema.manualTopicPlanAttempts)
+        .where(
+          and(
+            eq(schema.manualTopicPlanAttempts.orgId, orgId),
+            eq(schema.manualTopicPlanAttempts.brandId, brandId),
+            operationCutoff(
+              schema.manualTopicPlanAttempts.createdAt,
+              schema.manualTopicPlanAttempts.id,
+              "manual_topic_plan",
+              cursor,
+            ),
+          ),
+        )
+        .orderBy(
+          desc(schema.manualTopicPlanAttempts.createdAt),
+          desc(schema.manualTopicPlanAttempts.id),
+        )
+        .limit(pageSize),
+      db
+        .select({
+          id: schema.topicSuggestionRequests.id,
+          occurredAt: operationTime(schema.topicSuggestionRequests.createdAt),
+          status: schema.topicSuggestionRequests.status,
+          origin: schema.topicSuggestionRequests.origin,
+          localDate: schema.topicSuggestionRequests.localDate,
+          errorCode: schema.topicSuggestionRequests.errorCode,
+          suggestionCount: schema.topicSuggestionRequests.suggestionCount,
+        })
+        .from(schema.topicSuggestionRequests)
+        .where(
+          and(
+            eq(schema.topicSuggestionRequests.orgId, orgId),
+            eq(schema.topicSuggestionRequests.brandId, brandId),
+            operationCutoff(
+              schema.topicSuggestionRequests.createdAt,
+              schema.topicSuggestionRequests.id,
+              "topic_suggestions",
+              cursor,
+            ),
+          ),
+        )
+        .orderBy(
+          desc(schema.topicSuggestionRequests.createdAt),
+          desc(schema.topicSuggestionRequests.id),
+        )
+        .limit(pageSize),
+    ]);
+
+    const rows: AutopilotOperation[] = [
+      ...scans.map((row) => ({
+        kind: "scheduled_scan" as const,
+        id: row.id,
+        occurredAt: row.occurredAt,
+        admission: { status: row.status, decision: row.decision },
+        runId: row.runId,
+        runStatus: row.runStatus,
+        topicId: row.topicId,
+        topicTitle: row.topicTitle,
+      })),
+      ...dispatches.map((row) => ({
+        kind: "automatic_dispatch" as const,
+        id: row.id,
+        occurredAt: row.occurredAt,
+        admission: { status: "dispatched" as const, decision: "dispatched" as const },
+        runId: row.runId,
+        runStatus: row.runStatus,
+        topicId: row.topicId,
+        topicTitle: row.topicTitle,
+      })),
+      ...attempts.map((row) => ({
+        kind: "manual_generation" as const,
+        id: row.id,
+        occurredAt: row.occurredAt,
+        admission: { status: row.status, decision: row.decision },
+        runId: row.runId,
+        runStatus: row.runStatus,
+        topicId: row.topicId,
+        topicTitle: row.topicTitle,
+      })),
+      ...plans.map((row) => ({
+        kind: "manual_topic_plan" as const,
+        id: row.id,
+        occurredAt: row.occurredAt,
+        status: row.status,
+        errorCode: row.errorCode,
+        createdCount: row.createdCount,
+        slots: [],
+      })),
+      ...suggestions.map((row) => ({
+        kind: "topic_suggestions" as const,
+        id: row.id,
+        occurredAt: row.occurredAt,
+        status: row.status,
+        origin: row.origin,
+        localDate: row.localDate,
+        errorCode: row.errorCode,
+        suggestionCount: row.suggestionCount,
+      })),
+    ];
+    const descending = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
+    rows.sort(
+      (a, b) =>
+        descending(a.occurredAt, b.occurredAt) ||
+        descending(a.kind, b.kind) ||
+        descending(a.id, b.id),
+    );
+    const page = rows.slice(0, query.limit);
+    const planIds = page.filter((row) => row.kind === "manual_topic_plan").map((row) => row.id);
+    if (planIds.length) {
+      const slots = await db
+        .select({
+          id: schema.calendarSlots.id,
+          attemptId: schema.calendarSlots.manualPlanAttemptId,
+          scheduledAt: schema.calendarSlots.scheduledAt,
+          topicTitle: schema.calendarSlots.topicTitle,
+        })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            inArray(schema.calendarSlots.manualPlanAttemptId, planIds),
+          ),
+        )
+        .orderBy(asc(schema.calendarSlots.scheduledAt), asc(schema.calendarSlots.id));
+      for (const row of page) {
+        if (row.kind === "manual_topic_plan") {
+          row.slots = slots
+            .filter((slot) => slot.attemptId === row.id)
+            .map((slot) => ({
+              id: slot.id,
+              scheduledAt: slot.scheduledAt.toISOString(),
+              topicTitle: slot.topicTitle,
+            }));
+        }
+      }
+    }
+    return autopilotOperationsPageSchema.parse({
+      rows: page,
+      nextCursor:
+        rows.length > query.limit
+          ? encodeOperationCursor(page[page.length - 1] as AutopilotOperation)
+          : null,
     });
   }
 }

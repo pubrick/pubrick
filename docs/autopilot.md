@@ -76,3 +76,21 @@ Settings → Notifications. Its local hour and timezone do not alter autopilot's
 generation window or budget. The digest reports generation-run outcomes and
 spend; it does not create content or publish anything. Publication still needs
 human review and explicit approval.
+
+## Operations timeline
+
+The brand Autopilot page has one cursor-paged, read-only Operations timeline for
+meaningful scheduled generation checks, automatic dispatches, manual generation
+checks, manual calendar planning, and manual or daily topic-idea requests. It
+requires brand manager access plus organization owner or admin status. Refresh
+reads the newest page; Load more appends older rows without duplicating an
+operation. Reading this timeline does not schedule work or call an AI provider.
+
+The admission decision records why a draft could or could not start. When a
+generation run exists, its separately labeled status and receipt link show the
+observed outcome, which may change after dispatch. A dispatched decision alone
+does not mean a draft succeeded. Planning rows link to surviving calendar slots;
+idea requests link to the Topics bank. Recorded error codes are shown as safe,
+localized explanations. The timeline combines existing durable histories, so
+it is not a prediction of the next scan or a complete log of every scheduler
+tick.
