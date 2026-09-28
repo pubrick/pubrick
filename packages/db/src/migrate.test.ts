@@ -141,6 +141,8 @@ const ZONED_COLUMNS = [
   "content_versions.created_at",
   "draft_revision_proposals.created_at",
   "editorial_notes.created_at",
+  "editorial_placeholders.created_at",
+  "editorial_placeholders.updated_at",
   "feed_entries.published_at",
   "knowledge_auto_index.last_attempt_at",
   "knowledge_auto_index.updated_at",
@@ -440,6 +442,11 @@ const NON_ENUM_CHECKS = [
   "calendar_slots_content_type_check",
   "calendar_slots_seo_keywords_check",
   "calendar_slots_topic_snapshot_check",
+  // Manual date-only reservations are separate from dispatchable calendar slots.
+  "editorial_placeholders_platform_check",
+  "editorial_placeholders_content_type_check",
+  "editorial_placeholders_time_of_day_check",
+  "editorial_placeholders_notes_length_check",
   // Memorable dates were born after the historical seed; the API e2e proves
   // invalid MM-DD values are refused and this count pins the SQL guard.
   "memorable_dates_month_day_check",

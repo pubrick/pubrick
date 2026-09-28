@@ -207,6 +207,24 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "calendar/editorial-placeholders",
+    identify: id,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const brand = await agent.post("/api/brands").send({ name: "Editorial brand" }).expect(201);
+      const placeholder = await agent
+        .post("/api/calendar/editorial-placeholders")
+        .send({ brandId: brand.body.id, date: "2026-09-30", notes: "Editorial hold" })
+        .expect(201);
+      return {
+        id: placeholder.body.id as string,
+        paths: [
+          `/api/calendar/editorial-placeholders?brandId=${brand.body.id}&from=2026-09-01&to=2026-10-01`,
+        ],
+      };
+    },
+  },
+  {
     controller: "media",
     identify: id,
     foreignBrandNotFound: true,

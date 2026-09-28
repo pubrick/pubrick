@@ -118,6 +118,45 @@ describe("brand calendar", () => {
     expect(await screen.findByText(en.CalendarMemorable.empty)).toBeInTheDocument();
   });
 
+  it("loads reservations when a visible grid day belongs to an adjacent month", async () => {
+    const first = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    const outsideDay =
+      (first.getDay() + 6) % 7 > 0
+        ? new Date(first.getFullYear(), first.getMonth(), 0)
+        : new Date(first.getFullYear(), first.getMonth() + 1, 1);
+    const monthStart = `${outsideDay.getFullYear()}-${String(outsideDay.getMonth() + 1).padStart(2, "0")}-01`;
+    const date = `${outsideDay.getFullYear()}-${String(outsideDay.getMonth() + 1).padStart(2, "0")}-${String(outsideDay.getDate()).padStart(2, "0")}`;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/editorial-placeholders?"))
+        return jsonResponse(
+          url.includes(`from=${monthStart}`)
+            ? [
+                {
+                  id: "e2d88525-810e-4fd1-902c-d68a2786c0a8",
+                  brandId: "brand-1",
+                  date,
+                  platform: null,
+                  contentType: null,
+                  timeOfDay: null,
+                  notes: "Adjacent month note",
+                  createdAt: new Date().toISOString(),
+                },
+              ]
+            : [],
+        );
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    const label = new Intl.DateTimeFormat("en", { dateStyle: "full" }).format(outsideDay);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: `${label}, 0 planned slots` }));
+    expect(await screen.findByText("Adjacent month note")).toBeInTheDocument();
+  });
+
   it("opens and focuses a linked manual planning slot on its calendar day", async () => {
     const slotId = "ef60273c-180e-4d7c-82f8-9f0153b9c355";
     const day = new Date(Date.now() + 65 * 86_400_000);

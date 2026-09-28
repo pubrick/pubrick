@@ -1,8 +1,9 @@
-import { CALENDAR_SLOT_ERRORS, CONTENT_TYPES } from "@pubrick/shared";
+import { CALENDAR_SLOT_ERRORS, CONTENT_TYPES, PLATFORM_IDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -73,6 +74,43 @@ export const calendarSlots = pgTable(
     check(
       "calendar_slots_seo_keywords_check",
       sql`jsonb_typeof(${t.seoKeywords}) = 'array' and jsonb_array_length(${t.seoKeywords}) <= 8 and (${t.contentType} = 'expert_article' or ${t.seoKeywords} = '[]'::jsonb)`,
+    ),
+  ],
+);
+
+/** Manual editorial reservations; the due-slot worker never reads this table. */
+export const editorialPlaceholders = pgTable(
+  "editorial_placeholders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    brandId: uuid("brand_id")
+      .notNull()
+      .references(() => brands.id, { onDelete: "cascade" }),
+    date: date("date", { mode: "string" }).notNull(),
+    platform: text("platform", { enum: PLATFORM_IDS }),
+    contentType: text("content_type", { enum: CONTENT_TYPES }),
+    timeOfDay: text("time_of_day"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index("editorial_placeholders_org_brand_date_idx").on(t.orgId, t.brandId, t.date),
+    enumCheck("editorial_placeholders_platform_check", t.platform, PLATFORM_IDS),
+    enumCheck("editorial_placeholders_content_type_check", t.contentType, CONTENT_TYPES),
+    check(
+      "editorial_placeholders_time_of_day_check",
+      sql`${t.timeOfDay} is null or ${t.timeOfDay} ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'`,
+    ),
+    check(
+      "editorial_placeholders_notes_length_check",
+      sql`${t.notes} is null or length(${t.notes}) <= 2000`,
     ),
   ],
 );

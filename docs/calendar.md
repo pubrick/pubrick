@@ -1,4 +1,27 @@
-# Planned generation calendar
+# Content calendar
+
+## Manual editorial reservations
+
+Editors can reserve a date in a brand calendar with optional platform, content
+format, `HH:mm` clock label, and team notes. This ports the old Content Factory's
+blank editorial slots. A reservation is a manual planning note: it has no brief,
+channel, topic, run, or queue job. Creating or editing it does not start draft
+generation, fill the reservation, or publish anything. Reservations appear on
+the month grid and selected day beside, but separate from, scheduled generation.
+The optional clock label is for display only; it carries no timezone or due-job
+semantics. The editorial day is stored as a SQL `date`, preserving its
+`YYYY-MM-DD` label across browser timezones. Past dates are allowed so teams can
+record historical plans.
+
+`GET /api/calendar/editorial-placeholders?brandId=<uuid>&from=YYYY-MM-DD&to=YYYY-MM-DD`
+returns up to a 93-day date range, inclusive of `from` and exclusive of `to`.
+`POST` accepts `brandId`, `date`, and nullable `platform`, `contentType`,
+`timeOfDay`, and `notes`. `PATCH /:id?brandId=<uuid>` changes at least one of
+those fields. `DELETE /:id?brandId=<uuid>` removes a reservation. Every query
+and write is scoped by both organization and brand; an inaccessible reservation
+returns 404. Only users with the editor capability can mutate reservations.
+
+## Planned draft generation
 
 The calendar is a brand-scoped plan for **draft generation**. A slot contains a
 future local date and time (stored as an absolute timestamp), a custom brief or

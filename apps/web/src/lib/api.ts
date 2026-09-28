@@ -247,6 +247,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   run_not_dismissable_running: "run_not_dismissable_running",
   ai_credential_not_found: "ai_credential_not_found",
   calendar_slot_not_found: "calendar_slot_not_found",
+  editorial_placeholder_not_found: "editorial_placeholder_not_found",
   memorable_date_not_found: "memorable_date_not_found",
   calendar_slot_started: "calendar_slot_started",
   calendar_topic_already_planned: "calendar_topic_already_planned",

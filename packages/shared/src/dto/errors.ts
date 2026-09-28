@@ -456,6 +456,7 @@ export const API_ERROR_CODES = [
   "ai_credential_not_found",
   // ── planned calendar generation ──────────────────────────────────────────
   "calendar_slot_not_found",
+  "editorial_placeholder_not_found",
   "memorable_date_not_found",
   "calendar_slot_started",
   "calendar_time_in_past",
