@@ -2149,6 +2149,166 @@ describe.skipIf(!url)("content e2e", () => {
    * in this file is — and the sentence it stores is NEVER asserted on, because
    * the whole point of the field is that rewording it changes nothing.
    */
+  describe("brand publication operations", () => {
+    it("pages current safe outcomes per brand and refuses malformed queries", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const other = await brandWithChannel(agent);
+      const unknownIds: string[] = [];
+      for (const title of ["First uncertain", "Second uncertain"]) {
+        const created = await agent
+          .post("/api/content")
+          .send({
+            brandId,
+            title,
+            body: title,
+            channelIds: [channelId],
+          })
+          .expect(201);
+        unknownIds.push(created.body.adaptations[0].id as string);
+      }
+      const otherPost = await agent
+        .post("/api/content")
+        .send({
+          brandId: other.brandId,
+          title: "Other brand",
+          body: "Hidden",
+          channelIds: [other.channelId],
+        })
+        .expect(201);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = await db
+        .select({ orgId: schema.adaptations.orgId })
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, unknownIds[0] as string));
+      const orgId = row?.orgId as string;
+      // Both adaptations share a timestamp with microseconds; the UUID breaks the tie.
+      await db.execute(sql`UPDATE adaptations SET status = 'failed', failure_reason = 'outcome_unknown',
+        last_error = 'sensitive provider text', created_at = '2026-09-28T10:00:00.123456Z'
+        WHERE id IN (${unknownIds[0]}::uuid, ${unknownIds[1]}::uuid)`);
+      await db.insert(schema.publications).values(
+        unknownIds.map((id) => ({
+          orgId,
+          adaptationId: id,
+          channelId,
+          status: "unknown" as const,
+          attempt: 1,
+        })),
+      );
+      await db
+        .update(schema.adaptations)
+        .set({ status: "failed", failureReason: "outcome_unknown" })
+        .where(eq(schema.adaptations.id, otherPost.body.adaptations[0].id as string));
+      await pool.end();
+
+      const first = await agent.get(`/api/brands/${brandId}/publications?limit=1`).expect(200);
+      expect(first.body.rows).toHaveLength(1);
+      expect(first.body.rows[0]).toMatchObject({
+        channelName: "Main",
+        platform: "telegram",
+        deliveryOutcome: "unknown",
+        failureReason: "outcome_unknown",
+        externalUrl: null,
+      });
+      expect(JSON.stringify(first.body)).not.toContain("sensitive provider text");
+      expect(first.body.nextCursor).toEqual(expect.any(String));
+      const second = await agent
+        .get(
+          `/api/brands/${brandId}/publications?limit=1&cursor=${encodeURIComponent(first.body.nextCursor)}`,
+        )
+        .expect(200);
+      expect(second.body.rows).toHaveLength(1);
+      expect(second.body.rows[0].id).not.toBe(first.body.rows[0].id);
+      expect(second.body.nextCursor).toBeNull();
+      expect(
+        (await agent.get(`/api/brands/${brandId}/publications?filter=published`).expect(200)).body
+          .rows,
+      ).toEqual([]);
+      await agent.get(`/api/brands/${brandId}/publications?cursor=bad`).expect(400);
+      await agent.get(`/api/brands/${brandId}/publications?limit=101`).expect(400);
+      const outsider = await orgAgent();
+      await outsider.get(`/api/brands/${brandId}/publications`).expect(404);
+    });
+
+    it("separates scheduled and published evidence from unresolved partial delivery", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const ids: string[] = [];
+      for (const title of ["Scheduled", "Published", "Partly delivered"]) {
+        const created = await agent
+          .post("/api/content")
+          .send({
+            brandId,
+            title,
+            body: title,
+            channelIds: [channelId],
+          })
+          .expect(201);
+        ids.push(created.body.adaptations[0].id as string);
+      }
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const [row] = await db
+        .select({ orgId: schema.adaptations.orgId })
+        .from(schema.adaptations)
+        .where(eq(schema.adaptations.id, ids[0] as string));
+      const orgId = row?.orgId as string;
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "scheduled",
+          scheduledAt: new Date("2026-10-01T12:00:00Z"),
+        })
+        .where(eq(schema.adaptations.id, ids[0] as string));
+      await db
+        .update(schema.adaptations)
+        .set({ status: "published" })
+        .where(eq(schema.adaptations.id, ids[1] as string));
+      await db.insert(schema.publications).values({
+        orgId,
+        adaptationId: ids[1] as string,
+        channelId,
+        status: "published",
+        attempt: 1,
+        externalUrl: "https://t.me/example/1",
+      });
+      await db
+        .update(schema.adaptations)
+        .set({
+          status: "failed",
+          failureReason: "outcome_unknown",
+        })
+        .where(eq(schema.adaptations.id, ids[2] as string));
+      await db.insert(schema.publications).values({
+        orgId,
+        adaptationId: ids[2] as string,
+        channelId,
+        status: "unknown",
+        attempt: 1,
+        partialFollowupText: "Remaining reply",
+        partialPhotoUrl: "https://t.me/example/2",
+        partialFollowupOutcome: "unknown",
+      });
+      await pool.end();
+
+      const path = `/api/brands/${brandId}/publications`;
+      const scheduled = await agent.get(`${path}?filter=scheduled`).expect(200);
+      expect(scheduled.body.rows).toMatchObject([
+        { id: ids[0], deliveryOutcome: "scheduled", scheduledAt: "2026-10-01T12:00:00.000Z" },
+      ]);
+      const published = await agent.get(`${path}?filter=published`).expect(200);
+      expect(published.body.rows).toMatchObject([
+        { id: ids[1], deliveryOutcome: "published", externalUrl: "https://t.me/example/1" },
+      ]);
+      expect(published.body.rows[0].publishedAt).toEqual(expect.any(String));
+      const attention = await agent.get(path).expect(200);
+      expect(attention.body.rows).toMatchObject([{ id: ids[2], deliveryOutcome: "partial" }]);
+      expect(JSON.stringify(attention.body)).not.toContain("Remaining reply");
+      expect((await agent.get(`${path}?filter=all`).expect(200)).body.rows).toHaveLength(3);
+    });
+  });
+
   describe("an outcome nobody knows", () => {
     /**
      * What `PublishService.recordUnknownOutcome` leaves behind: the adaptation

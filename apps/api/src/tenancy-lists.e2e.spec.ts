@@ -364,6 +364,39 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "brands/:brandId/publications",
+    identify: id,
+    rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Review this delivery.", channelIds: [channelId] })
+        .expect(201);
+      const adaptationId = item.body.adaptations[0].id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { eq } = await import("drizzle-orm");
+      const { db, pool } = createDb(url as string);
+      const [adaptation] = await db
+        .update(schema.adaptations)
+        .set({ status: "failed", failureReason: "platform_rejected" })
+        .where(eq(schema.adaptations.id, adaptationId))
+        .returning({ createdAt: schema.adaptations.createdAt });
+      await pool.end();
+      return {
+        id: adaptationId,
+        // Scheduled and published have separate positive branch tests in
+        // content.e2e; this seed exercises both tenant predicates here.
+        paths: [
+          `/api/brands/${brandId}/publications`,
+          `/api/brands/${brandId}/publications?filter=all`,
+          `/api/brands/${brandId}/publications?cursor=${encodeURIComponent(justAfter(adaptation?.createdAt.toISOString() as string))}`,
+        ],
+      };
+    },
+  },
+  {
     controller: "runs",
     identify: id,
     seed: async (agent) => {

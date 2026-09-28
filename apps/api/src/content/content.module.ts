@@ -8,6 +8,7 @@ import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
+import { PublicationOperationsController } from "./publication-operations.controller";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller } from "./refine.caller";
 
@@ -24,7 +25,7 @@ import { RefineCaller } from "./refine.caller";
  */
 @Module({
   imports: [AiCredentialsModule, MediaModule],
-  controllers: [ContentController],
+  controllers: [ContentController, PublicationOperationsController],
   providers: [
     ContentRepository,
     ContentCostRepository,

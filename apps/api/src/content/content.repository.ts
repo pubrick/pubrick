@@ -55,6 +55,8 @@ import {
   OUTSTANDING_ADAPTATION_STATUSES,
   PROMPT_ROLES,
   type PromptRole,
+  type PublicationOperationsPageDto,
+  type PublicationOperationsQuery,
   planRefineAccept,
   projectRichBody,
   type RefineAcceptPlan,
@@ -1208,6 +1210,94 @@ export class ContentRepository {
     private readonly media: MediaRepository,
     private readonly claimCorrector: ClaimCorrectionCaller,
   ) {}
+
+  /** Current per-channel operations, with the same receipt-derived verdict as item detail. */
+  async publicationOperations(
+    orgId: string,
+    brandId: string,
+    query: PublicationOperationsQuery,
+  ): Promise<PublicationOperationsPageDto> {
+    const cursor = query.cursor === undefined ? null : decodeContentCursor(query.cursor);
+    if (query.cursor !== undefined && cursor === null) {
+      throw badRequest("invalid_request", "Malformed publication cursor");
+    }
+    const outcome = ADAPTATION_COLUMNS.deliveryOutcome;
+    const filter =
+      query.filter === "needs_attention"
+        ? inArray(outcome, ["manual_ready", "failed", "unknown", "partial"] as DeliveryOutcome[])
+        : query.filter === "scheduled"
+          ? eq(outcome, "scheduled")
+          : query.filter === "published"
+            ? eq(outcome, "published")
+            : undefined;
+    const cursorAt = sql<string>`to_char(${schema.adaptations.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+    const rows = await db
+      .select({
+        id: schema.adaptations.id,
+        contentItemId: schema.adaptations.contentItemId,
+        title: schema.contentItems.title,
+        channelId: schema.channels.id,
+        channelName: schema.channels.name,
+        platform: schema.channels.platform,
+        deliveryOutcome: outcome,
+        failureReason: schema.adaptations.failureReason,
+        scheduledAt: schema.adaptations.scheduledAt,
+        publishedAt: sql<Date | null>`(
+          select p.created_at from publications p
+          where p.adaptation_id = adaptations.id and p.status = 'published'
+          order by p.created_at desc limit 1
+        )`,
+        externalUrl: ADAPTATION_COLUMNS.externalUrl,
+        assertedAt: ADAPTATION_COLUMNS.assertedAt,
+        assertedByName: ADAPTATION_COLUMNS.assertedByName,
+        createdAt: schema.adaptations.createdAt,
+        cursorAt,
+      })
+      .from(schema.adaptations)
+      .innerJoin(
+        schema.contentItems,
+        and(
+          eq(schema.contentItems.id, schema.adaptations.contentItemId),
+          eq(schema.contentItems.orgId, orgId),
+          eq(schema.contentItems.brandId, brandId),
+        ),
+      )
+      .innerJoin(
+        schema.channels,
+        and(
+          eq(schema.channels.id, schema.adaptations.channelId),
+          eq(schema.channels.orgId, orgId),
+          eq(schema.channels.brandId, brandId),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          filter,
+          cursor
+            ? sql`(${schema.adaptations.createdAt}, ${schema.adaptations.id}) < (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`
+            : undefined,
+        ),
+      )
+      .orderBy(desc(schema.adaptations.createdAt), desc(schema.adaptations.id))
+      .limit(query.limit + 1);
+    const page = rows.slice(0, query.limit);
+    const last = page.at(-1);
+    return {
+      rows: page.map(({ cursorAt: _cursorAt, ...row }) => ({
+        ...row,
+        scheduledAt: row.scheduledAt?.toISOString() ?? null,
+        // Raw sql<T> does not install a driver mapper: pg may return a string.
+        publishedAt: row.publishedAt ? new Date(row.publishedAt).toISOString() : null,
+        assertedAt: row.assertedAt ? new Date(row.assertedAt).toISOString() : null,
+        createdAt: row.createdAt.toISOString(),
+      })),
+      nextCursor:
+        rows.length > query.limit && last
+          ? encodeContentCursor({ createdAt: last.cursorAt, id: last.id })
+          : null,
+    };
+  }
 
   /**
    * One item's channel strip, IN THE ORDER THE CHANNELS WERE ADDED.

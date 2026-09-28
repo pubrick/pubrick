@@ -479,6 +479,29 @@ describe("Telegram review links", () => {
   });
 });
 
+describe("adaptation deep link", () => {
+  const originalScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+  afterEach(() => {
+    window.history.replaceState(null, "", window.location.pathname);
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  });
+
+  it("scrolls to the requested card after the async item loads", async () => {
+    window.history.replaceState(null, "", "#adaptation-a1");
+    const scroll = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scroll,
+    });
+    installBaseHandlers({ current: makeItem({ adaptations: [makeAdaptation()] }) }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await waitFor(() => expect(scroll).toHaveBeenCalledWith({ block: "start" }));
+    expect(document.getElementById("adaptation-a1")).toBeInTheDocument();
+  });
+});
+
 describe("editorial roles on content detail", () => {
   afterEach(() => {
     vi.mocked(authClient.useActiveOrganization).mockReturnValue({
