@@ -174,6 +174,7 @@ const ZONED_COLUMNS = [
   "news_sources.updated_at",
   "notification_digest_configs.updated_at",
   "notification_digest_snapshots.created_at",
+  "notification_events.attempted_at",
   "notification_events.created_at",
   "notification_events.updated_at",
   "notification_settings.updated_at",
@@ -355,6 +356,7 @@ const NON_ENUM_CHECKS = [
   "notification_events_event_check",
   "notification_digest_configs_hour_check",
   "notification_events_status_check",
+  "notification_events_reason_check",
   // Added with the comment sample after the historical seed; worker persistence e2e
   // proves the database rejects an off-list status on a populated story.
   "news_items_comments_status_check",
@@ -4502,6 +4504,60 @@ describe.skipIf(!url)("runMigrations", () => {
             proposed_title: null,
           },
         ]);
+      } finally {
+        await upgraded.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("0112 preserves populated notification history and enforces new reason writes without scanning it", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0112_sweet_stick");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let eventId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('notification_upgrade', 'Notification upgrade', 'notification-upgrade')",
+        );
+        const inserted = await old.query<{ id: string }>(
+          `INSERT INTO notification_events (org_id, event, subject_id, target_id, status)
+           VALUES ('notification_upgrade', 'draft_ready', gen_random_uuid(), gen_random_uuid(), 'failed')
+           RETURNING id`,
+        );
+        eventId = inserted.rows[0]?.id as string;
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+      const upgraded = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const preserved = await upgraded.query<{
+          status: string;
+          reason: string | null;
+          attempted_at: Date | null;
+        }>("SELECT status, reason, attempted_at FROM notification_events WHERE id = $1", [eventId]);
+        expect(preserved.rows).toEqual([{ status: "failed", reason: null, attempted_at: null }]);
+        const check = await upgraded.query<{ convalidated: boolean }>(
+          "SELECT convalidated FROM pg_constraint WHERE conname = 'notification_events_reason_check'",
+        );
+        expect(check.rows).toEqual([{ convalidated: false }]);
+        await upgraded.query(
+          "UPDATE notification_events SET reason = 'provider_rejected' WHERE id = $1",
+          [eventId],
+        );
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE notification_events SET reason = 'raw_provider_error' WHERE id = $1",
+            [eventId],
+          ),
+        ).toBe(CHECK_VIOLATION);
       } finally {
         await upgraded.end();
       }

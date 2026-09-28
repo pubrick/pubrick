@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { createDb, schema } from "@pubrick/db";
 import { encryptJson } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -16,7 +16,8 @@ describe.skipIf(!url)("notification outbox", () => {
   let enqueue: typeof import("./notifications.outbox").enqueueNotification;
   let orgId: string;
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-  let responseMode: "ok" | "reset" = "ok";
+  let responseMode: "ok" | "reset" | "reject" | "hold" = "ok";
+  let heldResponse: http.ServerResponse | null = null;
 
   beforeAll(async () => {
     server = http.createServer((req, res) => {
@@ -26,6 +27,15 @@ describe.skipIf(!url)("notification outbox", () => {
         requests.push({ path: req.url ?? "", body: JSON.parse(Buffer.concat(chunks).toString()) });
         if (responseMode === "reset") {
           req.socket.destroy();
+          return;
+        }
+        if (responseMode === "hold") {
+          heldResponse = res;
+          return;
+        }
+        if (responseMode === "reject") {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: false, description: "bad token 123:secret" }));
           return;
         }
         res.writeHead(200, { "content-type": "application/json" });
@@ -141,10 +151,16 @@ describe.skipIf(!url)("notification outbox", () => {
       )[0]?.status,
     ).toBe("draft");
     const [delivered] = await direct.db
-      .select({ status: schema.notificationEvents.status })
+      .select({
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+        attemptedAt: schema.notificationEvents.attemptedAt,
+      })
       .from(schema.notificationEvents)
       .where(eq(schema.notificationEvents.orgId, orgId));
     expect(delivered?.status).toBe("sent");
+    expect(delivered?.reason).toBeNull();
+    expect(delivered?.attemptedAt).toBeInstanceOf(Date);
   });
 
   it("builds review links only for a plain HTTPS origin", () => {
@@ -199,7 +215,10 @@ describe.skipIf(!url)("notification outbox", () => {
       await service.scan();
       expect(requests).toHaveLength(before);
       const [event] = await direct.db
-        .select({ status: schema.notificationEvents.status })
+        .select({
+          status: schema.notificationEvents.status,
+          reason: schema.notificationEvents.reason,
+        })
         .from(schema.notificationEvents)
         .where(
           and(
@@ -208,6 +227,7 @@ describe.skipIf(!url)("notification outbox", () => {
           ),
         );
       expect(event?.status).toBe("skipped");
+      expect(event?.reason).toBe("subject_unavailable");
     } finally {
       await direct.db.delete(schema.organization).where(eq(schema.organization.id, foreignOrg));
     }
@@ -228,10 +248,14 @@ describe.skipIf(!url)("notification outbox", () => {
     await service.scan();
     expect(requests).toHaveLength(1);
     const [event] = await direct.db
-      .select({ status: schema.notificationEvents.status })
+      .select({
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+      })
       .from(schema.notificationEvents)
       .where(eq(schema.notificationEvents.subjectId, first));
     expect(event?.status).toBe("skipped");
+    expect(event?.reason).toBe("destination_disabled");
   });
 
   it("keeps an interrupted send unconfirmed and never sends it again", async () => {
@@ -248,10 +272,65 @@ describe.skipIf(!url)("notification outbox", () => {
     await service.scan();
     expect(requests).toHaveLength(2);
     const [event] = await direct.db
-      .select({ status: schema.notificationEvents.status })
+      .select({
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+        attemptedAt: schema.notificationEvents.attemptedAt,
+      })
       .from(schema.notificationEvents)
       .where(eq(schema.notificationEvents.subjectId, subjectId));
     expect(event?.status).toBe("attempted");
+    expect(event?.reason).toBe("delivery_unconfirmed");
+    expect(event?.attemptedAt).toBeInstanceOf(Date);
+  });
+
+  it("records an explicit Telegram rejection without storing the response or resending", async () => {
+    responseMode = "reject";
+    const subjectId = crypto.randomUUID();
+    await direct.db.transaction((tx) =>
+      enqueue(tx, orgId, "delivery_failed", subjectId, crypto.randomUUID()),
+    );
+    const before = requests.length;
+    await service.scan();
+    await service.scan();
+    expect(requests).toHaveLength(before + 1);
+    const [event] = await direct.db
+      .select({
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+        attemptedAt: schema.notificationEvents.attemptedAt,
+      })
+      .from(schema.notificationEvents)
+      .where(eq(schema.notificationEvents.subjectId, subjectId));
+    expect(event).toMatchObject({ status: "failed", reason: "provider_rejected" });
+    expect(event?.attemptedAt).toBeInstanceOf(Date);
+    expect(JSON.stringify(event)).not.toContain("123:secret");
+  });
+
+  it("persists a truthful unconfirmed diagnosis before the provider responds", async () => {
+    responseMode = "hold";
+    const subjectId = crypto.randomUUID();
+    await direct.db.transaction((tx) =>
+      enqueue(tx, orgId, "delivery_unknown", subjectId, crypto.randomUUID()),
+    );
+    const before = requests.length;
+    const scanning = service.scan();
+    await vi.waitFor(() => expect(heldResponse).not.toBeNull());
+    const [claimed] = await direct.db
+      .select({
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+        attemptedAt: schema.notificationEvents.attemptedAt,
+      })
+      .from(schema.notificationEvents)
+      .where(eq(schema.notificationEvents.subjectId, subjectId));
+    expect(claimed).toMatchObject({ status: "attempted", reason: "delivery_unconfirmed" });
+    expect(claimed?.attemptedAt).toBeInstanceOf(Date);
+    heldResponse?.destroy();
+    heldResponse = null;
+    await scanning;
+    await service.scan();
+    expect(requests).toHaveLength(before + 1);
   });
 
   it("records a new alert when a later publication attempt fails", async () => {

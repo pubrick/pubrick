@@ -13,11 +13,20 @@ import { AppShell } from "@/components/app-shell";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
 import { api, errorMessage } from "@/lib/api";
 
 const FORM_ID = "notification-settings-form";
+const HISTORY_BADGE: Record<NotificationHistory["events"][number]["status"], StatusBadgeStatus> = {
+  pending: "scheduled",
+  attempted: "review",
+  sent: "published",
+  failed: "failed",
+  skipped: "draft",
+};
 
 export default function NotificationsPage() {
   const t = useTranslations("Notifications");
@@ -240,6 +249,7 @@ export default function NotificationsPage() {
               )}
               <label className="flex min-h-11 items-center gap-2 text-sm text-fg">
                 <input
+                  id="notification-enabled"
                   type="checkbox"
                   checked={settings.enabled}
                   onChange={(e) => setSettings({ ...settings, enabled: e.target.checked })}
@@ -385,7 +395,18 @@ export default function NotificationsPage() {
           </div>
           {history === null && !historyError ? <Skeleton lines={3} /> : null}
           {history?.events.length === 0 ? (
-            <p className="text-sm text-fg-secondary">{t("historyEmpty")}</p>
+            <EmptyState
+              title={t("historyEmpty")}
+              action={
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => document.getElementById("notification-enabled")?.focus()}
+                >
+                  {t("historyEmptyAction")}
+                </Button>
+              }
+            />
           ) : null}
           {history && history.events.length > 0 ? (
             <ol className="divide-y divide-border-soft border-y border-border-soft">
@@ -395,7 +416,9 @@ export default function NotificationsPage() {
                   className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3 text-sm"
                 >
                   <span className="font-medium text-fg">{t(`historyEvent_${event.event}`)}</span>
-                  <span className="text-fg-secondary">{t(`historyStatus_${event.status}`)}</span>
+                  <StatusBadge status={HISTORY_BADGE[event.status]}>
+                    {t(`historyStatus_${event.status}`)}
+                  </StatusBadge>
                   <div className="flex w-full flex-wrap gap-x-4 gap-y-1 text-xs text-fg-tertiary">
                     <span>
                       {t("historyQueued")}{" "}
@@ -406,6 +429,17 @@ export default function NotificationsPage() {
                         }).format(new Date(event.createdAt))}
                       </time>
                     </span>
+                    {event.attemptedAt ? (
+                      <span>
+                        {t("historyAttempted")}{" "}
+                        <time dateTime={event.attemptedAt}>
+                          {new Intl.DateTimeFormat(locale, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(event.attemptedAt))}
+                        </time>
+                      </span>
+                    ) : null}
                     {event.updatedAt !== event.createdAt ? (
                       <span>
                         {t("historyUpdated")}{" "}
@@ -418,6 +452,29 @@ export default function NotificationsPage() {
                       </span>
                     ) : null}
                   </div>
+                  {event.reason ? (
+                    <p className="w-full text-sm text-fg-secondary">
+                      {t(`historyReason_${event.reason}`)}
+                    </p>
+                  ) : event.status === "attempted" ? (
+                    <p className="w-full text-sm text-fg-secondary">
+                      {t("historyReason_delivery_unconfirmed")}
+                    </p>
+                  ) : event.status === "failed" || event.status === "skipped" ? (
+                    <p className="w-full text-sm text-fg-secondary">{t("historyReason_legacy")}</p>
+                  ) : null}
+                  {event.related ? (
+                    <Link
+                      href={`/${locale}/${event.related.kind === "post" ? "content" : "brands"}/${event.related.id}`}
+                      className="text-sm font-medium text-accent underline"
+                    >
+                      {t(event.related.kind === "post" ? "historyOpenPost" : "historyOpenBrand")}
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-fg-tertiary">
+                      {t("historyRecordUnavailable")}
+                    </span>
+                  )}
                 </li>
               ))}
             </ol>
