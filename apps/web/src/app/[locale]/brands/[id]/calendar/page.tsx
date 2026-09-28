@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
+import { EditorialPlaceholders } from "./editorial-placeholders";
 import { MemorableDates } from "./memorable-dates";
 
 type Channel = { id: string; name: string; platform: string };
@@ -97,6 +98,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [placeholderCounts, setPlaceholderCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
   const [aiAvailability, setAiAvailability] = useState<{ googleConfigured: boolean } | null>(null);
@@ -695,13 +697,16 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
             ))}
             {days.map((day) => {
               const key = dayKey(day);
-              const count = byDay.get(key)?.length ?? 0;
+              const count = (byDay.get(key)?.length ?? 0) + (placeholderCounts[key] ?? 0);
               const outside = day.getMonth() !== month.getMonth();
               return (
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setSelectedDay(key)}
+                  onClick={() => {
+                    setSelectedDay(key);
+                    if (outside) setMonth(monthStart(day));
+                  }}
                   aria-label={t("dayLabel", {
                     day: new Intl.DateTimeFormat(locale, { dateStyle: "full" }).format(day),
                     count,
@@ -824,6 +829,17 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           </div>
         )}
       </section>
+      <EditorialPlaceholders
+        brandId={brandId}
+        month={month}
+        selectedDay={selectedDay}
+        canEdit={canMutateCalendar}
+        onCountsChange={setPlaceholderCounts}
+        onNavigateDay={(date) => {
+          setSelectedDay(date);
+          setMonth(monthStart(new Date(`${date}T12:00`)));
+        }}
+      />
       <MemorableDates
         brandId={brandId}
         selectedDay={selectedDay}

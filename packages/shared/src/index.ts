@@ -58,6 +58,7 @@ export * from "./dto/content.js";
 export * from "./dto/content-images.js";
 export * from "./dto/draft-revision.js";
 export * from "./dto/editorial-notes.js";
+export * from "./dto/editorial-placeholders.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";
 export * from "./dto/media.js";
