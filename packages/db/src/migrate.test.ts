@@ -466,6 +466,10 @@ const NON_ENUM_CHECKS = [
   // 0033's late enum pins are exercised by the topic API and suggestion worker
   // e2e suites; this pre-0009 seed has no topic or request rows to update.
   "topics_origin_check",
+  // 0116 snapshots optional calendar/news inspiration. The worker repository
+  // e2e tests a malformed snapshot against the migrated database.
+  "topics_inspiration_kind_check",
+  "topics_inspiration_snapshot_check",
   "topic_suggestion_requests_status_check",
   "topic_suggestion_requests_error_code_check",
   // 0057 adds an origin pin; historical request rows receive the manual default.
