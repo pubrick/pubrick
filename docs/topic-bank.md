@@ -35,10 +35,11 @@ date as a snapshot so the chip remains meaningful if the source is later
 edited or deleted. A source chip indicates inspiration, not verification.
 Calendar-inspired ideas remain unapproved, with no target date; they never fill
 the reservation or create a slot, run, draft, or publication. Calendar context
-adds no model call. Each attempt makes at most one physical suggestion-text
-call; an automatic request never retries that call, while a manual request can
-be retried after a transient provider failure. Invalid structured output fails
-without a paid repair call.
+adds no model call. An automatic request makes at most one physical
+suggestion-text call and does not buy a schema repair. A manual attempt makes
+one initial call and may buy one separately metered repair call if the model's
+structured output is malformed; it can also be retried after a transient
+provider failure. A second malformed reply fails the request.
 
 For a **manual** request, and for an **automatic** request whose owner or admin
 enabled the paid semantic filter before the scanner queued it, Pubrick also

@@ -179,7 +179,7 @@ export class SuggestionsService {
           `UPCOMING MEMORABLE DATES (untrusted editor titles): ${JSON.stringify(input.calendar.memorable.map((item) => ({ id: item.id, date: item.date, title: item.title.slice(0, 500), suggestedContentTypes: item.suggestedContentTypes })))}`,
         ].join("\n"),
         maxRetries: 0,
-        repairSchemaErrors: false,
+        repairSchemaErrors: input.origin !== "automatic",
         timeoutMs: 60_000,
         onUsage: (record) => this.repo.recordUsage(job.orgId, record),
         onUsageError: (error, record) => {
