@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createDb, schema } from "@pubrick/db";
+import { notificationSummarySchema } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -141,6 +142,110 @@ describe.skipIf(!url)("notification settings repository", () => {
     await expect(repo.history(first, { cursor: foreign?.id as string })).rejects.toThrow(
       "Invalid notification history cursor",
     );
+  });
+
+  it("counts every safe event, status and reason inside one half-open UTC window", async () => {
+    const end = new Date("2030-01-31T12:00:00.000Z");
+    const start = new Date("2030-01-24T12:00:00.000Z");
+    const targetId = randomUUID();
+    const scenarios = [
+      ["draft_ready", "skipped", "destination_disabled"],
+      ["draft_ready", "skipped", "event_disabled"],
+      ["delivery_failed", "skipped", "subject_unavailable"],
+      ["delivery_failed", "failed", "origin_invalid"],
+      ["delivery_failed", "failed", "preflight_failed"],
+      ["delivery_unknown", "failed", "provider_rejected"],
+      ["delivery_unknown", "attempted", "delivery_unconfirmed"],
+      ["morning_digest", "pending", null],
+      ["morning_digest", "sent", null],
+    ] as const;
+    await direct.db.insert(schema.notificationEvents).values([
+      ...scenarios.map(([event, status, reason]) => ({
+        orgId: first,
+        event,
+        status,
+        reason,
+        subjectId: randomUUID(),
+        targetId,
+        createdAt: new Date("2030-01-27T12:00:00.000Z"),
+      })),
+      {
+        orgId: first,
+        event: "draft_ready",
+        status: "sent",
+        reason: null,
+        subjectId: randomUUID(),
+        targetId,
+        createdAt: start,
+      },
+      {
+        orgId: first,
+        event: "draft_ready",
+        status: "sent",
+        reason: null,
+        subjectId: randomUUID(),
+        targetId,
+        createdAt: end,
+      },
+      {
+        orgId: first,
+        event: "draft_ready",
+        status: "sent",
+        reason: null,
+        subjectId: randomUUID(),
+        targetId,
+        createdAt: new Date("2030-01-10T12:00:00.000Z"),
+      },
+      {
+        orgId: second,
+        event: "morning_digest",
+        status: "attempted",
+        reason: "delivery_unconfirmed",
+        subjectId: randomUUID(),
+        targetId,
+        createdAt: start,
+      },
+    ]);
+
+    const summary = await repo.summary(first, 7, end);
+    expect(summary).toEqual({
+      days: 7,
+      windowStart: start.toISOString(),
+      windowEnd: end.toISOString(),
+      total: 10,
+      byEvent: {
+        draft_ready: 3,
+        delivery_failed: 3,
+        delivery_unknown: 2,
+        morning_digest: 2,
+      },
+      byStatus: { pending: 1, attempted: 1, sent: 2, failed: 3, skipped: 3 },
+      byReason: {
+        destination_disabled: 1,
+        event_disabled: 1,
+        subject_unavailable: 1,
+        origin_invalid: 1,
+        preflight_failed: 1,
+        provider_rejected: 1,
+        delivery_unconfirmed: 1,
+      },
+      withoutReason: 3,
+    });
+    expect(notificationSummarySchema.parse(summary)).toEqual(summary);
+    expect(JSON.stringify(summary)).not.toContain(targetId);
+    expect(JSON.stringify(summary)).not.toContain("123:secret");
+    const thirty = await repo.summary(first, 30, end);
+    expect(thirty.total).toBe(11);
+    expect(thirty.windowStart).toBe("2030-01-01T12:00:00.000Z");
+    const other = await repo.summary(second, 7, end);
+    expect(other.total).toBe(1);
+    expect(other.byStatus.attempted).toBe(1);
+    const zero = await repo.summary(first, 7, new Date("2029-01-31T12:00:00.000Z"));
+    expect(zero.total).toBe(0);
+    expect(Object.values(zero.byEvent)).toEqual([0, 0, 0, 0]);
+    expect(Object.values(zero.byStatus)).toEqual([0, 0, 0, 0, 0]);
+    expect(Object.values(zero.byReason)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+    expect(zero.withoutReason).toBe(0);
   });
 
   it("returns only live, same-organization links and safe claim diagnostics", async () => {

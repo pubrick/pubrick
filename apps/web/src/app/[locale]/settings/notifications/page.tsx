@@ -2,19 +2,24 @@
 
 import {
   type ManualDigestResponse,
+  NOTIFICATION_DELIVERY_STATUSES,
+  NOTIFICATION_DIAGNOSTIC_REASONS,
+  NOTIFICATION_EVENTS,
   type NotificationHistory,
   type NotificationSettings,
+  type NotificationSummary,
   notificationSettingsUpdateSchema,
 } from "@pubrick/shared";
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge, type StatusBadgeStatus } from "@/components/ui/status-badge";
 import { api, errorMessage } from "@/lib/api";
@@ -42,6 +47,11 @@ export default function NotificationsPage() {
   const [history, setHistory] = useState<NotificationHistory | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [summaryDays, setSummaryDays] = useState<7 | 30>(7);
+  const [summary, setSummary] = useState<NotificationSummary | null>(null);
+  const [summaryBusy, setSummaryBusy] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const summaryVersion = useRef(0);
   const [savedDigests, setSavedDigests] = useState<
     Map<string, { timezone: string; localHour: number }>
   >(new Map());
@@ -65,6 +75,25 @@ export default function NotificationsPage() {
         setHistoryError(errorMessage(err, t("genericError"), te));
       } finally {
         setHistoryBusy(false);
+      }
+    },
+    [t, te],
+  );
+
+  const loadSummary = useCallback(
+    async (days: 7 | 30) => {
+      const current = ++summaryVersion.current;
+      setSummaryBusy(true);
+      setSummary(null);
+      setSummaryError(null);
+      try {
+        const loaded = await api<NotificationSummary>(`/api/notifications/summary?days=${days}`);
+        if (current === summaryVersion.current) setSummary(loaded);
+      } catch (err) {
+        if (current === summaryVersion.current)
+          setSummaryError(errorMessage(err, t("summaryError"), te));
+      } finally {
+        if (current === summaryVersion.current) setSummaryBusy(false);
       }
     },
     [t, te],
@@ -96,6 +125,12 @@ export default function NotificationsPage() {
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+  useEffect(() => {
+    void loadSummary(summaryDays);
+    return () => {
+      ++summaryVersion.current;
+    };
+  }, [loadSummary, summaryDays]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -184,6 +219,7 @@ export default function NotificationsPage() {
       );
       setNotice(t(`digestSend_${result.status}`));
       await loadHistory();
+      await loadSummary(summaryDays);
     } catch (err) {
       setError(errorMessage(err, t("genericError"), te));
     } finally {
@@ -381,6 +417,92 @@ export default function NotificationsPage() {
             <p role="status" className="mt-3 text-sm text-fg-secondary">
               {notice}
             </p>
+          )}
+        </Card>
+        <Card>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-fg">{t("summaryTitle")}</h2>
+            <Segmented
+              options={[
+                { value: "7", label: t("summary7") },
+                { value: "30", label: t("summary30") },
+              ]}
+              value={String(summaryDays)}
+              onChange={(value) => setSummaryDays(value === "30" ? 30 : 7)}
+            />
+          </div>
+          <p className="mb-4 text-sm text-fg-secondary">{t("summaryHint")}</p>
+          {summaryBusy && !summary ? <Skeleton lines={3} /> : null}
+          {summaryError && (
+            <div role="alert" className="text-sm text-danger">
+              {summaryError}{" "}
+              <Button variant="ghost" size="sm" onClick={() => void loadSummary(summaryDays)}>
+                {t("retry")}
+              </Button>
+            </div>
+          )}
+          {summary?.total === 0 && (
+            <EmptyState
+              title={t("summaryEmpty")}
+              action={<p className="text-sm text-fg-tertiary">{t("summaryEmptyHint")}</p>}
+              className="py-6"
+            />
+          )}
+          {summary && summary.total > 0 && (
+            <div className="space-y-4">
+              <p className="text-sm text-fg-secondary">
+                <strong className="text-2xl font-semibold text-fg">{summary.total}</strong>{" "}
+                {t("summaryTotal")}
+              </p>
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                {NOTIFICATION_DELIVERY_STATUSES.map((status) => (
+                  <div key={status}>
+                    <dt>
+                      <StatusBadge status={HISTORY_BADGE[status]}>
+                        {t(`historyStatus_${status}`)}
+                      </StatusBadge>
+                    </dt>
+                    <dd className="mt-1 text-lg font-semibold text-fg">
+                      {summary.byStatus[status]}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="text-sm text-fg-secondary">{t("summaryAttemptedHint")}</p>
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-fg">{t("summaryEvents")}</h3>
+                <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                  {NOTIFICATION_EVENTS.map((event) => (
+                    <div key={event} className="rounded-control bg-bg-sunken p-2">
+                      <dt className="text-fg-secondary">{t(`historyEvent_${event}`)}</dt>
+                      <dd className="font-semibold text-fg">{summary.byEvent[event]}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+              {(NOTIFICATION_DIAGNOSTIC_REASONS.some((reason) => summary.byReason[reason] > 0) ||
+                summary.withoutReason > 0) && (
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-fg">{t("summaryReasons")}</h3>
+                  <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">
+                    {NOTIFICATION_DIAGNOSTIC_REASONS.filter(
+                      (reason) => summary.byReason[reason] > 0,
+                    ).map((reason) => (
+                      <div key={reason} className="flex justify-between gap-2">
+                        <dt className="text-fg-secondary">{t(`summaryReason_${reason}`)}</dt>
+                        <dd className="font-semibold text-fg">{summary.byReason[reason]}</dd>
+                      </div>
+                    ))}
+                    {summary.withoutReason > 0 && (
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-fg-secondary">{t("summaryReason_none")}</dt>
+                        <dd className="font-semibold text-fg">{summary.withoutReason}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </div>
+              )}
+            </div>
           )}
         </Card>
         <Card>

@@ -10,11 +10,15 @@ import {
   decryptJson,
   encryptJson,
   type ManualDigestResponse,
+  NOTIFICATION_DELIVERY_STATUSES,
+  NOTIFICATION_DIAGNOSTIC_REASONS,
+  NOTIFICATION_EVENTS,
   type NotificationHistory,
   type NotificationHistoryQuery,
   type NotificationSettingsUpdate,
+  type NotificationSummary,
 } from "@pubrick/shared";
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
@@ -22,6 +26,60 @@ import { QueueService } from "../queue/queue.service";
 @Injectable()
 export class NotificationsRepository {
   constructor(private readonly queue: QueueService) {}
+
+  /** One bounded, half-open UTC window over queued notification events. */
+  async summary(orgId: string, days: 7 | 30, now = new Date()): Promise<NotificationSummary> {
+    const windowEnd = new Date(now.getTime());
+    const windowStart = new Date(windowEnd.getTime() - days * 24 * 60 * 60 * 1000);
+    const groups = await db
+      .select({
+        event: schema.notificationEvents.event,
+        status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(schema.notificationEvents)
+      .where(
+        and(
+          eq(schema.notificationEvents.orgId, orgId),
+          gte(schema.notificationEvents.createdAt, windowStart),
+          lt(schema.notificationEvents.createdAt, windowEnd),
+        ),
+      )
+      .groupBy(
+        schema.notificationEvents.event,
+        schema.notificationEvents.status,
+        schema.notificationEvents.reason,
+      );
+    const byEvent = Object.fromEntries(
+      NOTIFICATION_EVENTS.map((event) => [event, 0]),
+    ) as NotificationSummary["byEvent"];
+    const byStatus = Object.fromEntries(
+      NOTIFICATION_DELIVERY_STATUSES.map((status) => [status, 0]),
+    ) as NotificationSummary["byStatus"];
+    const byReason = Object.fromEntries(
+      NOTIFICATION_DIAGNOSTIC_REASONS.map((reason) => [reason, 0]),
+    ) as NotificationSummary["byReason"];
+    let total = 0;
+    let withoutReason = 0;
+    for (const row of groups) {
+      total += row.count;
+      byEvent[row.event] += row.count;
+      byStatus[row.status] += row.count;
+      if (row.reason === null) withoutReason += row.count;
+      else byReason[row.reason] += row.count;
+    }
+    return {
+      days,
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      total,
+      byEvent,
+      byStatus,
+      byReason,
+      withoutReason,
+    };
+  }
 
   /** Snapshot admission is serialized on the brand's digest config row. */
   async sendDigest(orgId: string, brandId: string): Promise<ManualDigestResponse> {

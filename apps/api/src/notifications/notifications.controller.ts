@@ -12,8 +12,10 @@ import {
 import {
   type NotificationHistoryQuery,
   type NotificationSettingsUpdate,
+  type NotificationSummaryQuery,
   notificationHistoryQuerySchema,
   notificationSettingsUpdateSchema,
+  notificationSummaryQuerySchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
@@ -38,6 +40,14 @@ export class NotificationsController {
     @Query(new ZodValidationPipe(notificationHistoryQuerySchema)) query: NotificationHistoryQuery,
   ) {
     return this.notifications.history(orgId, query);
+  }
+
+  @Get("summary")
+  summary(
+    @OrgId() orgId: string,
+    @Query(new ZodValidationPipe(notificationSummaryQuerySchema)) query: NotificationSummaryQuery,
+  ) {
+    return this.notifications.summary(orgId, query.days);
   }
 
   @Put()
