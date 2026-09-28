@@ -896,6 +896,79 @@ describe("watched sources page", () => {
     ).toBe(false);
   });
 
+  it("does not pair a ready private aggregate with replies from another sample", async () => {
+    const analysisVersion = "e6551613-aa43-420e-a277-9a3aefb7d7e8";
+    const privateSample = {
+      sampleVersion: "a019c7ab-8aa6-477e-80c8-63a14b914ff7",
+      comments: [
+        {
+          id: "9c47f844-a184-443f-9932-b9b522a03d68",
+          body: "Older member reply",
+          publishedAt: "2026-09-23T12:00:00.000Z",
+        },
+      ],
+    };
+    install(
+      [
+        {
+          id: ITEM_ID,
+          brandId: BRAND_ID,
+          sourceId: SOURCE_ID,
+          title: "Member story",
+          summary: "Member story",
+          url: "https://t.me/c/123456/1",
+          publishedAt: null,
+          commentsStatus: "available",
+          commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+          commentsErrorCode: null,
+          createdAt: "2026-09-23T12:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: SOURCE_ID,
+          kind: "telegram_private",
+          isActive: true,
+          name: "Joined channel",
+          url: "https://t.me/c/123456",
+        },
+      ],
+      {
+        status: "ready",
+        current: { status: "ready", sampleVersion: analysisVersion, collectionStatus: "available" },
+        sampleSize: 1,
+        analyzedAt: "2026-09-23T12:00:00.000Z",
+        result: {
+          summary: "New sample aggregate",
+          sentiment: { positive: 0, neutral: 1, negative: 0 },
+          themes: [],
+          feedback: [],
+        },
+      },
+      [],
+      privateSample,
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(await dialog.findByText("Older member reply")).toBeInTheDocument();
+    expect(await dialog.findByText(en.Sources.privateAnalysisSampleChanged)).toBeInTheDocument();
+    expect(dialog.queryByText("New sample aggregate")).not.toBeInTheDocument();
+    privateSample.sampleVersion = analysisVersion;
+    privateSample.comments = [
+      {
+        id: "9c47f844-a184-443f-9932-b9b522a03d68",
+        body: "Current member reply",
+        publishedAt: "2026-09-23T12:00:00.000Z",
+      },
+    ];
+    await user.click(dialog.getByRole("button", { name: en.Sources.privateAnalysisRefresh }));
+    expect(await dialog.findByText("Current member reply")).toBeInTheDocument();
+    expect(await dialog.findByText("New sample aggregate")).toBeInTheDocument();
+    expect(dialog.queryByText(en.Sources.privateAnalysisSampleChanged)).not.toBeInTheDocument();
+  });
+
   it("starts a source run with the article summary, URL, and explicitly chosen channel", async () => {
     const item = {
       id: ITEM_ID,

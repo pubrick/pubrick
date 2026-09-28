@@ -1331,36 +1331,32 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               {analysisError}
             </p>
           )}
-          {privateComments &&
-            comments !== null &&
-            commentAnalysis &&
-            ["not_analyzed", "stale"].includes(
-              commentAnalysis.current?.status ?? commentAnalysis.status,
-            ) &&
-            !privateSampleMatches && (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <p role="status" className="text-sm text-fg-secondary">
-                  {t("privateAnalysisSampleChanged")}
-                </p>
-                {activeCommentsItem && (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => {
-                      loadComments(activeCommentsItem.id);
-                      loadCommentAnalysis(activeCommentsItem.id);
-                    }}
-                  >
-                    {t("privateAnalysisRefresh")}
-                  </Button>
-                )}
-              </div>
-            )}
-          {!commentAnalysis ? (
+          {privateComments && comments !== null && commentAnalysis && !privateSampleMatches && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p role="status" className="text-sm text-fg-secondary">
+                {t("privateAnalysisSampleChanged")}
+              </p>
+              {activeCommentsItem && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    loadComments(activeCommentsItem.id);
+                    loadCommentAnalysis(activeCommentsItem.id);
+                  }}
+                >
+                  {t("privateAnalysisRefresh")}
+                </Button>
+              )}
+            </div>
+          )}
+          {!commentAnalysis || (privateComments && comments === null) ? (
             <Skeleton lines={2} />
           ) : commentAnalysis.status === "ready" &&
             (commentAnalysis.current?.status ?? commentAnalysis.status) === "ready" ? (
-            analysisResult(commentAnalysis)
+            privateComments && !privateSampleMatches ? null : (
+              analysisResult(commentAnalysis)
+            )
           ) : (
             <p role="status" className="mt-2 text-sm text-fg-secondary">
               {t(`analysis_${commentAnalysis.current?.status ?? commentAnalysis.status}`)}
@@ -1368,6 +1364,7 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
           )}
           {commentAnalysis?.current?.collectionStatus &&
             ["error", "failed", "unavailable"].includes(commentAnalysis.current.collectionStatus) &&
+            privateSampleMatches &&
             commentAnalysis.current.status === "ready" && (
               <p className="mt-2 text-sm text-fg-secondary">{t("analysisCollectionFailed")}</p>
             )}
