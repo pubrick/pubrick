@@ -155,6 +155,54 @@ describe("selecting a brand loads its channels (Step 1)", () => {
     expect(screen.queryByLabelText(/Main channel/)).not.toBeInTheDocument();
     expect(calls.some((c) => c.path === `/api/channels?brandId=${B2}`)).toBe(true);
   });
+
+  it("hides the old brand's selected channels while the new brand loads", async () => {
+    const calls: Call[] = [];
+    let finishWidgets!: (channels: Channel[]) => void;
+    const pendingWidgets = new Promise<Channel[]>((resolve) => {
+      finishWidgets = resolve;
+    });
+    installHandlers(calls, (path) =>
+      path === `/api/channels?brandId=${B2}` ? pendingWidgets : undefined,
+    );
+
+    render(<NewContentPage />);
+    const brandSelect = screen.getByLabelText(en.ContentNew.brand);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(brandSelect, B1);
+    await user.click(await screen.findByLabelText(/Main channel/));
+
+    await user.selectOptions(brandSelect, B2);
+    expect(screen.queryByLabelText(/Main channel/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/VK group/)).not.toBeInTheDocument();
+
+    await act(async () => finishWidgets(widgetsChannels));
+    expect(await screen.findByLabelText(/Dzen blog/)).not.toBeChecked();
+  });
+
+  it("ignores a previous brand's response when it arrives after the current brand", async () => {
+    const calls: Call[] = [];
+    let finishAcme!: (channels: Channel[]) => void;
+    const pendingAcme = new Promise<Channel[]>((resolve) => {
+      finishAcme = resolve;
+    });
+    installHandlers(calls, (path) =>
+      path === `/api/channels?brandId=${B1}` ? pendingAcme : undefined,
+    );
+
+    render(<NewContentPage />);
+    const brandSelect = screen.getByLabelText(en.ContentNew.brand);
+    await screen.findByRole("option", { name: "Acme" });
+    const user = userEvent.setup();
+    await user.selectOptions(brandSelect, B1);
+    await user.selectOptions(brandSelect, B2);
+    expect(await screen.findByLabelText(/Dzen blog/)).toBeInTheDocument();
+
+    await act(async () => finishAcme(acmeChannels));
+    expect(screen.getByLabelText(/Dzen blog/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Main channel/)).not.toBeInTheDocument();
+  });
 });
 
 describe("character counter (Step 1)", () => {
