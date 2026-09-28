@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/Logo";
@@ -72,6 +72,8 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
   const tLanding = useTranslations("Landing");
   const locale = useLocale();
   const pathname = usePathname();
+  const queryString = useSearchParams().toString();
+  const returnPath = queryString ? `${pathname}?${queryString}` : pathname;
   const router = useRouter();
   const signOut = useSignOut();
   const { data: session, isPending, refetch } = authClient.useSession();
@@ -129,9 +131,9 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
         left.current = true;
         setExpired(true);
         void refetch();
-        router.replace(loginHref(locale, pathname));
+        router.replace(loginHref(locale, returnPath));
       }),
-    [refetch, router, locale, pathname],
+    [refetch, router, locale, returnPath],
   );
 
   useEffect(() => {
@@ -147,7 +149,7 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
     }
     if (isPending) return;
     if (confirmedSignedOut) {
-      router.replace(loginHref(locale, pathname));
+      router.replace(loginHref(locale, returnPath));
       return;
     }
     if (confirming.current) return;
@@ -158,7 +160,7 @@ export function AppShell({ title, primaryAction, search, children }: AppShellPro
       confirming.current = false;
       setConfirmedSignedOut(true);
     });
-  }, [expired, session, isPending, confirmedSignedOut, refetch, router, locale, pathname]);
+  }, [expired, session, isPending, confirmedSignedOut, refetch, router, locale, returnPath]);
 
   const destinations: { key: NavKey; href: string }[] = [
     { key: "queue", href: `/${locale}/content` },

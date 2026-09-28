@@ -111,6 +111,18 @@ describe("AppShell auth guard", () => {
     );
   });
 
+  it("keeps a Telegram review intent through login", async () => {
+    navigationState.pathname = "/en/content/draft-1";
+    navigationState.searchParams = new URLSearchParams("intent=publish");
+    render(<AppShell title="Draft">draft body</AppShell>);
+
+    await waitFor(() =>
+      expect(routerMock.replace).toHaveBeenCalledWith(
+        "/en/login?next=%2Fen%2Fcontent%2Fdraft-1%3Fintent%3Dpublish",
+      ),
+    );
+  });
+
   it("does not mistake a session that is still loading for a signed-out one", async () => {
     // The first render of every page looks like this. Redirecting here would
     // bounce a perfectly signed-in user to the login screen on every cold load.
@@ -255,6 +267,19 @@ describe("AppShell when the session dies under a poll", () => {
 
     await waitFor(() =>
       expect(routerMock.replace).toHaveBeenCalledWith("/en/login?next=%2Fen%2Fcontent"),
+    );
+  });
+
+  it("keeps the current query when an API request reports an expired session", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=review");
+    respondWith(401, "You're signed out. Log in again to continue.");
+
+    render(<PollingScreen />);
+
+    await waitFor(() =>
+      expect(routerMock.replace).toHaveBeenCalledWith(
+        "/en/login?next=%2Fen%2Fcontent%3Fintent%3Dreview",
+      ),
     );
   });
 
