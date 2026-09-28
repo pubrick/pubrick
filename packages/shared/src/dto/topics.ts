@@ -134,6 +134,30 @@ export const topicDtoSchema = z.object({
 });
 export type TopicDto = z.infer<typeof topicDtoSchema>;
 
+const topicMetricTotalSchema = z.object({
+  total: z.number().int().nonnegative(),
+  posts: z.number().int().nonnegative(),
+});
+
+/** Observed outcomes linked to a topic's runs and still-live drafts/adaptations. */
+export const topicOutcomeDtoSchema = z.object({
+  topicId: z.string().uuid(),
+  runCount: z.number().int().nonnegative(),
+  draftCount: z.number().int().nonnegative(),
+  publishedDraftCount: z.number().int().nonnegative(),
+  vk: z.object({
+    publishedPosts: z.number().int().nonnegative(),
+    checkedPosts: z.number().int().nonnegative(),
+    views: topicMetricTotalSchema,
+    likes: topicMetricTotalSchema,
+    comments: topicMetricTotalSchema,
+    shares: topicMetricTotalSchema,
+    latestCheckedAt: z.iso.datetime().nullable(),
+  }),
+});
+export const topicOutcomesDtoSchema = z.array(topicOutcomeDtoSchema);
+export type TopicOutcomeDto = z.infer<typeof topicOutcomeDtoSchema>;
+
 export const topicSuggestionRequestDtoSchema = z.object({
   id: z.string().uuid(),
   brandId: z.string().uuid(),

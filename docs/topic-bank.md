@@ -56,6 +56,22 @@ multiple runs.
 Editing an approved topic returns it to **Idea**, so its new text needs a fresh
 approval.
 
+The topic list also shows observed results for its latest 200 topics: linked
+generation runs, surviving drafts, and distinct drafts with at least one
+published delivery. A draft sent to several channels is counted once in the
+published-draft figure. Available VK observations show the number of published
+VK posts checked, the count of posts with each reported counter, and the latest
+check time. A missing counter means **unknown**, not zero; partial coverage
+does not represent every publication. This is a read of saved receipts, not a
+new VK request or an AI rating of the topic. Results do not influence topic
+suggestions or automatically start another run.
+
+The attribution follows surviving links from topic to run, draft, and live
+publication adaptation. Deleting a topic removes it from this view; deleting a
+draft or channel may leave historical receipts that can no longer be attributed
+to that topic. These counts therefore describe observable records, not a
+complete lifetime performance report.
+
 Use **Block** in a topic's More menu to archive it with a required reason and
 time. A blocked topic cannot be edited, approved, deleted, or used for a new
 run. An unstarted calendar slot linked to the old topic revision fails as

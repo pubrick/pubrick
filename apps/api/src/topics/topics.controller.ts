@@ -42,6 +42,11 @@ export class TopicsController {
     return this.topics.list(orgId, brandId);
   }
 
+  @Get("outcomes")
+  outcomes(@OrgId() orgId: string, @Query("brandId", ParseUUIDPipe) brandId: string) {
+    return this.topics.outcomes(orgId, brandId);
+  }
+
   @Post()
   @EditorialCapability("author")
   @BrandScope({ kind: "brand", source: "body" })
