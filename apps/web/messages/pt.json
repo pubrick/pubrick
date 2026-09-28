@@ -215,6 +215,7 @@
     "refreshQueued": "A verificação entrou na fila. Novos artigos aparecerão em breve.",
     "refreshRecent": "Esta fonte foi consultada ou colocada na fila recentemente. Tente novamente em alguns minutos.",
     "news": "Notícias recentes",
+    "similarStory": "Possível notícia semelhante:",
     "viewLabel": "Vista de notícias",
     "viewActive": "Notícias atuais",
     "viewDismissed": "Notícias dispensadas",

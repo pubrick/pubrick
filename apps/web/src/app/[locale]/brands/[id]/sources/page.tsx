@@ -1098,6 +1098,19 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                     {item.relevanceUrgency && <span>{t(item.relevanceUrgency)}</span>}
                   </span>
                   {item.relevanceReason && <span className="block">{item.relevanceReason}</span>}
+                  {item.similarStory && (
+                    <span className="block">
+                      {t("similarStory")}{" "}
+                      <a
+                        href={item.similarStory.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        {item.similarStory.title}
+                      </a>
+                    </span>
+                  )}
                   {item.relevanceErrorCode && (
                     <span className="block">{t(item.relevanceErrorCode)}</span>
                   )}

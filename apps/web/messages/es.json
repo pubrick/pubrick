@@ -215,6 +215,7 @@
     "refreshQueued": "La revisión está en cola. Los artículos nuevos aparecerán pronto.",
     "refreshRecent": "Esta fuente se revisó o puso en cola hace poco. Inténtalo de nuevo en unos minutos.",
     "news": "Noticias recientes",
+    "similarStory": "Posible noticia similar:",
     "viewLabel": "Vista de noticias",
     "viewActive": "Noticias actuales",
     "viewDismissed": "Noticias descartadas",

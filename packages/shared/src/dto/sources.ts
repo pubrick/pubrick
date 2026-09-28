@@ -178,6 +178,15 @@ export const newsItemDtoSchema = z.object({
   relevanceUrgency: z.enum(["breaking", "timely", "evergreen"]).nullable(),
   relevanceErrorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
   relevanceScoredAt: z.string().nullable(),
+  /** Advisory only, computed from compatible vectors on this returned page. */
+  similarStory: z
+    .object({
+      id: z.string().uuid(),
+      title: z.string(),
+      url: z.string().url(),
+      distance: z.number().min(0).max(0.15),
+    })
+    .nullable(),
 });
 export type NewsItemDto = z.infer<typeof newsItemDtoSchema>;
 

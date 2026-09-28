@@ -43,6 +43,16 @@ Opposing matches cancel; unrelated marks have no effect. **Sort by relevance** a
 use the ranking score. The API returns both `relevanceScore` (the raw AI score)
 and `rankScore` with `feedbackDelta` so the adjustment is inspectable. When
 feedback applies, the app shows the ranking score beside the raw AI badge.
+
+Recent stories can also show a **Possible similar story** link. This is an
+advisory comparison of existing 768-dimensional embeddings with the same model
+and dimensions; it makes no new AI call. A cosine distance of at most 0.15
+links to the closest earlier story, breaking ties by creation time and ID.
+Only the current returned page of up to 100 stories is compared, after the
+chosen filters. No hint therefore does not establish uniqueness across all
+stories. Similarity never merges, hides, dismisses, or changes a story or its
+editor feedback; both URLs and all existing actions stay available.
+
 Changing a mark affects future scores immediately. To apply saved feedback to
 already scored articles, choose **Update rankings**. Each request checks up to
 50 scored stories from the last 30 days; choose **Continue updating rankings**

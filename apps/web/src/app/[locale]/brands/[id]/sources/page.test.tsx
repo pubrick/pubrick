@@ -146,6 +146,43 @@ describe("watched sources page", () => {
     },
   );
 
+  it("shows a possible similar story as an ordinary link without changing editor actions", async () => {
+    const similarUrl = "https://example.com/earlier-story";
+    install([
+      {
+        id: ITEM_ID,
+        brandId: BRAND_ID,
+        sourceId: SOURCE_ID,
+        title: "Current story",
+        summary: "Summary",
+        url: "https://example.com/current-story",
+        publishedAt: null,
+        createdAt: "2026-09-23T12:00:00.000Z",
+        relevanceStatus: "unscored",
+        relevanceScore: null,
+        rankScore: null,
+        feedbackDelta: 0,
+        relevanceReason: null,
+        relevanceUrgency: null,
+        relevanceErrorCode: null,
+        relevanceScoredAt: null,
+        editorSignal: null,
+        dismissedAt: null,
+        similarStory: {
+          id: "39cd1b94-1497-411d-a44e-a165970bda38",
+          title: "Earlier story",
+          url: similarUrl,
+          distance: 0.05,
+        },
+      },
+    ]);
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText(en.Sources.similarStory)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Earlier story" })).toHaveAttribute("href", similarUrl);
+    expect(screen.getByRole("button", { name: en.Sources.createDraft })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Sources.more })).toBeInTheDocument();
+  });
+
   it("server-renders the dismissed URL state without accessing window", () => {
     navigationState.searchParams = new URLSearchParams("news_view=dismissed");
     const browserWindow = window;

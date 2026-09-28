@@ -66,6 +66,67 @@ const ITEM_COLUMNS = {
   relevanceScoredAt: schema.newsItems.relevanceScoredAt,
 };
 
+const SIMILAR_STORY_DISTANCE = 0.15;
+
+/** A read-only hint among the items already returned on this bounded page. */
+function similarStoryHints(
+  rows: Array<{
+    id: string;
+    title: string;
+    url: string;
+    createdAt: Date;
+    embedding: number[] | null;
+    embeddingModel: string | null;
+    embeddingDimensions: number | null;
+  }>,
+) {
+  const ordered = [...rows].sort(
+    (a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+  );
+  const comparable = ordered.map((row) => {
+    const vector = row.embedding;
+    const norm =
+      vector?.length === 768 && row.embeddingDimensions === 768 && row.embeddingModel
+        ? Math.hypot(...vector)
+        : 0;
+    return { row, vector, norm: Number.isFinite(norm) && norm > 0 ? norm : 0 };
+  });
+  const hints = new Map<string, { id: string; title: string; url: string; distance: number }>();
+  for (let index = 0; index < comparable.length; index += 1) {
+    const item = comparable[index];
+    if (!item?.norm || !item.vector) continue;
+    let best: { id: string; title: string; url: string; distance: number } | null = null;
+    for (let previous = 0; previous < index; previous += 1) {
+      const candidate = comparable[previous];
+      if (
+        !candidate?.norm ||
+        !candidate.vector ||
+        candidate.row.embeddingModel !== item.row.embeddingModel ||
+        candidate.row.embeddingDimensions !== item.row.embeddingDimensions
+      )
+        continue;
+      let dot = 0;
+      for (let dimension = 0; dimension < 768; dimension += 1) {
+        dot += (item.vector[dimension] ?? 0) * (candidate.vector[dimension] ?? 0);
+      }
+      const distance = Math.max(0, Math.min(2, 1 - dot / (item.norm * candidate.norm)));
+      if (!Number.isFinite(distance) || distance > SIMILAR_STORY_DISTANCE) continue;
+      // Earlier rows are in stable time/ID order, so equal distances keep the
+      // earliest representative while a strictly closer match can replace it.
+      if (!best || distance < best.distance) {
+        best = {
+          id: candidate.row.id,
+          title: candidate.row.title,
+          url: candidate.row.url,
+          distance,
+        };
+      }
+    }
+    if (best) hints.set(item.row.id, best);
+  }
+  return hints;
+}
+
 @Injectable()
 export class SourcesRepository {
   constructor(
@@ -340,8 +401,13 @@ export class SourcesRepository {
 
   async items(orgId: string, query: NewsItemListQuery) {
     await this.requireBrand(orgId, query.brandId);
-    return db
-      .select(ITEM_COLUMNS)
+    const rows = await db
+      .select({
+        ...ITEM_COLUMNS,
+        embedding: schema.newsItems.embedding,
+        embeddingModel: schema.newsItems.embeddingModel,
+        embeddingDimensions: schema.newsItems.embeddingDimensions,
+      })
       .from(schema.newsItems)
       .where(
         and(
@@ -370,6 +436,18 @@ export class SourcesRepository {
         desc(schema.newsItems.id),
       )
       .limit(100);
+    const hints = similarStoryHints(rows);
+    return rows.map(
+      ({
+        embedding: _embedding,
+        embeddingModel: _model,
+        embeddingDimensions: _dimensions,
+        ...item
+      }) => ({
+        ...item,
+        similarStory: hints.get(item.id) ?? null,
+      }),
+    );
   }
 
   private async setDismissed(orgId: string, brandId: string, id: string, dismiss: boolean) {

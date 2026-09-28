@@ -854,6 +854,227 @@ describe.skipIf(!url)("watched sources e2e", () => {
     ).toHaveLength(0);
   });
 
+  it("suggests only compatible earlier stories on the filtered brand page without changing them", async () => {
+    const { agent: owner, orgId } = await orgAgent();
+    const { agent: outsider, orgId: outsiderOrgId } = await orgAgent();
+    const brand = await owner.post("/api/brands").send({ name: "Similar news" }).expect(201);
+    const otherBrand = await owner.post("/api/brands").send({ name: "Other news" }).expect(201);
+    const outsideBrand = await outsider
+      .post("/api/brands")
+      .send({ name: "Outside news" })
+      .expect(201);
+    const source = await owner
+      .post("/api/sources")
+      .send({
+        brandId: brand.body.id,
+        name: "News",
+        url: "https://example.com/similar.xml",
+      })
+      .expect(201);
+    const otherSource = await owner
+      .post("/api/sources")
+      .send({
+        brandId: otherBrand.body.id,
+        name: "Other",
+        url: "https://example.com/other-similar.xml",
+      })
+      .expect(201);
+    const outsideSource = await outsider
+      .post("/api/sources")
+      .send({
+        brandId: outsideBrand.body.id,
+        name: "Outside",
+        url: "https://example.com/outside.xml",
+      })
+      .expect(201);
+    const db = (await import("../db")).db;
+    const vector = (x: number, y: number) => [x, y, ...Array(766).fill(0)] as number[];
+    const base = {
+      orgId,
+      brandId: brand.body.id,
+      sourceId: source.body.id,
+      embeddingModel: "gemini-embedding-001",
+      embeddingDimensions: 768,
+    };
+    const createdAt = (day: number) =>
+      new Date(`2026-09-${String(day).padStart(2, "0")}T00:00:00Z`);
+    const [
+      first,
+      second,
+      near,
+      target,
+      closest,
+      outsideThreshold,
+      differentModel,
+      noVector,
+      zero,
+      dismissed,
+    ] = await db
+      .insert(schema.newsItems)
+      .values([
+        {
+          ...base,
+          title: "First",
+          url: "https://example.com/first-similar",
+          createdAt: createdAt(1),
+          embedding: vector(1, 0),
+          editorSignal: "relevant",
+        },
+        {
+          ...base,
+          title: "Second",
+          url: "https://example.com/second-similar",
+          createdAt: createdAt(2),
+          embedding: vector(1, 0),
+        },
+        {
+          ...base,
+          title: "Near",
+          url: "https://example.com/near-similar",
+          createdAt: createdAt(3),
+          embedding: vector(0.9, Math.sqrt(0.19)),
+        },
+        {
+          ...base,
+          title: "Target",
+          url: "https://example.com/target-similar",
+          createdAt: createdAt(4),
+          embedding: vector(1, 0),
+        },
+        {
+          ...base,
+          title: "Closest",
+          url: "https://example.com/closest-similar",
+          createdAt: new Date("2026-09-04T12:00:00Z"),
+          embedding: vector(0.9, Math.sqrt(0.19)),
+        },
+        {
+          ...base,
+          title: "Outside threshold",
+          url: "https://example.com/far-similar",
+          createdAt: createdAt(5),
+          embedding: vector(0, 1),
+        },
+        {
+          ...base,
+          title: "Different model",
+          url: "https://example.com/model-similar",
+          createdAt: createdAt(6),
+          embeddingModel: "another-model",
+          embedding: vector(1, 0),
+        },
+        {
+          orgId,
+          brandId: brand.body.id,
+          sourceId: source.body.id,
+          title: "No vector",
+          url: "https://example.com/no-vector-similar",
+          createdAt: createdAt(7),
+        },
+        {
+          ...base,
+          title: "Zero vector",
+          url: "https://example.com/zero-similar",
+          createdAt: new Date("2026-09-07T12:00:00Z"),
+          embedding: vector(0, 0),
+        },
+        {
+          ...base,
+          title: "Dismissed",
+          url: "https://example.com/dismissed-similar",
+          createdAt: createdAt(8),
+          embedding: vector(1, 0),
+          dismissedAt: createdAt(9),
+          editorSignal: "irrelevant",
+        },
+      ])
+      .returning({ id: schema.newsItems.id });
+    if (
+      !first ||
+      !second ||
+      !near ||
+      !target ||
+      !closest ||
+      !outsideThreshold ||
+      !differentModel ||
+      !noVector ||
+      !zero ||
+      !dismissed
+    )
+      throw new Error("Similarity fixture failed");
+    await db.insert(schema.newsItems).values([
+      {
+        ...base,
+        brandId: otherBrand.body.id,
+        sourceId: otherSource.body.id,
+        title: "Other brand",
+        url: "https://example.com/other-brand-similar",
+        createdAt: createdAt(1),
+        embedding: vector(1, 0),
+      },
+      {
+        ...base,
+        orgId: outsiderOrgId,
+        brandId: outsideBrand.body.id,
+        sourceId: outsideSource.body.id,
+        title: "Outside org",
+        url: "https://example.com/outside-org-similar",
+        createdAt: createdAt(1),
+        embedding: vector(1, 0),
+      },
+    ]);
+    const route = `/api/sources/items?brandId=${brand.body.id}`;
+    const page = (await owner.get(route).expect(200)).body as Array<Record<string, unknown>>;
+    const byId = (id: string) => page.find((row) => row.id === id);
+    expect(page).toHaveLength(9);
+    expect(byId(first.id)?.similarStory).toBeNull();
+    expect(byId(second.id)?.similarStory).toMatchObject({
+      id: first.id,
+      title: "First",
+      distance: 0,
+    });
+    expect(byId(target.id)?.similarStory).toMatchObject({
+      id: first.id,
+      title: "First",
+      distance: 0,
+    });
+    expect(byId(near.id)?.similarStory).toMatchObject({ id: first.id, title: "First" });
+    expect(byId(closest.id)?.similarStory).toMatchObject({
+      id: near.id,
+      title: "Near",
+    });
+    expect((byId(closest.id)?.similarStory as { distance: number } | null)?.distance).toBeLessThan(
+      1e-6,
+    );
+    expect(byId(outsideThreshold.id)?.similarStory).toBeNull();
+    expect(byId(differentModel.id)?.similarStory).toBeNull();
+    expect(byId(noVector.id)?.similarStory).toBeNull();
+    expect(byId(zero.id)?.similarStory).toBeNull();
+    expect(JSON.stringify(page)).not.toContain("embedding");
+    expect(JSON.stringify(page)).not.toContain("Other brand");
+    expect(JSON.stringify(page)).not.toContain("Outside org");
+    expect((await owner.get(`${route}&search=target`).expect(200)).body).toMatchObject([
+      { id: target.id, similarStory: null },
+    ]);
+    expect((await owner.get(`${route}&view=dismissed`).expect(200)).body).toMatchObject([
+      { id: dismissed.id, editorSignal: "irrelevant", similarStory: null },
+    ]);
+    const [stored] = await db
+      .select({
+        editorSignal: schema.newsItems.editorSignal,
+        dismissedAt: schema.newsItems.dismissedAt,
+        embedding: schema.newsItems.embedding,
+      })
+      .from(schema.newsItems)
+      .where(eq(schema.newsItems.id, dismissed.id));
+    expect(stored).toMatchObject({
+      editorSignal: "irrelevant",
+      dismissedAt: createdAt(9),
+      embedding: vector(1, 0),
+    });
+    await outsider.get(route).expect(404);
+  });
+
   it("searches literal title and summary text before the news limit within a source and brand", async () => {
     const { agent: owner, orgId } = await orgAgent();
     const { agent: other } = await orgAgent();
