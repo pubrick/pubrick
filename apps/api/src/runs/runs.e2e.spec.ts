@@ -7,6 +7,8 @@ import { EDITOR, editSchema, FACTCHECK, factcheckSchema, type RunStepContext } f
 import {
   MAX_CONCURRENT_RUNS,
   MAX_SOURCE_TEXT_LENGTH,
+  type RunDetailDto,
+  type RunInput,
   runDetailDtoSchema,
   runDtoSchema,
   runInputSchema,
@@ -18,6 +20,13 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
+
+/** Existing create/retry fixtures must remain executable, never redacted receipts. */
+function parseExecutableRunDetail(value: unknown): RunDetailDto & { input: RunInput } {
+  const run = runDetailDtoSchema.parse(value);
+  if (run.input.kind === "redacted") throw new Error("Expected executable run input");
+  return run as RunDetailDto & { input: RunInput };
+}
 
 /**
  * Where the owner reads the gate query (`docs/specs/0003-ai-generation-engine.md`
@@ -438,7 +447,7 @@ describe.skipIf(!url)("runs e2e", () => {
     expect((await agent.get("/api/runs").expect(200)).body).toEqual([]);
 
     const { createDb, schema } = await import("@pubrick/db");
-    const { encryptJson, runDetailDtoSchema } = await import("@pubrick/shared");
+    const { encryptJson } = await import("@pubrick/shared");
     const { db, pool } = createDb(url as string);
     const orgId = await orgIdOfBrand(brandId);
     await db.insert(schema.aiCredentials).values({
@@ -451,11 +460,11 @@ describe.skipIf(!url)("runs e2e", () => {
     });
     await pool.end();
 
-    const first = runDetailDtoSchema.parse(
+    const first = parseExecutableRunDetail(
       (await agent.post("/api/runs").send(requestBody).expect(201)).body,
     );
     expect(first.input.generateCover).toBe(true);
-    const retried = runDetailDtoSchema.parse(
+    const retried = parseExecutableRunDetail(
       (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
     );
     expect(retried.input.generateCover).toBe(true);
@@ -495,7 +504,7 @@ describe.skipIf(!url)("runs e2e", () => {
       .expect(400);
 
     const { createDb, schema } = await import("@pubrick/db");
-    const { encryptJson, runDetailDtoSchema } = await import("@pubrick/shared");
+    const { encryptJson } = await import("@pubrick/shared");
     const { db, pool } = createDb(url as string);
     const orgId = await orgIdOfBrand(brandId);
     await db.insert(schema.aiCredentials).values({
@@ -508,11 +517,11 @@ describe.skipIf(!url)("runs e2e", () => {
     });
     await pool.end();
 
-    const first = runDetailDtoSchema.parse(
+    const first = parseExecutableRunDetail(
       (await agent.post("/api/runs").send(requestBody).expect(201)).body,
     );
     expect(first.input.generateInlineImages).toBe(true);
-    const retried = runDetailDtoSchema.parse(
+    const retried = parseExecutableRunDetail(
       (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
     );
     expect(retried.input.generateInlineImages).toBe(true);
@@ -539,13 +548,13 @@ describe.skipIf(!url)("runs e2e", () => {
     const { brandId, channelId } = await brandWithChannel(agent);
     const base = { brandId, brief: "A new announcement", channelIds: [channelId] };
 
-    const ordinary = runDetailDtoSchema.parse(
+    const ordinary = parseExecutableRunDetail(
       (await agent.post("/api/runs").send(base).expect(201)).body,
     );
     expect(ordinary.input).not.toHaveProperty("useEditorialFeedback");
     expect(ordinary.input).not.toHaveProperty("editorialFeedback");
 
-    const optedIn = runDetailDtoSchema.parse(
+    const optedIn = parseExecutableRunDetail(
       (
         await agent
           .post("/api/runs")
@@ -616,7 +625,7 @@ describe.skipIf(!url)("runs e2e", () => {
       .where(inArray(schema.editorialNotes.id, ids));
     await pool.end();
 
-    const created = runDetailDtoSchema.parse(
+    const created = parseExecutableRunDetail(
       (
         await agent
           .post("/api/runs")
@@ -655,7 +664,7 @@ describe.skipIf(!url)("runs e2e", () => {
       .post(notesPath)
       .send({ expectedBody: "Draft for feedback", note: "Use a clearer opening" })
       .expect(201);
-    const original = runDetailDtoSchema.parse(
+    const original = parseExecutableRunDetail(
       (
         await agent
           .post("/api/runs")
@@ -675,7 +684,7 @@ describe.skipIf(!url)("runs e2e", () => {
       .post(notesPath)
       .send({ expectedBody: "Draft for feedback", note: "Specify the audience" })
       .expect(201);
-    const retried = runDetailDtoSchema.parse(
+    const retried = parseExecutableRunDetail(
       (await agent.post(`/api/runs/${original.id}/retry`).expect(201)).body,
     );
     expect(retried.input.useEditorialFeedback).toBe(true);
@@ -683,7 +692,7 @@ describe.skipIf(!url)("runs e2e", () => {
     expect(new Set(retried.input.editorialFeedback?.map((entry) => entry.id))).toEqual(
       new Set([firstNote.body.id, secondNote.body.id]),
     );
-    const firstReceipt = runDetailDtoSchema.parse(
+    const firstReceipt = parseExecutableRunDetail(
       (await agent.get(`/api/runs/${original.id}`).expect(200)).body,
     );
     expect(firstReceipt.input.editorialFeedback).toEqual(original.input.editorialFeedback);
@@ -701,7 +710,7 @@ describe.skipIf(!url)("runs e2e", () => {
       .send({ expectedBody: "Draft for Unicode feedback", note: `${"x".repeat(499)}😌` })
       .expect(201);
 
-    const run = runDetailDtoSchema.parse(
+    const run = parseExecutableRunDetail(
       (
         await agent
           .post("/api/runs")
@@ -780,7 +789,7 @@ describe.skipIf(!url)("runs e2e", () => {
         .expect(201);
 
       // The WIRE contract, not just the row: a browser parses this shape.
-      const run = runDetailDtoSchema.parse(created.body);
+      const run = parseExecutableRunDetail(created.body);
       expect(run.input).toEqual({
         kind: "source",
         // `null`, never `""`: a stored empty brief reaches the model as a
@@ -857,7 +866,7 @@ describe.skipIf(!url)("runs e2e", () => {
 
       // The receipt asks for ONE run and gets the whole thing — the material,
       // and `steps` beside it.
-      const detail = runDetailDtoSchema.parse((await agent.get(`/api/runs/${id}`)).body);
+      const detail = parseExecutableRunDetail((await agent.get(`/api/runs/${id}`)).body);
       expect(detail.input).toEqual({
         kind: "source",
         text: null,
@@ -905,7 +914,7 @@ describe.skipIf(!url)("runs e2e", () => {
         .post("/api/runs")
         .send({ brandId, brief: "Shorten it", material: ARTICLE, channelIds: [channelId] })
         .expect(201);
-      expect(runDetailDtoSchema.parse(created.body).input).toMatchObject({
+      expect(parseExecutableRunDetail(created.body).input).toMatchObject({
         kind: "source",
         text: "Shorten it",
         material: ARTICLE,
@@ -1038,11 +1047,11 @@ describe.skipIf(!url)("runs e2e", () => {
             contentType,
           })
           .expect(201);
-        const first = runDetailDtoSchema.parse(created.body);
+        const first = parseExecutableRunDetail(created.body);
         expect(first.input.contentType).toBe(contentType);
         await setRunStatus(first.id, "failed", "internal");
 
-        const retried = runDetailDtoSchema.parse(
+        const retried = parseExecutableRunDetail(
           (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
         );
         expect(retried.input).toEqual(first.input);
@@ -1063,7 +1072,7 @@ describe.skipIf(!url)("runs e2e", () => {
           seoKeywords: ["practical article guide"],
         })
         .expect(201);
-      const first = runDetailDtoSchema.parse(created.body);
+      const first = parseExecutableRunDetail(created.body);
       expect(first.input).toMatchObject({
         kind: "source",
         contentType: "expert_article",
@@ -1071,7 +1080,7 @@ describe.skipIf(!url)("runs e2e", () => {
       });
       await setRunStatus(first.id, "failed", "internal");
 
-      const retried = runDetailDtoSchema.parse(
+      const retried = parseExecutableRunDetail(
         (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
       );
       expect(retried.input).toEqual(first.input);
@@ -1096,7 +1105,7 @@ describe.skipIf(!url)("runs e2e", () => {
           contentType,
         })
         .expect(201);
-      const first = runDetailDtoSchema.parse(created.body);
+      const first = parseExecutableRunDetail(created.body);
       expect(first.input).toMatchObject({
         kind: "source",
         contentType,
@@ -1105,7 +1114,7 @@ describe.skipIf(!url)("runs e2e", () => {
       });
       await setRunStatus(first.id, "failed", "internal");
 
-      const retried = runDetailDtoSchema.parse(
+      const retried = parseExecutableRunDetail(
         (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
       );
       expect(retried.input).toEqual(first.input);
@@ -1141,7 +1150,7 @@ describe.skipIf(!url)("runs e2e", () => {
           channelIds,
         })
         .expect(201);
-      return runDetailDtoSchema.parse(created.body);
+      return parseExecutableRunDetail(created.body);
     }
 
     /**
@@ -1157,7 +1166,7 @@ describe.skipIf(!url)("runs e2e", () => {
       await setRunStatus(first.id, "failed", "internal");
 
       const retried = await agent.post(`/api/runs/${first.id}/retry`).expect(201);
-      const run = runDetailDtoSchema.parse(retried.body);
+      const run = parseExecutableRunDetail(retried.body);
 
       expect(run.id).not.toBe(first.id);
       expect(run.status).toBe("queued");
@@ -1189,7 +1198,7 @@ describe.skipIf(!url)("runs e2e", () => {
         .post("/api/runs")
         .send({ brandId, material: ARTICLE, channelIds: [channelId] })
         .expect(201);
-      const first = runDetailDtoSchema.parse(created.body);
+      const first = parseExecutableRunDetail(created.body);
       expect(first.input).toEqual({
         kind: "source",
         text: null,
@@ -1199,7 +1208,7 @@ describe.skipIf(!url)("runs e2e", () => {
       });
       await setRunStatus(first.id, "failed", "internal");
 
-      const run = runDetailDtoSchema.parse(
+      const run = parseExecutableRunDetail(
         (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
       );
       expect(run.id).not.toBe(first.id);
@@ -1213,7 +1222,7 @@ describe.skipIf(!url)("runs e2e", () => {
       const first = await startRun(agent, brandId, [channelId]);
       await setRunStatus(first.id, "failed", "internal");
 
-      const run = runDetailDtoSchema.parse(
+      const run = parseExecutableRunDetail(
         (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
       );
       expect(run.input).toEqual({
@@ -1235,7 +1244,7 @@ describe.skipIf(!url)("runs e2e", () => {
 
       await agent.post(`/api/runs/${first.id}/retry`).expect(201);
 
-      const before = runDetailDtoSchema.parse((await agent.get(`/api/runs/${first.id}`)).body);
+      const before = parseExecutableRunDetail((await agent.get(`/api/runs/${first.id}`)).body);
       expect(before).toMatchObject({ status: "failed", dismissedAt: null });
     });
 
@@ -1911,7 +1920,7 @@ describe.skipIf(!url)("runs e2e", () => {
       // web builds its fixtures through the same declaration, so this is the
       // one assertion that makes "the receipt renders what the api returns"
       // a fact about both ends of the wire.
-      const detail = runDetailDtoSchema.parse(
+      const detail = parseExecutableRunDetail(
         (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
       );
       expect(detail.unrecordedCalls).toBe(0);
@@ -1929,7 +1938,7 @@ describe.skipIf(!url)("runs e2e", () => {
       const run = await startRun(agent, brandId, [channelId]);
       await loseCalls(run.id, 3);
 
-      const detail = runDetailDtoSchema.parse(
+      const detail = parseExecutableRunDetail(
         (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
       );
       expect(detail.unrecordedCalls).toBe(3);
@@ -1941,7 +1950,7 @@ describe.skipIf(!url)("runs e2e", () => {
       const run = await startRun(agent, brandId, [channelId]);
       await forgetLosses(run.id);
 
-      const detail = runDetailDtoSchema.parse(
+      const detail = parseExecutableRunDetail(
         (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
       );
       // `toBeNull`, not `toBeFalsy`: 0 would satisfy the latter, and 0 is the

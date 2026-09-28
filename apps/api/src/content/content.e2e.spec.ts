@@ -7,6 +7,7 @@ import {
   contentListItemDtoSchema,
   MAX_BODY_LENGTH,
   MAX_REFINE_CALLS_PER_HOUR,
+  runDetailDtoSchema,
 } from "@pubrick/shared";
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import request from "supertest";
@@ -5440,7 +5441,7 @@ describe.skipIf(!url)("content e2e", () => {
       }
     });
 
-    it("retains generated drafts while their run checkpoints remain readable", async () => {
+    it("redacts every terminal generation receipt atomically and preserves billed usage", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);
       const created = await agent
@@ -5452,19 +5453,188 @@ describe.skipIf(!url)("content e2e", () => {
       const { createDb, schema } = await import("@pubrick/db");
       const { db, pool } = createDb(url as string);
       try {
-        await db.insert(schema.pipelineRuns).values({
-          orgId,
-          brandId,
-          contentItemId: itemId,
-          input: { kind: "brief", text: "A private generation brief", channelIds: [channelId] },
-          status: "succeeded",
-        });
+        const runs = await db
+          .insert(schema.pipelineRuns)
+          .values([
+            {
+              orgId,
+              brandId,
+              contentItemId: itemId,
+              input: {
+                kind: "source",
+                text: "private instructions",
+                sourceUrl: "https://example.com/private-source",
+                material: "private source article",
+                channelIds: [channelId],
+              },
+              status: "succeeded",
+              currentStep: "writer",
+              steps: { writer: { status: "succeeded", output: { body: "private draft" } } },
+              guidanceSnapshot: {
+                writer: { revisionId: randomUUID(), version: 1, text: "private guidance" },
+              },
+              templateSnapshot: sql`'{"private":"template text"}'::jsonb`,
+              error: "private legacy provider prose",
+              unrecordedCalls: 2,
+            },
+            {
+              orgId,
+              brandId,
+              contentItemId: itemId,
+              input: { kind: "brief", text: "second private brief", channelIds: [channelId] },
+              status: "failed",
+              steps: { researcher: { status: "succeeded", output: { notes: "private notes" } } },
+            },
+          ])
+          .returning({ id: schema.pipelineRuns.id });
+        expect(runs).toHaveLength(2);
+        const runId = runs[0]?.id as string;
+        const [ledger] = await db
+          .insert(schema.usageLedger)
+          .values({
+            orgId,
+            runId,
+            step: "writer",
+            provider: "google",
+            modelId: "gemini-test",
+            costUsd: "0.123456",
+            costSource: "price_table",
+            status: "ok",
+            outcome: "completed",
+          })
+          .returning({ id: schema.usageLedger.id });
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        await agent.delete(`/api/content/${itemId}`).expect(204);
+        await agent.get(`/api/content/${itemId}`).expect(404);
+
+        for (const run of runs) {
+          const receipt = runDetailDtoSchema.parse(
+            (await agent.get(`/api/runs/${run.id}`).expect(200)).body,
+          );
+          expect(receipt.input).toEqual({ kind: "redacted" });
+          expect(receipt.steps).toEqual({});
+          expect(receipt.contentItemId).toBeNull();
+          expect(receipt.currentStep).toBeNull();
+          expect(receipt.errorCode).toBeNull();
+          const raw = JSON.stringify(receipt);
+          for (const secret of [
+            "private instructions",
+            "private source article",
+            "private draft",
+            "private notes",
+            "private guidance",
+            "template text",
+            "private legacy provider prose",
+          ]) {
+            expect(raw).not.toContain(secret);
+          }
+          const refused = await agent.post(`/api/runs/${run.id}/retry`).expect(409);
+          expect(refused.body.code).toBe("run_redacted");
+          const [stored] = await db
+            .select({
+              input: schema.pipelineRuns.input,
+              steps: schema.pipelineRuns.steps,
+              guidance: schema.pipelineRuns.guidanceSnapshot,
+              template: schema.pipelineRuns.templateSnapshot,
+              topicId: schema.pipelineRuns.topicId,
+              error: schema.pipelineRuns.error,
+            })
+            .from(schema.pipelineRuns)
+            .where(eq(schema.pipelineRuns.id, run.id));
+          expect(stored).toEqual({
+            input: { kind: "redacted" },
+            steps: {},
+            guidance: null,
+            template: null,
+            topicId: null,
+            error: null,
+          });
+        }
+        const [cost] = await db
+          .select({ runId: schema.usageLedger.runId, costUsd: schema.usageLedger.costUsd })
+          .from(schema.usageLedger)
+          .where(eq(schema.usageLedger.id, ledger?.id as string));
+        expect(cost).toEqual({ runId, costUsd: "0.123456" });
+        expect(
+          runs[0] && (await agent.get(`/api/runs/${runs[0].id}`).expect(200)).body.unrecordedCalls,
+        ).toBe(2);
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("refuses deletion while a linked generation remains live", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const orgId = await orgOf(itemId);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [run] = await db
+          .insert(schema.pipelineRuns)
+          .values({
+            orgId,
+            brandId,
+            contentItemId: itemId,
+            input: { kind: "brief", text: "private live brief", channelIds: [channelId] },
+            status: "running",
+          })
+          .returning({ id: schema.pipelineRuns.id });
         await agent.post(`/api/content/${itemId}/archive`).expect(200);
         const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
-        expect(refused.body.code).toBe("content_delete_has_generation_history");
-        expect((await agent.get(`/api/content/${itemId}`).expect(200)).body.status).toBe(
-          "archived",
+        expect(refused.body.code).toBe("content_delete_run_active");
+        expect((await agent.get(`/api/runs/${run?.id}`).expect(200)).body.input.text).toBe(
+          "private live brief",
         );
+        await agent.get(`/api/content/${itemId}`).expect(200);
+      } finally {
+        await pool.end();
+      }
+    });
+
+    it("refuses a linked run from another organization instead of redacting its data", async () => {
+      const agent = await orgAgent();
+      const stranger = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { brandId: otherBrandId, channelId: otherChannelId } = await brandWithChannel(stranger);
+      const created = await agent
+        .post("/api/content")
+        .send({ brandId, body: HUMAN_BODY, channelIds: [channelId] })
+        .expect(201);
+      const itemId = created.body.id as string;
+      const otherOrgId = await orgOf(
+        (
+          await stranger
+            .post("/api/content")
+            .send({ brandId: otherBrandId, body: HUMAN_BODY, channelIds: [otherChannelId] })
+            .expect(201)
+        ).body.id as string,
+      );
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        const [run] = await db
+          .insert(schema.pipelineRuns)
+          .values({
+            orgId: otherOrgId,
+            brandId: otherBrandId,
+            contentItemId: itemId,
+            input: { kind: "brief", text: "other tenant secret", channelIds: [otherChannelId] },
+            status: "succeeded",
+          })
+          .returning({ id: schema.pipelineRuns.id });
+        await agent.post(`/api/content/${itemId}/archive`).expect(200);
+        const refused = await agent.delete(`/api/content/${itemId}`).expect(409);
+        expect(refused.body.code).toBe("content_delete_run_tenant_mismatch");
+        expect((await stranger.get(`/api/runs/${run?.id}`).expect(200)).body.input.text).toBe(
+          "other tenant secret",
+        );
+        await agent.get(`/api/content/${itemId}`).expect(200);
       } finally {
         await pool.end();
       }

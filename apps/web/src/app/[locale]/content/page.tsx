@@ -695,6 +695,7 @@ export default function ContentQueuePage() {
    * a paste at all.
    */
   function stripLabel(run: Run): string {
+    if (run.input.kind === "redacted") return tr("redactedRun");
     if (run.input.text !== null) return run.input.text;
     const host = run.input.kind === "source" ? sourceHost(run.input.sourceUrl) : null;
     return host ?? tr("pastedLabel");
@@ -741,14 +742,16 @@ export default function ContentQueuePage() {
         {failure && <span className="w-full text-[13px] text-danger">{failure}</span>}
         {terminal && (
           <span className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => tryAgain(run)}
-              disabled={retrying !== null}
-            >
-              {tr("tryAgain")}
-            </Button>
+            {run.input.kind !== "redacted" && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => tryAgain(run)}
+                disabled={retrying !== null}
+              >
+                {tr("tryAgain")}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => dismissRun(run)}>
               {tr("dismiss")}
             </Button>

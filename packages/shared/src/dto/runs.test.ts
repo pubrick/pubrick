@@ -14,6 +14,7 @@ import {
   runStepCheckpointSchema,
   runStepsSchema,
   sourceRunInputSchema,
+  storedRunInputSchema,
 } from "./runs.js";
 
 describe("automatic article image placement", () => {
@@ -265,6 +266,15 @@ describe("a run asked for from material a person pasted", () => {
     expect(runInputSchema.parse(brief)).toEqual(brief);
     expect(runInputSchema.parse(pasted)).toEqual(pasted);
     expect(runInputSchema.safeParse({ ...brief, kind: "topic" }).success).toBe(false);
+  });
+
+  it("parses a prompt-free deletion tombstone only as stored history", () => {
+    expect(storedRunInputSchema.parse({ kind: "redacted" })).toEqual({ kind: "redacted" });
+    expect(runListInputSchema.parse({ kind: "redacted" })).toEqual({ kind: "redacted" });
+    expect(runInputSchema.safeParse({ kind: "redacted" }).success).toBe(false);
+    expect(storedRunInputSchema.safeParse({ kind: "redacted", text: "retained" }).success).toBe(
+      false,
+    );
   });
 });
 

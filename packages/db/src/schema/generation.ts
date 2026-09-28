@@ -7,8 +7,8 @@ import {
   LEDGER_STATUSES,
   type PromptRole,
   RUN_STATUSES,
-  type RunInput,
   type RunSteps,
+  type StoredRunInput,
   VERSION_SCOPES,
 } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
@@ -76,16 +76,14 @@ export const pipelineRuns = pgTable(
     brandId: uuid("brand_id")
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
-    /** Originating approved topic, when one exists. The input remains an immutable snapshot. */
+    /** Originating approved topic, when one exists. Cleared when its draft is permanently deleted. */
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
     /**
-     * Typed from `runInputSchema` (`@pubrick/shared`), not from a shape written
-     * out here. A jsonb column's shape is whatever its last writer put there, so
-     * the only description of it worth having is the one the worker actually
-     * parses with — see that schema for why the `kind` discriminator is there
-     * from the start.
+     * A snapshot of the request until its archived draft is permanently
+     * deleted, then exactly `{ kind: "redacted" }`. The worker accepts only the
+     * executable brief/source members; the DTO can read the tombstone.
      */
-    input: jsonb("input").$type<RunInput>().notNull(),
+    input: jsonb("input").$type<StoredRunInput>().notNull(),
     status: text("status", { enum: RUN_STATUSES }).notNull().default("queued"),
     currentStep: text("current_step"),
     /** Typed from `runStepsSchema` (`@pubrick/shared`) — see `input` above. */

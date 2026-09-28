@@ -1913,17 +1913,36 @@ describe("archive and restore", () => {
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith("/en/content"));
   });
 
-  it("hides permanent deletion when delivery provenance is uncertain or a run is retained", async () => {
-    for (const override of [{ isSafeToDelete: false }, { runId: "retained-run" }]) {
-      installBaseHandlers(
-        { current: makeItem({ status: "archived", archivedFromStatus: "draft", ...override }) },
-        [],
-      );
-      const view = await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
-      await screen.findByText(en.Publish.archivedHint);
-      expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
-      view.unmount();
-    }
+  it("hides permanent deletion when delivery provenance is uncertain", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "archived",
+          archivedFromStatus: "draft",
+          isSafeToDelete: false,
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Publish.archivedHint);
+    expect(screen.queryByRole("button", { name: en.Publish.delete })).not.toBeInTheDocument();
+  });
+
+  it("offers confirmed deletion for an archived generated draft", async () => {
+    installBaseHandlers(
+      {
+        current: makeItem({
+          status: "archived",
+          archivedFromStatus: "draft",
+          runId: "retained-run",
+        }),
+      },
+      [],
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByText(en.Publish.archivedHint);
+    expect(screen.getByRole("button", { name: en.Publish.delete })).toBeInTheDocument();
   });
 });
 

@@ -426,7 +426,7 @@ export class RunsRepository {
    * count taken outside would be stale by the time the insert commits, which is
    * the same reason it is taken under the advisory lock.
    */
-  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<string>) {
+  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<string | null>) {
     await this.resolveChannels(orgId, data);
 
     // The SAME two expressions `runCreateSchema`'s cross-field refine uses, read
@@ -550,8 +550,11 @@ export class RunsRepository {
    * enqueue-in-the-same-transaction rule are ONE path. A retry that wrote its
    * own insert would be a second way into `pipeline_runs` and the one the spend
    * guard does not cover — a run per click, past the cap, with no job behind it.
-   * It takes no lock of its own either, so `docs/lock-order.md` is unchanged:
-   * this is one org-scoped SELECT followed by `create`'s own transaction.
+   * Admission still runs through `create`. Inside that transaction retry first
+   * locks the brand, then any source topic, then the original run. Deletion
+   * takes brand then run too, so a retry admitted before redaction finishes
+   * before deletion; one arriving after redaction is refused without copying
+   * the old prompt into a new run.
    *
    * Any status may be retried. The queue screen only offers the button on a
    * terminal run, but "is this worth asking again" is the reader's judgement,
@@ -573,6 +576,10 @@ export class RunsRepository {
     // The same 404 an id that never existed gets: a caller asking about another
     // org's run learns nothing from the answer, least of all that it is there.
     if (!row) throw notFound("run_not_found", "Run not found");
+
+    if (row.input.kind === "redacted") {
+      throw conflict("run_redacted", "A redacted run cannot be retried");
+    }
 
     const stored = parseStoredInput.transform(row.input);
     const originalTopicId = row.topicId;
@@ -596,27 +603,47 @@ export class RunsRepository {
           : {}),
         channelIds: stored.channelIds,
       }),
-      originalTopicId
-        ? async (tx) => {
-            // Retry keeps the original input snapshot, but an editor's veto
-            // takes effect immediately: never enqueue a new run for a topic
-            // that is no longer approved.
-            const [topic] = await tx
-              .select({ status: schema.topics.status })
-              .from(schema.topics)
-              .where(
-                and(
-                  eq(schema.topics.id, originalTopicId),
-                  eq(schema.topics.orgId, orgId),
-                  eq(schema.topics.brandId, row.brandId),
-                ),
-              )
-              .for("share");
-            if (topic?.status !== "approved")
-              throw conflict("topic_not_approved", "Approve this topic before generating");
-            return originalTopicId;
-          }
-        : undefined,
+      async (tx) => {
+        const [brand] = await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, row.brandId)))
+          .for("key share");
+        if (!brand) throw notFound("brand_not_found", "Brand not found");
+        if (originalTopicId) {
+          // Retry keeps the original input snapshot, but an editor's veto
+          // takes effect immediately: never enqueue a new run for a topic
+          // that is no longer approved.
+          const [topic] = await tx
+            .select({ status: schema.topics.status })
+            .from(schema.topics)
+            .where(
+              and(
+                eq(schema.topics.id, originalTopicId),
+                eq(schema.topics.orgId, orgId),
+                eq(schema.topics.brandId, row.brandId),
+              ),
+            )
+            .for("share");
+          if (topic?.status !== "approved")
+            throw conflict("topic_not_approved", "Approve this topic before generating");
+        }
+        const [current] = await tx
+          .select({ input: schema.pipelineRuns.input })
+          .from(schema.pipelineRuns)
+          .where(
+            and(
+              eq(schema.pipelineRuns.orgId, orgId),
+              eq(schema.pipelineRuns.brandId, row.brandId),
+              eq(schema.pipelineRuns.id, id),
+            ),
+          )
+          .for("share");
+        if (!current || current.input.kind === "redacted") {
+          throw conflict("run_redacted", "A redacted run cannot be retried");
+        }
+        return originalTopicId;
+      },
     );
   }
 

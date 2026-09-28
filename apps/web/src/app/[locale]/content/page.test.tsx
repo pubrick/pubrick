@@ -458,6 +458,17 @@ describe("adaptation rendering (Step 2)", () => {
 });
 
 describe("run strips (Task 10)", () => {
+  it("labels a redacted terminal run without offering retry", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, {
+      current: [run({ status: "succeeded", currentStep: null, input: { kind: "redacted" } })],
+    });
+    render(<ContentQueuePage />);
+    expect(await screen.findByRole("link", { name: en.Runs.redactedRun })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Runs.tryAgain })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.Runs.dismiss })).toBeInTheDocument();
+  });
+
   /**
    * The strips section only. "Failed" is also the name of the content filter's
    * tab, so an unscoped query for a run's status label matches two elements.

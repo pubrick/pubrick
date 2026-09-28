@@ -1799,7 +1799,6 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const canDeleteArchived =
     isArchived &&
     item.isSafeToDelete &&
-    item.runId === null &&
     ["draft", "rejected"].includes(item.archivedFromStatus ?? "") &&
     item.adaptations.every(
       (adaptation) => adaptation.attemptCount === 0 && adaptation.status === "pending",

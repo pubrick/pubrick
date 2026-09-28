@@ -42,13 +42,26 @@ The worker's claim waits on that adaptation lock and checks `scheduled_at` as
 well as status, so an old job fetched before a move cannot send at the new slot.
 The cancelled job, adaptation update, and replacement job share one transaction.
 
-Permanent deletion of an archived unsent post takes the same ordered adaptation
-locks before the content item lock. It refuses any delivery attempt or linked
-publication record, a retained generation run, or an item whose durable safety
-marker is false before deleting it. A trigger on adaptation deletion remembers
-delivery history that would otherwise lose its item link when a channel is
-deleted. Historical posts have the marker false because prior orphaned receipts
-cannot be matched back to a post.
+Permanent deletion of an archived unsent post takes `brands → pipeline_runs`
+(all linked rows in ascending ID) `→ adaptations → content_items`. It first
+reads the item's brand without locking it, then locks the brand. After locking
+the item, it rechecks **all** linked runs and adaptations because their foreign
+keys do not carry the organization and brand. A new FK link after the item lock
+must wait. Any foreign-tenant run, live run, delivery attempt, publication
+receipt, or false durable safety marker refuses deletion. For safe terminal
+runs the same transaction replaces `input` with `{kind: "redacted"}`, clears
+steps, guidance and template snapshots, error, and topic attribution, and then
+deletes the item. The run's ID, status, times, and usage ledger links remain;
+media library assets are independent. A trigger on adaptation deletion
+remembers delivery history that would otherwise lose its item link when a
+channel is deleted. Historical posts have the marker false because prior
+orphaned receipts cannot be matched back to a post.
+
+Retry admission locks the original brand `FOR KEY SHARE`, optional topic
+`FOR SHARE`, and source run `FOR SHARE` inside the create transaction before
+inserting the new run. This rechecks the redaction tombstone while holding the
+run lock, so a concurrent delete either waits for the admitted retry or makes
+the retry refuse; no post-redaction request can copy the old prompt.
 
 Daily topic suggestions also serialize admission on `brands`. Both the manual
 `TopicsRepository.requestSuggestions` path and the automatic

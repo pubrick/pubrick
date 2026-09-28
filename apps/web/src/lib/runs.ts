@@ -200,13 +200,15 @@ const INLINE_IMAGE_PREFIX = "inline_image:";
  * in progress.
  */
 export function runStepStates(run: RunDetail): RunStepProgress[] {
-  const channelIds = run.input?.channelIds ?? [];
+  if (run.input.kind === "redacted") return [];
+  const input = run.input;
+  const channelIds = input.channelIds;
 
   return RUN_STEP_KEYS.filter(
     (key) =>
-      (key !== "cover" || run.input.generateCover === true) &&
-      (key !== "inline_image" || run.input.generateInlineImages === true) &&
-      (key !== "seo_polish" || Boolean(run.input.seoKeywords?.length)),
+      (key !== "cover" || input.generateCover === true) &&
+      (key !== "inline_image" || input.generateInlineImages === true) &&
+      (key !== "seo_polish" || Boolean(input.seoKeywords?.length)),
   ).map((key) => {
     if (key === "adapter") {
       const checkpoints = channelIds.map((channelId) => run.steps[`${ADAPTER_PREFIX}${channelId}`]);

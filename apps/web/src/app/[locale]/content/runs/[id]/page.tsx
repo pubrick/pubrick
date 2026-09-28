@@ -185,7 +185,8 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   // Our sentence for the run's failure code, in the reader's language. Never
   // the provider's own words: those are English, and they are where a
   // submitted API key gets quoted back at whoever is looking at this page.
-  const failure = runFailureMessage(t, run?.errorCode ?? null);
+  const failure =
+    run?.input.kind === "redacted" ? null : runFailureMessage(t, run?.errorCode ?? null);
   const draftHref = run?.contentItemId ? `/${locale}/content/${run.contentItemId}` : null;
   /**
    * A succeeded run always wrote a content item, and `content_item_id` is
@@ -194,8 +195,8 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
    * where the link used to be.
    */
   const draftDeleted = run?.status === "succeeded" && run.contentItemId === null;
-  const knowledgeNotes = run ? runKnowledgeNotes(run) : null;
-  const relatedNews = run ? runRelatedNews(run) : null;
+  const knowledgeNotes = run && run.input.kind !== "redacted" ? runKnowledgeNotes(run) : null;
+  const relatedNews = run && run.input.kind !== "redacted" ? runRelatedNews(run) : null;
   const inFlight = run !== null && !isTerminalRunStatus(run.status);
 
   // One primary action, and only one: the finished draft while there is one to
@@ -355,71 +356,77 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             which means the compiler points at the new half and stays silent
             about the old one.
           */}
-          <Card className="mb-6">
-            <div className="flex flex-col gap-4">
-              <RunField label={t("contentTypeLabel")}>
-                <p className="text-sm text-fg">
-                  {t(`contentType.${run.input.contentType ?? "social_post"}`)}
-                </p>
-              </RunField>
-              {run.input.seoKeywords && run.input.seoKeywords.length > 0 && (
-                <RunField label={t("seoKeywordsLabel")}>
-                  <p className="whitespace-pre-wrap text-sm text-fg">
-                    {run.input.seoKeywords.join("\n")}
+          {run.input.kind === "redacted" ? (
+            <Card className="mb-6">
+              <p className="text-sm text-fg-secondary">{t("redactedReceipt")}</p>
+            </Card>
+          ) : (
+            <Card className="mb-6">
+              <div className="flex flex-col gap-4">
+                <RunField label={t("contentTypeLabel")}>
+                  <p className="text-sm text-fg">
+                    {t(`contentType.${run.input.contentType ?? "social_post"}`)}
                   </p>
                 </RunField>
-              )}
-              {run.input.kind === "source" && run.input.text === null ? (
-                /*
+                {run.input.seoKeywords && run.input.seoKeywords.length > 0 && (
+                  <RunField label={t("seoKeywordsLabel")}>
+                    <p className="whitespace-pre-wrap text-sm text-fg">
+                      {run.input.seoKeywords.join("\n")}
+                    </p>
+                  </RunField>
+                )}
+                {run.input.kind === "source" && run.input.text === null ? (
+                  /*
                   Not an empty "Brief" block. A label with nothing under it reads
                   as "the person wrote nothing useful"; this line says what
                   actually happened — they wrote nothing and the draft came from
                   the material below.
                 */
-                <p className="text-sm text-fg-tertiary">{t("noBrief")}</p>
-              ) : (
-                <RunField label={t("briefLabel")}>
-                  <p className="whitespace-pre-wrap text-sm text-fg">{run.input.text}</p>
-                </RunField>
-              )}
+                  <p className="text-sm text-fg-tertiary">{t("noBrief")}</p>
+                ) : (
+                  <RunField label={t("briefLabel")}>
+                    <p className="whitespace-pre-wrap text-sm text-fg">{run.input.text}</p>
+                  </RunField>
+                )}
 
-              {run.input.kind === "source" && (
-                <>
-                  {run.input.sourceUrl !== null && (
-                    <RunField label={t("sourceLabel")}>
-                      {/*
+                {run.input.kind === "source" && (
+                  <>
+                    {run.input.sourceUrl !== null && (
+                      <RunField label={t("sourceLabel")}>
+                        {/*
                         Attribution, and ONLY attribution: nothing here or on the
                         server ever fetches it, and it never reaches a model. It
                         is a link because the DTO refuses any scheme but
                         http/https — the reason `sourceUrl` constrains its
                         protocol rather than merely being a URL.
                       */}
-                      {isHttpUrl(run.input.sourceUrl) ? (
-                        <a
-                          href={run.input.sourceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="break-all text-sm text-accent hover:underline"
-                        >
-                          {run.input.sourceUrl}
-                        </a>
-                      ) : (
-                        <span className="break-all text-sm text-fg">{run.input.sourceUrl}</span>
-                      )}
+                        {isHttpUrl(run.input.sourceUrl) ? (
+                          <a
+                            href={run.input.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="break-all text-sm text-accent hover:underline"
+                          >
+                            {run.input.sourceUrl}
+                          </a>
+                        ) : (
+                          <span className="break-all text-sm text-fg">{run.input.sourceUrl}</span>
+                        )}
+                      </RunField>
+                    )}
+                    <RunField label={t("materialLabel")}>
+                      <p
+                        data-testid="run-material"
+                        className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm text-fg"
+                      >
+                        {run.input.material}
+                      </p>
                     </RunField>
-                  )}
-                  <RunField label={t("materialLabel")}>
-                    <p
-                      data-testid="run-material"
-                      className="max-h-64 overflow-y-auto whitespace-pre-wrap text-sm text-fg"
-                    >
-                      {run.input.material}
-                    </p>
-                  </RunField>
-                </>
-              )}
-            </div>
-          </Card>
+                  </>
+                )}
+              </div>
+            </Card>
+          )}
 
           {knowledgeNotes !== null && (
             <Card className="mb-6">
@@ -488,7 +495,9 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             something a person did on purpose, not a failure of this run. Five
             statuses exist and none of them is "a thing that used to be here".
           */}
-          {draftDeleted && <p className="mb-6 text-sm text-fg-tertiary">{t("draftDeleted")}</p>}
+          {draftDeleted && run.input.kind !== "redacted" && (
+            <p className="mb-6 text-sm text-fg-tertiary">{t("draftDeleted")}</p>
+          )}
 
           {/*
             Billed model calls the ledger refused to record. THREE values and
@@ -510,25 +519,27 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             <p className="mb-6 text-sm text-fg-tertiary">{t("unrecordedUnknown")}</p>
           )}
 
-          <h2 className="mb-3 text-lg font-semibold text-fg">{t("stepsTitle")}</h2>
-          <Card padded={false}>
-            <ul className="px-4">
-              {runStepStates(run).map((step) => (
-                <li key={step.key} className="border-b border-border-soft py-3 last:border-b-0">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm text-fg">
-                      {t(`step.${step.key}`)}
-                      {step.total > 1 && (
-                        <span className="ml-2 text-[13px] text-fg-tertiary">
-                          {t("stepProgress", { done: step.done, total: step.total })}
+          {run.input.kind !== "redacted" && (
+            <>
+              <h2 className="mb-3 text-lg font-semibold text-fg">{t("stepsTitle")}</h2>
+              <Card padded={false}>
+                <ul className="px-4">
+                  {runStepStates(run).map((step) => (
+                    <li key={step.key} className="border-b border-border-soft py-3 last:border-b-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm text-fg">
+                          {t(`step.${step.key}`)}
+                          {step.total > 1 && (
+                            <span className="ml-2 text-[13px] text-fg-tertiary">
+                              {t("stepProgress", { done: step.done, total: step.total })}
+                            </span>
+                          )}
                         </span>
-                      )}
-                    </span>
-                    <StatusBadge status={RUN_STEP_BADGE_STATUS[step.state]}>
-                      {t(`stepState.${step.state}`)}
-                    </StatusBadge>
-                  </div>
-                  {/*
+                        <StatusBadge status={RUN_STEP_BADGE_STATUS[step.state]}>
+                          {t(`stepState.${step.state}`)}
+                        </StatusBadge>
+                      </div>
+                      {/*
                     The step's own output, under the step's own heading — which
                     for the fact-checker is the heading its prompt promises the
                     model the list will appear under (`CLAIMS_TO_VERIFY_LABEL`,
@@ -536,11 +547,13 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
                     A separate section further down would put that phrase on the
                     screen twice.
                   */}
-                  {detailFor(step)}
-                </li>
-              ))}
-            </ul>
-          </Card>
+                      {detailFor(step)}
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </>
+          )}
         </>
       )}
     </AppShell>

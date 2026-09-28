@@ -165,7 +165,9 @@ export const API_ERROR_CODES = [
   "content_topic_veto_has_delivery_history",
   "content_delete_requires_archive",
   "content_delete_has_delivery_history",
-  "content_delete_has_generation_history",
+  "content_delete_run_tenant_mismatch",
+  "content_delete_run_active",
+  "content_delete_run_links_changed",
   "content_delete_not_draft",
   "adaptation_pinned_scheduled",
   "adaptation_pinned_manual_ready",
@@ -419,6 +421,7 @@ export const API_ERROR_CODES = [
 
   // ── runs ──────────────────────────────────────────────────────────────────
   "run_not_found",
+  "run_redacted",
   "source_fetch_failed",
   "source_transcript_unavailable",
   "source_response_too_large",

@@ -681,6 +681,27 @@ describe("what the editor changed", () => {
  * that state — and saying so is better than an empty space where the link was.
  */
 describe("a succeeded run whose draft is gone", () => {
+  it("shows a localized redacted receipt without source or checkpoints", async () => {
+    installHandlers({
+      current: makeRun({
+        status: "succeeded",
+        currentStep: null,
+        contentItemId: null,
+        input: { kind: "redacted" },
+        steps: {},
+        unrecordedCalls: 2,
+      }),
+    });
+
+    await renderRun();
+
+    expect(await screen.findByText(en.Runs.redactedReceipt)).toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.draftDeleted)).not.toBeInTheDocument();
+    expect(screen.queryByText("A post about our new pricing")).not.toBeInTheDocument();
+    expect(screen.queryByText(en.Runs.stepsTitle)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 model calls on this run were billed/)).toBeInTheDocument();
+  });
+
   it("says the draft was deleted instead of silently dropping the link", async () => {
     installHandlers({
       current: makeRun({ status: "succeeded", currentStep: null, contentItemId: null }),

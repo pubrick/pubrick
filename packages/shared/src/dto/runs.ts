@@ -572,12 +572,12 @@ export const sourceRunInputSchema = z.object({
 export type SourceRunInput = z.infer<typeof sourceRunInputSchema>;
 
 /**
- * Everything the column may hold — two members today.
+ * Inputs an active worker may execute. A deleted draft leaves the separate
+ * `redactedRunInputSchema` tombstone in the column; it is never executable.
  *
  * Kept as a separate name from the members it is built from because the two
  * answer different questions the day a `kind` exists that no worker can run
- * yet: this one is "what may be stored", and a worker's own list is "what THAT
- * build can execute". The worker never parses with this union — it parses with
+ * yet. The worker never parses with this union — it parses with
  * an explicit list of the members it can execute
  * (`executableRunInputSchema`, `apps/worker/src/generate/generate.service.ts`),
  * so a `topic` run reaching a build that cannot run one fails the run with a
@@ -588,6 +588,15 @@ export const runInputSchema = z.discriminatedUnion("kind", [
   sourceRunInputSchema,
 ]);
 export type RunInput = z.infer<typeof runInputSchema>;
+
+/** A permanent deletion leaves a run receipt without retaining its prompt. */
+export const redactedRunInputSchema = z.object({ kind: z.literal("redacted") }).strict();
+export const storedRunInputSchema = z.discriminatedUnion("kind", [
+  briefRunInputSchema,
+  sourceRunInputSchema,
+  redactedRunInputSchema,
+]);
+export type StoredRunInput = z.infer<typeof storedRunInputSchema>;
 
 /**
  * THE SAME INPUT WITH THE ARTICLE TAKEN OUT — what a run looks like on the
@@ -628,6 +637,7 @@ export type SourceRunListInput = z.infer<typeof sourceRunListInputSchema>;
 export const runListInputSchema = z.discriminatedUnion("kind", [
   briefRunListInputSchema,
   sourceRunListInputSchema,
+  redactedRunInputSchema,
 ]);
 export type RunListInput = z.infer<typeof runListInputSchema>;
 
@@ -725,13 +735,12 @@ export type RunDto = z.infer<typeof runDtoSchema>;
  * plus the WHOLE input, which the list deliberately does not carry either.
  *
  * `input` is restated here rather than inherited because the list's narrowing
- * is a size decision about a poll, not a statement about what a run is: one
- * run, asked for by id, is exactly where the pasted article belongs — the
- * receipt renders it, and so does the source strip above a draft. This is also
- * what `POST /api/runs` and `POST /api/runs/:id/retry` answer with.
+ * is a size decision about a poll. One non-redacted run, asked for by id,
+ * carries the article for its receipt and draft source strip. A deleted
+ * draft's terminal run instead carries the prompt-free tombstone.
  */
 export const runDetailDtoSchema = runDtoSchema.extend({
-  input: runInputSchema,
+  input: storedRunInputSchema,
   steps: runStepsSchema,
 });
 export type RunDetailDto = z.infer<typeof runDetailDtoSchema>;

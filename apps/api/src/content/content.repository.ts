@@ -37,6 +37,7 @@ import {
   draftRevisionImagePlanSchema,
   encodeContentCursor,
   IMAGE_CALL_STEPS,
+  isLiveRunStatus,
   isMalformedStoredAiCredential,
   isManualPlatform,
   isManualPublicationUrl,
@@ -1631,7 +1632,9 @@ export class ContentRepository {
       )
       .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
       .limit(1);
-    return rows[0] ?? null;
+    const run = rows[0];
+    if (!run || run.input.kind === "redacted") return null;
+    return { ...run, input: run.input };
   }
 
   async get(orgId: string, id: string) {
@@ -5842,18 +5845,50 @@ export class ContentRepository {
    * A delivery attempt without a receipt is evidence too: attemptCount is
    * checked even when the worker could not record the platform's answer.
    *
-   * Lock every linked adaptation in ID order before the parent, as required by
-   * docs/lock-order.md. Publication writers hold that same adaptation lock, so
-   * the history check cannot race an in-flight receipt. The final unlocked
-   * adaptation read catches a new row inserted while we waited for the parent;
-   * once its FOR UPDATE lock is held, the item's FK blocks further inserts.
+   * Lock the brand, every linked run in ID order, then adaptations and the
+   * parent. Publication writers hold the adaptation lock, so a receipt cannot
+   * race the decision. The item lock blocks new FK references, and both links
+   * are rechecked there before erasing anything. Run usage remains attributable
+   * in the ledger; the run's content-bearing snapshot does not.
    */
   async delete(orgId: string, id: string): Promise<void> {
     await db.transaction(async (tx) => {
-      await this.requireItem(tx, orgId, id);
+      const [candidate] = await tx
+        .select({ brandId: schema.contentItems.brandId })
+        .from(schema.contentItems)
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+        .limit(1);
+      if (!candidate) throw notFound("content_not_found", "Content item not found");
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, candidate.brandId)))
+        .for("no key update");
+      if (!brand) throw notFound("content_not_found", "Content item not found");
+      const linkedRuns = await tx
+        .select({
+          id: schema.pipelineRuns.id,
+          orgId: schema.pipelineRuns.orgId,
+          brandId: schema.pipelineRuns.brandId,
+          status: schema.pipelineRuns.status,
+        })
+        .from(schema.pipelineRuns)
+        .where(eq(schema.pipelineRuns.contentItemId, id))
+        .orderBy(asc(schema.pipelineRuns.id))
+        .for("update");
+      if (linkedRuns.some((run) => run.orgId !== orgId || run.brandId !== candidate.brandId)) {
+        throw conflict(
+          "content_delete_run_tenant_mismatch",
+          "Linked run ownership is inconsistent",
+        );
+      }
+      if (linkedRuns.some((run) => isLiveRunStatus(run.status))) {
+        throw conflict("content_delete_run_active", "A linked generation run is still active");
+      }
       const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
       const [item] = await tx
         .select({
+          brandId: schema.contentItems.brandId,
           status: schema.contentItems.status,
           archivedFromStatus: schema.contentItems.archivedFromStatus,
           isSafeToDelete: schema.contentItems.isSafeToDelete,
@@ -5862,7 +5897,8 @@ export class ContentRepository {
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
         .limit(1)
         .for("update");
-      if (!item) throw notFound("content_not_found", "Content item not found");
+      if (!item || item.brandId !== candidate.brandId)
+        throw notFound("content_not_found", "Content item not found");
       if (item.status !== "archived") {
         throw conflict(
           "content_delete_requires_archive",
@@ -5882,19 +5918,28 @@ export class ContentRepository {
         );
       }
 
-      // A generated draft also lives in pipeline_runs.steps. Cascading the
-      // content item only nulls that run's FK; it does not erase the checkpoint
-      // text, which GET /runs/:id can still return. Refuse until run retention
-      // and redaction have an explicit design.
-      const [generationRun] = await tx
-        .select({ id: schema.pipelineRuns.id })
+      // The FK is not composite. Check ALL linked runs, including another
+      // tenant's accidental reference, once the item lock prevents new links.
+      const currentRuns = await tx
+        .select({
+          id: schema.pipelineRuns.id,
+          orgId: schema.pipelineRuns.orgId,
+          brandId: schema.pipelineRuns.brandId,
+        })
         .from(schema.pipelineRuns)
-        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.contentItemId, id)))
-        .limit(1);
-      if (generationRun) {
+        .where(eq(schema.pipelineRuns.contentItemId, id));
+      if (
+        currentRuns.length !== linkedRuns.length ||
+        currentRuns.some(
+          (run) =>
+            run.orgId !== orgId ||
+            run.brandId !== candidate.brandId ||
+            !linkedRuns.some((locked) => locked.id === run.id),
+        )
+      ) {
         throw conflict(
-          "content_delete_has_generation_history",
-          "Generated drafts cannot be permanently deleted while their run is retained",
+          "content_delete_run_links_changed",
+          "Linked generation runs changed during deletion",
         );
       }
 
@@ -5947,6 +5992,30 @@ export class ContentRepository {
             "Content with publication history cannot be permanently deleted",
           );
         }
+      }
+
+      for (const run of linkedRuns) {
+        await tx
+          .update(schema.pipelineRuns)
+          .set({
+            input: { kind: "redacted" },
+            steps: {},
+            guidanceSnapshot: null,
+            templateSnapshot: null,
+            error: null,
+            currentStep: null,
+            topicId: null,
+            activeJobId: null,
+            leaseExpiresAt: null,
+          })
+          .where(
+            and(
+              eq(schema.pipelineRuns.id, run.id),
+              eq(schema.pipelineRuns.orgId, orgId),
+              eq(schema.pipelineRuns.brandId, candidate.brandId),
+              eq(schema.pipelineRuns.contentItemId, id),
+            ),
+          );
       }
 
       const deleted = await tx
