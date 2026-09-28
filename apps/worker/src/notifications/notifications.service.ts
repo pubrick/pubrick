@@ -2,7 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { sendTelegramNotification } from "@pubrick/integrations";
 import type { ManualDigestJob } from "@pubrick/shared";
-import { decryptJson, type NotificationEvent } from "@pubrick/shared";
+import {
+  decryptJson,
+  type NotificationDiagnosticReason,
+  type NotificationEvent,
+} from "@pubrick/shared";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
@@ -28,7 +32,7 @@ function notificationLine(value: string | null, fallback: string, limit: number)
   );
 }
 
-export function draftReviewUrl(rawOrigin: string, itemId: string): string | null {
+function notificationUrl(rawOrigin: string, path: string): string | null {
   let origin: URL;
   try {
     origin = new URL(rawOrigin);
@@ -44,7 +48,11 @@ export function draftReviewUrl(rawOrigin: string, itemId: string): string | null
     origin.hash
   )
     return null;
-  return new URL(`/en/content/${encodeURIComponent(itemId)}`, origin.origin).toString();
+  return new URL(path, origin.origin).toString();
+}
+
+export function draftReviewUrl(rawOrigin: string, itemId: string): string | null {
+  return notificationUrl(rawOrigin, `/en/content/${encodeURIComponent(itemId)}`);
 }
 
 @Injectable()
@@ -238,7 +246,13 @@ export class NotificationsService {
     for (let i = 0; i < 25; i++) {
       const rows = await db
         .update(schema.notificationEvents)
-        .set({ status: "attempted", updatedAt: new Date() })
+        // A crash after this claim has an honest, durable ambiguous outcome.
+        .set({
+          status: "attempted",
+          reason: "delivery_unconfirmed",
+          attemptedAt: new Date(),
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(schema.notificationEvents.status, "pending"),
@@ -269,6 +283,7 @@ export class NotificationsService {
     targetId: string;
   }) {
     let status: "sent" | "failed" | "skipped" | "attempted" = "skipped";
+    let reason: NotificationDiagnosticReason | null = null;
     let attemptedSend = false;
     try {
       const rows = await db
@@ -288,7 +303,14 @@ export class NotificationsService {
           : event.event === "draft_ready"
             ? settings?.draftReady
             : settings?.deliveryProblem;
-      if (settings?.enabled && wanted && settings.credentialsEncrypted) {
+      if (!settings?.enabled) {
+        reason = "destination_disabled";
+      } else if (!wanted) {
+        reason = "event_disabled";
+      } else if (!settings.credentialsEncrypted) {
+        status = "failed";
+        reason = "preflight_failed";
+      } else {
         const digest =
           event.event === "morning_digest"
             ? (
@@ -360,6 +382,10 @@ export class NotificationsService {
         if (event.event === "draft_ready" && !draft) {
           // The item was removed, left review, or is outside this event's org.
           status = "skipped";
+          reason = "subject_unavailable";
+        } else if (event.event === "morning_digest" && !digestEnabled) {
+          status = "skipped";
+          reason = digest ? "event_disabled" : "subject_unavailable";
         } else if (digestEnabled) {
           const credentials = decryptJson<{ botToken: string; chatId: string }>(
             settings.credentialsEncrypted,
@@ -368,14 +394,15 @@ export class NotificationsService {
           const url =
             event.event === "draft_ready"
               ? draftReviewUrl(env.WEB_ORIGIN, event.targetId)
-              : new URL(
+              : notificationUrl(
+                  env.WEB_ORIGIN,
                   event.event === "morning_digest"
                     ? `/en/brands/${event.targetId}`
                     : `/en/content/${event.targetId}`,
-                  env.WEB_ORIGIN,
-                ).toString();
+                );
           if (!url) {
             status = "failed";
+            reason = "origin_invalid";
             this.logger.warn(`Notification ${event.id} needs an HTTPS WEB_ORIGIN`);
           } else {
             const message = draft
@@ -399,17 +426,24 @@ export class NotificationsService {
               },
             });
             status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+            reason =
+              result === "sent"
+                ? null
+                : result === "rejected"
+                  ? "provider_rejected"
+                  : "delivery_unconfirmed";
           }
         }
       }
     } catch {
       // A fetch exception can contain the bot token in its URL. Log only identifiers.
       status = attemptedSend ? "attempted" : "failed";
+      reason = attemptedSend ? "delivery_unconfirmed" : "preflight_failed";
       this.logger.warn(`Notification ${event.id} could not be delivered`);
     }
     await db
       .update(schema.notificationEvents)
-      .set({ status, updatedAt: new Date() })
+      .set({ status, reason, updatedAt: new Date() })
       .where(
         and(
           eq(schema.notificationEvents.orgId, event.orgId),

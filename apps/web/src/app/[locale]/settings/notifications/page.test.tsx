@@ -207,8 +207,11 @@ describe("notifications settings", () => {
               id: firstId,
               event: "delivery_unknown",
               status: "attempted",
+              reason: "delivery_unconfirmed",
               createdAt: "2026-09-25T08:00:00.000Z",
+              attemptedAt: "2026-09-25T08:01:00.000Z",
               updatedAt: "2026-09-25T08:01:00.000Z",
+              related: { kind: "post", id: firstId },
             },
           ],
           nextCursor: firstId,
@@ -220,8 +223,11 @@ describe("notifications settings", () => {
               id: secondId,
               event: "draft_ready",
               status: "sent",
+              reason: null,
               createdAt: "2026-09-24T08:00:00.000Z",
+              attemptedAt: "2026-09-24T08:01:00.000Z",
               updatedAt: "2026-09-24T08:01:00.000Z",
+              related: null,
             },
           ],
           nextCursor: null,
@@ -233,9 +239,18 @@ describe("notifications settings", () => {
     expect(await screen.findByText("Delivery unconfirmed")).toBeInTheDocument();
     expect(screen.getByText("Publication outcome unknown")).toBeInTheDocument();
     expect(screen.getByText(/Last activity:/)).toBeInTheDocument();
+    expect(screen.getByText(/First attempt:/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Pubrick will not send this alert again automatically/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open post" })).toHaveAttribute(
+      "href",
+      `/en/content/${firstId}`,
+    );
     expect(request).not.toHaveBeenCalledWith(`/api/notifications/events?cursor=${firstId}`);
     await user.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("Draft ready")).toBeInTheDocument();
+    expect(screen.getByText("Related record is no longer available.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 });

@@ -142,6 +142,82 @@ describe.skipIf(!url)("notification settings repository", () => {
       "Invalid notification history cursor",
     );
   });
+
+  it("returns only live, same-organization links and safe claim diagnostics", async () => {
+    const [ownedBrand] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: first, name: "Linked brand" })
+      .returning({ id: schema.brands.id });
+    const [foreignBrand] = await direct.db
+      .insert(schema.brands)
+      .values({ orgId: second, name: "Foreign brand" })
+      .returning({ id: schema.brands.id });
+    if (!ownedBrand || !foreignBrand) throw new Error("Brand seed failed");
+    const [ownedPost] = await direct.db
+      .insert(schema.contentItems)
+      .values({ orgId: first, brandId: ownedBrand.id, body: "Owned" })
+      .returning({ id: schema.contentItems.id });
+    const [foreignPost] = await direct.db
+      .insert(schema.contentItems)
+      .values({ orgId: second, brandId: foreignBrand.id, body: "Foreign" })
+      .returning({ id: schema.contentItems.id });
+    if (!ownedPost || !foreignPost) throw new Error("Post seed failed");
+    const attemptedAt = new Date("2026-09-28T08:00:00.000Z");
+    const createdAt = new Date(Date.now() + 60_000);
+    const inserted = await direct.db
+      .insert(schema.notificationEvents)
+      .values([
+        {
+          orgId: first,
+          event: "delivery_unknown",
+          subjectId: randomUUID(),
+          targetId: ownedPost.id,
+          status: "attempted",
+          reason: "delivery_unconfirmed",
+          attemptedAt,
+          createdAt,
+        },
+        {
+          orgId: first,
+          event: "delivery_failed",
+          subjectId: randomUUID(),
+          targetId: foreignPost.id,
+          status: "failed",
+          reason: "provider_rejected",
+          attemptedAt,
+          createdAt,
+        },
+        {
+          orgId: first,
+          event: "morning_digest",
+          subjectId: randomUUID(),
+          targetId: ownedBrand.id,
+          status: "sent",
+          attemptedAt,
+          createdAt,
+        },
+      ])
+      .returning({
+        id: schema.notificationEvents.id,
+        targetId: schema.notificationEvents.targetId,
+      });
+    const events = (await repo.history(first, {})).events;
+    const owned = events.find((event) => event.id === inserted[0]?.id);
+    const foreign = events.find((event) => event.id === inserted[1]?.id);
+    const digest = events.find((event) => event.id === inserted[2]?.id);
+    expect(owned).toMatchObject({
+      reason: "delivery_unconfirmed",
+      attemptedAt: attemptedAt.toISOString(),
+      related: { kind: "post", id: ownedPost.id },
+    });
+    expect(foreign?.related).toBeNull();
+    expect(JSON.stringify(foreign)).not.toContain(foreignPost.id);
+    expect(digest?.related).toEqual({ kind: "brand", id: ownedBrand.id });
+    await direct.db.delete(schema.contentItems).where(eq(schema.contentItems.id, ownedPost.id));
+    expect(
+      (await repo.history(first, {})).events.find((event) => event.id === owned?.id)?.related,
+    ).toBeNull();
+  });
   it("queues a brand digest once per local day, with no foreign or disabled admission", async () => {
     const [owned] = await direct.db
       .insert(schema.brands)

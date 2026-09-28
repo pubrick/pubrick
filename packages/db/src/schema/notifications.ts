@@ -1,4 +1,4 @@
-import { NOTIFICATION_EVENTS } from "@pubrick/shared";
+import { NOTIFICATION_DIAGNOSTIC_REASONS, NOTIFICATION_EVENTS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
@@ -95,7 +95,9 @@ export const notificationEvents = pgTable(
     status: text("status", { enum: ["pending", "attempted", "sent", "failed", "skipped"] })
       .notNull()
       .default("pending"),
+    reason: text("reason", { enum: NOTIFICATION_DIAGNOSTIC_REASONS }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    attemptedAt: timestamp("attempted_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -109,5 +111,6 @@ export const notificationEvents = pgTable(
       "failed",
       "skipped",
     ] as const),
+    enumCheck("notification_events_reason_check", t.reason, NOTIFICATION_DIAGNOSTIC_REASONS),
   ],
 );

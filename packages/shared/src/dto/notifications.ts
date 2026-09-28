@@ -73,6 +73,18 @@ export const NOTIFICATION_EVENTS = [
 ] as const;
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number];
 
+/** Safe operator diagnostics: never persist a provider response or exception. */
+export const NOTIFICATION_DIAGNOSTIC_REASONS = [
+  "destination_disabled",
+  "event_disabled",
+  "subject_unavailable",
+  "origin_invalid",
+  "preflight_failed",
+  "provider_rejected",
+  "delivery_unconfirmed",
+] as const;
+export type NotificationDiagnosticReason = (typeof NOTIFICATION_DIAGNOSTIC_REASONS)[number];
+
 export const notificationHistoryQuerySchema = z.object({ cursor: z.uuid().optional() });
 export type NotificationHistoryQuery = z.infer<typeof notificationHistoryQuerySchema>;
 
@@ -82,8 +94,16 @@ export const notificationHistorySchema = z.object({
       id: z.uuid(),
       event: z.enum(NOTIFICATION_EVENTS),
       status: z.enum(["pending", "attempted", "sent", "failed", "skipped"]),
+      reason: z.enum(NOTIFICATION_DIAGNOSTIC_REASONS).nullable(),
       createdAt: z.iso.datetime(),
+      attemptedAt: z.iso.datetime().nullable(),
       updatedAt: z.iso.datetime(),
+      related: z
+        .discriminatedUnion("kind", [
+          z.object({ kind: z.literal("post"), id: z.uuid() }),
+          z.object({ kind: z.literal("brand"), id: z.uuid() }),
+        ])
+        .nullable(),
     }),
   ),
   nextCursor: z.uuid().nullable(),

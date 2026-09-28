@@ -14,7 +14,7 @@ import {
   type NotificationHistoryQuery,
   type NotificationSettingsUpdate,
 } from "@pubrick/shared";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
@@ -106,8 +106,11 @@ export class NotificationsRepository {
       .select({
         id: schema.notificationEvents.id,
         event: schema.notificationEvents.event,
+        targetId: schema.notificationEvents.targetId,
         status: schema.notificationEvents.status,
+        reason: schema.notificationEvents.reason,
         createdAt: schema.notificationEvents.createdAt,
+        attemptedAt: schema.notificationEvents.attemptedAt,
         updatedAt: schema.notificationEvents.updatedAt,
       })
       .from(schema.notificationEvents)
@@ -128,10 +131,52 @@ export class NotificationsRepository {
       .orderBy(desc(schema.notificationEvents.createdAt), desc(schema.notificationEvents.id))
       .limit(21);
     const hasMore = rows.length > 20;
-    const events = rows.slice(0, 20).map((row) => ({
-      ...row,
+    const page = rows.slice(0, 20);
+    const postIds = page.filter((row) => row.event !== "morning_digest").map((row) => row.targetId);
+    const brandIds = page
+      .filter((row) => row.event === "morning_digest")
+      .map((row) => row.targetId);
+    const [posts, brands] = await Promise.all([
+      postIds.length
+        ? db
+            .select({ id: schema.contentItems.id })
+            .from(schema.contentItems)
+            .innerJoin(
+              schema.brands,
+              and(
+                eq(schema.brands.id, schema.contentItems.brandId),
+                eq(schema.brands.orgId, orgId),
+              ),
+            )
+            .where(
+              and(eq(schema.contentItems.orgId, orgId), inArray(schema.contentItems.id, postIds)),
+            )
+        : Promise.resolve([]),
+      brandIds.length
+        ? db
+            .select({ id: schema.brands.id })
+            .from(schema.brands)
+            .where(and(eq(schema.brands.orgId, orgId), inArray(schema.brands.id, brandIds)))
+        : Promise.resolve([]),
+    ]);
+    const ownedPosts = new Set(posts.map((row) => row.id));
+    const ownedBrands = new Set(brands.map((row) => row.id));
+    const events = page.map((row) => ({
+      id: row.id,
+      event: row.event,
+      status: row.status,
+      reason: row.reason,
       createdAt: row.createdAt.toISOString(),
+      attemptedAt: row.attemptedAt?.toISOString() ?? null,
       updatedAt: row.updatedAt.toISOString(),
+      related:
+        row.event === "morning_digest"
+          ? ownedBrands.has(row.targetId)
+            ? ({ kind: "brand", id: row.targetId } as const)
+            : null
+          : ownedPosts.has(row.targetId)
+            ? ({ kind: "post", id: row.targetId } as const)
+            : null,
     }));
     return { events, nextCursor: hasMore ? (events.at(-1)?.id ?? null) : null };
   }
