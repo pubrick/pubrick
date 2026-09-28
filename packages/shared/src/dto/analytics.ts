@@ -162,3 +162,34 @@ export const brandFormatSpendDtoSchema = z.object({
   ),
 });
 export type BrandFormatSpendDto = z.infer<typeof brandFormatSpendDtoSchema>;
+
+/** Current outcomes of runs created in the window, classified only by surviving origin links. */
+export const brandGenerationOriginsDtoSchema = z.object({
+  days: analyticsDaysSchema,
+  from: z.iso.datetime(),
+  to: z.iso.datetime(),
+  total: z.number().int().nonnegative(),
+  origins: z.array(
+    z.object({
+      origin: z.enum(["automatic", "manual", "ambiguous", "unattributed"]),
+      total: z.number().int().nonnegative(),
+      queued: z.number().int().nonnegative(),
+      running: z.number().int().nonnegative(),
+      succeeded: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      cancelled: z.number().int().nonnegative(),
+      linkedDrafts: z.number().int().nonnegative(),
+      publishedRuns: z.number().int().nonnegative(),
+    }),
+  ),
+  recentFailedRuns: z
+    .array(
+      z.object({
+        id: z.uuid(),
+        origin: z.enum(["automatic", "manual", "ambiguous", "unattributed"]),
+        createdAt: z.iso.datetime(),
+      }),
+    )
+    .max(6),
+});
+export type BrandGenerationOriginsDto = z.infer<typeof brandGenerationOriginsDtoSchema>;
