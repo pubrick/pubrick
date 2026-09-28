@@ -1,3 +1,9 @@
+import {
+  PUBLICATION_OPERATION_FILTERS,
+  type PublicationOperationFilter,
+  type PublicPublication,
+  publicPublicationSchema,
+} from "@pubrick/shared";
 import { z } from "zod";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -30,6 +36,14 @@ export type ContentDetail = z.infer<typeof detailSchema>;
 export type ContentStatus = z.infer<typeof contentStatusSchema>;
 export type ListOptions = { status?: ContentStatus; limit?: number; cursor?: string };
 export type ListPage = { items: ContentSummary[]; nextCursor: string | null };
+export type PublicationListOptions = {
+  brandId: string;
+  filter?: PublicationOperationFilter;
+  limit?: number;
+  cursor?: string;
+};
+export type PublicationListPage = { items: PublicPublication[]; nextCursor: string | null };
+export const publicationFilterSchema = z.enum(PUBLICATION_OPERATION_FILTERS);
 
 export class PublicApiError extends Error {
   constructor(message: string) {
@@ -63,7 +77,11 @@ export function validateBaseUrl(value: string): URL {
   return url;
 }
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): { baseUrl: URL; apiKey: string } {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
+  baseUrl: URL;
+  apiKey: string;
+  publicationApiKey?: string;
+} {
   if (!env.PUBRICK_API_BASE_URL) {
     throw new PublicApiError("PUBRICK_API_BASE_URL is required.");
   }
@@ -72,7 +90,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): { baseUrl: URL
   if (!apiKey || !/^[A-Za-z0-9._~-]+$/.test(apiKey)) {
     throw new PublicApiError("PUBRICK_API_KEY is required and must be a single-line Bearer key.");
   }
-  return { baseUrl, apiKey };
+  const publicationApiKey = env.PUBRICK_PUBLICATIONS_API_KEY;
+  if (publicationApiKey !== undefined && !/^[A-Za-z0-9._~-]+$/.test(publicationApiKey)) {
+    throw new PublicApiError("PUBRICK_PUBLICATIONS_API_KEY must be a single-line Bearer key.");
+  }
+  return { baseUrl, apiKey, ...(publicationApiKey === undefined ? {} : { publicationApiKey }) };
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
@@ -110,71 +132,115 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 }
 
+async function request(
+  config: { baseUrl: URL; apiKey: string },
+  fetcher: typeof fetch,
+  path: string,
+  query?: URLSearchParams,
+): Promise<Response> {
+  const url = new URL(path, config.baseUrl);
+  if (query) url.search = query.toString();
+  try {
+    return await fetcher(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${config.apiKey}`, Accept: "application/json" },
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    // Fetch errors can include the URL or headers. Do not relay them to an MCP client.
+    throw new PublicApiError("Could not reach Pubrick. Check the API URL and connection.");
+  }
+}
+
+async function parseResponse(response: Response, publication = false): Promise<unknown> {
+  if (response.status === 401 || response.status === 403) {
+    throw new PublicApiError(
+      publication
+        ? "Pubrick denied the publication API key. Check its value and publications:read scope."
+        : "Pubrick denied the API key. Check its value and content:read scope.",
+    );
+  }
+  if (response.status === 404) {
+    throw new PublicApiError(
+      publication
+        ? "Brand was not found in this key's organization."
+        : "Content was not found in this key's organization.",
+    );
+  }
+  if (response.status === 400) {
+    throw new PublicApiError(
+      publication
+        ? "Pubrick rejected the publication request or cursor."
+        : "Pubrick rejected the content request or cursor.",
+    );
+  }
+  if (response.status === 429) {
+    throw new PublicApiError("Pubrick is rate limiting requests. Retry later.");
+  }
+  if (!response.ok) {
+    throw new PublicApiError("Pubrick could not complete the request. Retry later.");
+  }
+  return readBoundedJson(response);
+}
+
+function nextCursor(response: Response): string | null {
+  const cursor = response.headers.get("x-next-cursor");
+  if (cursor && cursor.length > MAX_CURSOR_LENGTH) {
+    throw new PublicApiError("Pubrick returned an invalid pagination cursor.");
+  }
+  return cursor || null;
+}
+
 export function createPublicContentClient(
   config: { baseUrl: URL; apiKey: string },
   fetcher: typeof fetch = fetch,
 ) {
-  async function request(path: string, query?: URLSearchParams): Promise<Response> {
-    const url = new URL(path, config.baseUrl);
-    if (query) url.search = query.toString();
-    try {
-      return await fetcher(url, {
-        method: "GET",
-        headers: { Authorization: `Bearer ${config.apiKey}`, Accept: "application/json" },
-        redirect: "error",
-        credentials: "omit",
-        cache: "no-store",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-    } catch {
-      // Fetch errors can include the URL or headers. Do not relay them to an MCP client.
-      throw new PublicApiError("Could not reach Pubrick. Check the API URL and connection.");
-    }
-  }
-
-  async function parseResponse(response: Response): Promise<unknown> {
-    if (response.status === 401 || response.status === 403) {
-      throw new PublicApiError(
-        "Pubrick denied the API key. Check its value and content:read scope.",
-      );
-    }
-    if (response.status === 404) {
-      throw new PublicApiError("Content was not found in this key's organization.");
-    }
-    if (response.status === 400) {
-      throw new PublicApiError("Pubrick rejected the content request or cursor.");
-    }
-    if (response.status === 429) {
-      throw new PublicApiError("Pubrick is rate limiting requests. Retry later.");
-    }
-    if (!response.ok) {
-      throw new PublicApiError("Pubrick could not complete the request. Retry later.");
-    }
-    return readBoundedJson(response);
-  }
-
   return {
     async list(options: ListOptions = {}): Promise<ListPage> {
       const query = new URLSearchParams();
       if (options.status) query.set("status", options.status);
       if (options.limit !== undefined) query.set("limit", String(options.limit));
       if (options.cursor) query.set("cursor", options.cursor);
-      const response = await request("api/v1/content", query);
+      const response = await request(config, fetcher, "api/v1/content", query);
       const raw = await parseResponse(response);
       const parsed = z.array(summarySchema).max(200).safeParse(raw);
       if (!parsed.success) throw new PublicApiError("Pubrick returned an invalid content list.");
-      const nextCursor = response.headers.get("x-next-cursor");
-      if (nextCursor && nextCursor.length > MAX_CURSOR_LENGTH) {
-        throw new PublicApiError("Pubrick returned an invalid pagination cursor.");
-      }
-      return { items: parsed.data, nextCursor: nextCursor || null };
+      return { items: parsed.data, nextCursor: nextCursor(response) };
     },
     async get(id: string): Promise<ContentDetail> {
-      const response = await request(`api/v1/content/${encodeURIComponent(id)}`);
+      const response = await request(config, fetcher, `api/v1/content/${encodeURIComponent(id)}`);
       const raw = await parseResponse(response);
       const parsed = detailSchema.safeParse(raw);
       if (!parsed.success) throw new PublicApiError("Pubrick returned an invalid content item.");
       return parsed.data;
+    },
+  };
+}
+
+export function createPublicPublicationClient(
+  config: { baseUrl: URL; apiKey: string },
+  fetcher: typeof fetch = fetch,
+) {
+  return {
+    async list(options: PublicationListOptions): Promise<PublicationListPage> {
+      const query = new URLSearchParams();
+      if (options.filter) query.set("filter", options.filter);
+      if (options.limit !== undefined) query.set("limit", String(options.limit));
+      if (options.cursor) query.set("cursor", options.cursor);
+      const response = await request(
+        config,
+        fetcher,
+        `api/v1/brands/${encodeURIComponent(options.brandId)}/publications`,
+        query,
+      );
+      const raw = await parseResponse(response, true);
+      const parsed = z.array(publicPublicationSchema).max(100).safeParse(raw);
+      if (!parsed.success)
+        throw new PublicApiError("Pubrick returned an invalid publication list.");
+      return { items: parsed.data, nextCursor: nextCursor(response) };
     },
   };
 }

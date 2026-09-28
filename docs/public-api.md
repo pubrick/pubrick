@@ -45,6 +45,6 @@ The response is an array of current channel adaptations, newest first by creatio
 Each row contains exactly `id`, `contentItemId`, `channelId`, `platform`, `deliveryOutcome`, `failureReason`, `scheduledAt`, `publishedAt`, `externalUrl`, `assertedAt`, and `createdAt`. `failureReason` is a closed code, not provider prose. `unknown` and `partial` mean a send may already be live; check the channel before any human re-approval in the editor. `assertedAt` means a person resolved a delivery whose platform result was unknown. The public API omits the person's name, post text, raw errors, partial Telegram text, and credentials. Publication reads do not change delivery state. Responses use `Cache-Control: private, no-store`.
 
 The current v1 surface has no write endpoints. The [read-only MCP server](mcp.md)
-currently exposes the content tools through `content:read`; it does not expose publication operations. [Outgoing webhooks](webhooks.md) use
+exposes content tools through `PUBRICK_API_KEY` (`content:read`) and can expose `list_brand_publications` when a separate `PUBRICK_PUBLICATIONS_API_KEY` (`publications:read`) is configured. [Outgoing webhooks](webhooks.md) use
 separate session-authenticated management routes and do not grant write access
 to a public API key.

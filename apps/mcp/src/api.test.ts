@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPublicContentClient, loadConfig, PublicApiError, validateBaseUrl } from "./api.js";
+import {
+  createPublicContentClient,
+  createPublicPublicationClient,
+  loadConfig,
+  PublicApiError,
+  validateBaseUrl,
+} from "./api.js";
 
 const id = "90ebcfc4-e20a-4b03-8501-0e883767a137";
 const brandId = "0d139af6-c7a0-46f8-bfb7-b4111d8c3121";
 const key = "pbrk_private_test_key";
+const publicationKey = "pbrk_publication_test_key";
 const summary = {
   id,
   brandId,
@@ -12,6 +19,19 @@ const summary = {
   origin: "human",
   createdAt: "2026-09-24T00:00:00.000Z",
   updatedAt: "2026-09-24T00:00:00.000Z",
+};
+const publication = {
+  id,
+  contentItemId: "1ec2fa88-a1aa-4a81-a79b-d340659984ba",
+  channelId: "d6ab65a0-8145-4a22-82fa-956042f43c2a",
+  platform: "telegram",
+  deliveryOutcome: "unknown",
+  failureReason: "outcome_unknown",
+  scheduledAt: null,
+  publishedAt: null,
+  externalUrl: null,
+  assertedAt: null,
+  createdAt: "2026-09-24T00:00:00.000Z",
 };
 
 function jsonResponse(body: unknown, init: ResponseInit = {}) {
@@ -124,5 +144,111 @@ describe("configuration", () => {
     expect(() =>
       loadConfig({ PUBRICK_API_BASE_URL: "https://pubrick.example", PUBRICK_API_KEY: `${key}\n` }),
     ).toThrow("PUBRICK_API_KEY is required");
+  });
+
+  it("keeps the publication key optional but rejects malformed configured values", () => {
+    const env = { PUBRICK_API_BASE_URL: "https://pubrick.example", PUBRICK_API_KEY: key };
+    expect(loadConfig(env)).toEqual({
+      baseUrl: validateBaseUrl(env.PUBRICK_API_BASE_URL),
+      apiKey: key,
+    });
+    expect(
+      loadConfig({ ...env, PUBRICK_PUBLICATIONS_API_KEY: publicationKey }).publicationApiKey,
+    ).toBe(publicationKey);
+    for (const invalid of [
+      "",
+      `${publicationKey}\n`,
+      `Bearer ${publicationKey}`,
+      `${publicationKey}\r`,
+    ]) {
+      expect(() => loadConfig({ ...env, PUBRICK_PUBLICATIONS_API_KEY: invalid })).toThrow(
+        "PUBRICK_PUBLICATIONS_API_KEY must be a single-line Bearer key.",
+      );
+    }
+  });
+});
+
+describe("public publication API client", () => {
+  const config = {
+    baseUrl: validateBaseUrl("https://pubrick.example/team/"),
+    apiKey: publicationKey,
+  };
+
+  it("uses only the publication key, preserves cursor pagination, and exposes the strict public DTO", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      jsonResponse([publication], {
+        headers: { "content-type": "application/json", "x-next-cursor": "opaque+next=" },
+      }),
+    );
+    const client = createPublicPublicationClient(config, fetcher);
+    expect(
+      await client.list({ brandId, filter: "needs_attention", limit: 1, cursor: "opaque:first" }),
+    ).toEqual({
+      items: [publication],
+      nextCursor: "opaque+next=",
+    });
+    const [url, init] = fetcher.mock.calls[0] ?? [];
+    expect(String(url)).toBe(
+      `https://pubrick.example/team/api/v1/brands/${brandId}/publications?filter=needs_attention&limit=1&cursor=opaque%3Afirst`,
+    );
+    expect(init).toMatchObject({
+      method: "GET",
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${publicationKey}`, Accept: "application/json" },
+    });
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(JSON.stringify(init)).not.toContain(key);
+  });
+
+  it("rejects malformed, extra-field, oversized and overlong-cursor responses", async () => {
+    const cases: Array<[unknown, string]> = [
+      [[{ ...publication, failureReason: "provider leaked prose" }], "invalid publication list"],
+      [[{ ...publication, rawProviderError: "secret" }], "invalid publication list"],
+      ["x".repeat(2 * 1024 * 1024 + 1), "too large"],
+    ];
+    for (const [body, error] of cases) {
+      await expect(
+        createPublicPublicationClient(config, async () => jsonResponse(body)).list({ brandId }),
+      ).rejects.toThrow(error);
+    }
+    const longCursor = createPublicPublicationClient(config, async () =>
+      jsonResponse([publication], {
+        headers: { "content-type": "application/json", "x-next-cursor": "x".repeat(4097) },
+      }),
+    );
+    await expect(longCursor.list({ brandId })).rejects.toThrow("invalid pagination cursor");
+    const badJson = createPublicPublicationClient(
+      config,
+      async () =>
+        new Response("{", {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(badJson.list({ brandId })).rejects.toThrow("invalid JSON");
+  });
+
+  it("maps 400, 401, 403 and 404 to generic errors without relaying API bodies or keys", async () => {
+    for (const status of [400, 401, 403, 404]) {
+      const client = createPublicPublicationClient(config, async () =>
+        jsonResponse({ message: `private ${publicationKey}` }, { status }),
+      );
+      await expect(client.list({ brandId })).rejects.toMatchObject({ name: "PublicApiError" });
+      try {
+        await client.list({ brandId });
+      } catch (error) {
+        expect(String(error)).not.toContain(publicationKey);
+        expect(String(error)).not.toContain("private");
+      }
+    }
+  });
+
+  it("refuses redirects and network errors without exposing their details", async () => {
+    const client = createPublicPublicationClient(config, async (_url, init) => {
+      expect(init?.redirect).toBe("error");
+      throw new Error(`redirect ${publicationKey}`);
+    });
+    await expect(client.list({ brandId })).rejects.toThrow("Could not reach Pubrick");
   });
 });
