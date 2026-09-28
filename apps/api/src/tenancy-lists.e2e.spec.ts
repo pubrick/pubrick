@@ -432,6 +432,54 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "brands/:brandId/publications/archive",
+    identify: id,
+    rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Archived delivery.", channelIds: [channelId] })
+        .expect(201);
+      const adaptationId = item.body.adaptations[0].id as string;
+      const { createDb, schema } = await import("@pubrick/db");
+      const { eq } = await import("drizzle-orm");
+      const { db, pool } = createDb(url as string);
+      let receipt: { id: string; createdAt: Date };
+      try {
+        const [adaptation] = await db
+          .select({ orgId: schema.adaptations.orgId })
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.id, adaptationId))
+          .limit(1);
+        if (!adaptation) throw new Error("Missing archive adaptation fixture");
+        const [created] = await db
+          .insert(schema.publications)
+          .values({
+            orgId: adaptation.orgId,
+            adaptationId,
+            channelId,
+            status: "published",
+            externalUrl: "https://t.me/pubrick/archived",
+          })
+          .returning({ id: schema.publications.id, createdAt: schema.publications.createdAt });
+        if (!created) throw new Error("Missing archive receipt fixture");
+        receipt = created;
+      } finally {
+        await pool.end();
+      }
+      await agent.delete(`/api/channels/${channelId}`).expect(200);
+      return {
+        id: receipt.id,
+        paths: [
+          `/api/brands/${brandId}/publications/archive`,
+          `/api/brands/${brandId}/publications/archive?cursor=${encodeURIComponent(justAfter(receipt.createdAt.toISOString()))}`,
+        ],
+      };
+    },
+  },
+  {
     controller: "runs",
     identify: id,
     seed: async (agent) => {
