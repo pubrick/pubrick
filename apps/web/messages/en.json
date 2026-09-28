@@ -123,7 +123,8 @@
     "automaticClaimEvidenceHint": "For each new AI draft, start an advisory search on its saved text when both workspace keys are available. This does not edit or certify the draft.",
     "automaticClaimEvidenceCost": "Each draft can use up to five billable Yandex searches and billed AI calls on your workspace keys. Off by default.",
     "automaticClaimEvidenceEnable": "Enable",
-    "automaticClaimEvidenceDisable": "Disable"
+    "automaticClaimEvidenceDisable": "Disable",
+    "publicationsLink": "Publications"
   },
   "BrandAccess": {
     "roleOwner": "Owner",
@@ -2391,5 +2392,46 @@
     "orgReadOnly": "Time zone: {timezone} · Organization threshold: {amount}/day",
     "orgInvalid": "Enter a valid IANA time zone and threshold from $0.01 to $5.00.",
     "orgSaved": "Organization admission settings saved."
+  },
+  "PublicationOperations": {
+    "title": "Publication operations",
+    "back": "← {brand}",
+    "brandFallback": "Brand",
+    "intro": "Review each channel’s current delivery outcome. Unknown and partial deliveries may already be live; inspect the channel before sending again.",
+    "filter": {
+      "needs_attention": "Needs attention",
+      "scheduled": "Scheduled",
+      "published": "Published",
+      "all": "All"
+    },
+    "empty": {
+      "needs_attention": "No deliveries need attention.",
+      "scheduled": "No channel deliveries are scheduled.",
+      "published": "No channel deliveries have been published.",
+      "all": "No channel deliveries yet."
+    },
+    "openQueue": "Open content queue",
+    "loadError": "Publication operations could not be loaded.",
+    "retry": "Try again",
+    "loadMore": "Load more",
+    "loading": "Loading…",
+    "unknownSafety": "The platform did not confirm delivery. Check the channel before sending again.",
+    "partialSafety": "Part of this Telegram post is live. Open its adaptation to recover the reply.",
+    "humanAssertion": "Marked published by {name} on {date}; no platform confirmation.",
+    "formerMember": "a former member",
+    "publishedAt": "Published on {date}",
+    "scheduledAt": "Scheduled for {date}",
+    "failure": {
+      "schedule_missed": "The scheduled window was missed.",
+      "no_adapter": "No publisher is available for this platform.",
+      "credentials_unreadable": "Saved credentials could not be read.",
+      "credentials_missing": "The connected channel is missing.",
+      "credentials_invalid": "Saved credentials are invalid.",
+      "platform_rejected": "The platform refused this post.",
+      "rejected_before_send": "The post was refused before delivery.",
+      "retries_exhausted": "Delivery attempts were exhausted.",
+      "send_abandoned": "Delivery stopped before reaching the platform.",
+      "outcome_unknown": "The delivery outcome is unknown."
+    }
   }
 }

@@ -463,6 +463,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * belong.
    */
   const brandId = item?.brandId ?? null;
+  // The inbox can open a card before the async item read has rendered its anchor.
+  // Scroll once after that card exists; polling must never jump the editor back.
+  const scrolledToAdaptation = useRef<string | null>(null);
+  useEffect(() => {
+    if (!item || !window.location.hash.startsWith("#adaptation-")) return;
+    const anchor = window.location.hash.slice(1);
+    if (scrolledToAdaptation.current === `${item.id}:${anchor}`) return;
+    if (!item.adaptations.some((adaptation) => `adaptation-${adaptation.id}` === anchor)) return;
+    const target = document.getElementById(anchor);
+    if (!target) return;
+    scrolledToAdaptation.current = `${item.id}:${anchor}`;
+    target.scrollIntoView?.({ block: "start" });
+  }, [item]);
   useEffect(() => {
     if (!brandId) return;
     let stale = false;
@@ -2280,6 +2293,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       <div className="mb-6 flex flex-col gap-3">
         {item.adaptations.map((a) => (
           <Card key={a.id}>
+            <span id={`adaptation-${a.id}`} className="block scroll-mt-24" />
             <div className="mb-3 flex items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
               <StatusBadge status={DELIVERY_BADGE_STATUS[a.deliveryOutcome]}>

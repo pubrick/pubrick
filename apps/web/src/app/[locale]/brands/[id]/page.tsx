@@ -569,6 +569,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <Link href={`/${locale}/brands/${id}/analytics`} className="text-accent underline">
           {tb("analyticsLink")}
         </Link>
+        <Link href={`/${locale}/brands/${id}/publications`} className="text-accent underline">
+          {tb("publicationsLink")}
+        </Link>
         {canManageAccess && (
           <Link href={`/${locale}/brands/${id}/access`} className="text-accent underline">
             {tb("accessLink")}

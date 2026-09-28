@@ -123,7 +123,8 @@
     "automaticClaimEvidenceHint": "Para cada novo rascunho de IA, inicia uma pesquisa consultiva sobre o texto salvo quando ambas as chaves do espaço de trabalho estiverem disponíveis. Não edita nem certifica o rascunho.",
     "automaticClaimEvidenceCost": "Cada rascunho pode usar até cinco pesquisas pagas do Yandex e chamadas de IA cobradas nas chaves do espaço de trabalho. Desativado por padrão.",
     "automaticClaimEvidenceEnable": "Ativar",
-    "automaticClaimEvidenceDisable": "Desativar"
+    "automaticClaimEvidenceDisable": "Desativar",
+    "publicationsLink": "Publicações"
   },
   "BrandAccess": {
     "roleOwner": "Proprietário",
@@ -2391,5 +2392,46 @@
     "orgReadOnly": "Fuso horário: {timezone} · Limite da organização: {amount}/dia",
     "orgInvalid": "Informe um fuso horário IANA válido e um limite de US$ 0,01 a US$ 5,00.",
     "orgSaved": "Configurações de admissão salvas."
+  },
+  "PublicationOperations": {
+    "title": "Operações de publicação",
+    "back": "← {brand}",
+    "brandFallback": "Marca",
+    "intro": "Confira o resultado atual de cada canal. Entregas desconhecidas ou parciais podem já estar publicadas; verifique o canal antes de reenviar.",
+    "filter": {
+      "needs_attention": "Precisam de atenção",
+      "scheduled": "Agendadas",
+      "published": "Publicadas",
+      "all": "Todas"
+    },
+    "empty": {
+      "needs_attention": "Nenhuma entrega precisa de atenção.",
+      "scheduled": "Não há entregas agendadas.",
+      "published": "Não há entregas publicadas.",
+      "all": "Ainda não há entregas."
+    },
+    "openQueue": "Abrir fila de conteúdo",
+    "loadError": "Não foi possível carregar as operações de publicação.",
+    "retry": "Tentar novamente",
+    "loadMore": "Carregar mais",
+    "loading": "Carregando…",
+    "unknownSafety": "A plataforma não confirmou a entrega. Verifique o canal antes de reenviar.",
+    "partialSafety": "Parte desta publicação do Telegram já está no ar. Abra a adaptação para recuperar a resposta.",
+    "humanAssertion": "Marcada como publicada por {name} em {date}; sem confirmação da plataforma.",
+    "formerMember": "um ex-integrante",
+    "publishedAt": "Publicada em {date}",
+    "scheduledAt": "Agendada para {date}",
+    "failure": {
+      "schedule_missed": "A janela agendada foi perdida.",
+      "no_adapter": "Não há publicador para esta plataforma.",
+      "credentials_unreadable": "Não foi possível ler as credenciais salvas.",
+      "credentials_missing": "O canal conectado está ausente.",
+      "credentials_invalid": "As credenciais salvas são inválidas.",
+      "platform_rejected": "A plataforma rejeitou esta publicação.",
+      "rejected_before_send": "A publicação foi recusada antes do envio.",
+      "retries_exhausted": "As tentativas de entrega se esgotaram.",
+      "send_abandoned": "A entrega parou antes de alcançar a plataforma.",
+      "outcome_unknown": "O resultado da entrega é desconhecido."
+    }
   }
 }

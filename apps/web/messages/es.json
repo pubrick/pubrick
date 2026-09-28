@@ -123,7 +123,8 @@
     "automaticClaimEvidenceHint": "Para cada nuevo borrador de IA, inicia una búsqueda orientativa sobre el texto guardado cuando estén disponibles ambas claves del espacio de trabajo. No edita ni certifica el borrador.",
     "automaticClaimEvidenceCost": "Cada borrador puede usar hasta cinco búsquedas de Yandex de pago y llamadas de IA facturables con las claves del espacio de trabajo. Desactivado por defecto.",
     "automaticClaimEvidenceEnable": "Activar",
-    "automaticClaimEvidenceDisable": "Desactivar"
+    "automaticClaimEvidenceDisable": "Desactivar",
+    "publicationsLink": "Publicaciones"
   },
   "BrandAccess": {
     "roleOwner": "Propietario",
@@ -2391,5 +2392,46 @@
     "orgReadOnly": "Zona horaria: {timezone} · Umbral de organización: {amount}/día",
     "orgInvalid": "Introduce una zona horaria IANA válida y un umbral de 0,01 a 5,00 USD.",
     "orgSaved": "Configuración de admisión guardada."
+  },
+  "PublicationOperations": {
+    "title": "Operaciones de publicación",
+    "back": "← {brand}",
+    "brandFallback": "Marca",
+    "intro": "Revisa el resultado actual de cada canal. Las entregas desconocidas o parciales podrían estar publicadas; comprueba el canal antes de volver a enviar.",
+    "filter": {
+      "needs_attention": "Requieren atención",
+      "scheduled": "Programadas",
+      "published": "Publicadas",
+      "all": "Todas"
+    },
+    "empty": {
+      "needs_attention": "Ninguna entrega requiere atención.",
+      "scheduled": "No hay entregas programadas.",
+      "published": "No hay entregas publicadas.",
+      "all": "Aún no hay entregas."
+    },
+    "openQueue": "Abrir cola de contenido",
+    "loadError": "No se pudieron cargar las operaciones de publicación.",
+    "retry": "Reintentar",
+    "loadMore": "Cargar más",
+    "loading": "Cargando…",
+    "unknownSafety": "La plataforma no confirmó la entrega. Comprueba el canal antes de volver a enviar.",
+    "partialSafety": "Parte de esta publicación de Telegram ya está publicada. Abre la adaptación para recuperar la respuesta.",
+    "humanAssertion": "Marcada como publicada por {name} el {date}; sin confirmación de la plataforma.",
+    "formerMember": "un antiguo miembro",
+    "publishedAt": "Publicada el {date}",
+    "scheduledAt": "Programada para el {date}",
+    "failure": {
+      "schedule_missed": "Se perdió la ventana programada.",
+      "no_adapter": "No hay publicador para esta plataforma.",
+      "credentials_unreadable": "No se pudieron leer las credenciales guardadas.",
+      "credentials_missing": "Falta el canal conectado.",
+      "credentials_invalid": "Las credenciales guardadas no son válidas.",
+      "platform_rejected": "La plataforma rechazó esta publicación.",
+      "rejected_before_send": "La publicación fue rechazada antes del envío.",
+      "retries_exhausted": "Se agotaron los intentos de entrega.",
+      "send_abandoned": "La entrega se detuvo antes de llegar a la plataforma.",
+      "outcome_unknown": "Se desconoce el resultado de la entrega."
+    }
   }
 }
