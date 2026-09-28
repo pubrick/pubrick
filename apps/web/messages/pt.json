@@ -766,6 +766,8 @@
       "review": "Revise o rascunho salvo abaixo. Abrir este link não o aprovou nem publicou.",
       "schedule": "Escolha um horário abaixo e confirme o agendamento no Pubrick. Abrir este link não o agendou.",
       "publish": "Revise o rascunho e use Publicar agora para confirmar o envio. Abrir este link não o publicou.",
+      "reject": "Revise o rascunho e use Rejeitar para recusá-lo. Abrir este link não o rejeitou.",
+      "rejectStale": "Este aviso de rascunho está desatualizado. Revise o status e os controles atuais antes de decidir.",
       "unavailable": "Esta ação não está mais disponível para esta publicação ou para seu papel. Você ainda pode ler a publicação aqui."
     },
     "costReceiptTitle": "Custos de IA registrados desta publicação",

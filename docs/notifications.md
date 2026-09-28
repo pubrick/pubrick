@@ -7,12 +7,14 @@ Self-hosters with restricted Telegram egress can set `TELEGRAM_API_BASE_URL` to 
 Notifications are off until explicitly enabled. Draft-ready alerts are off by default. Delivery failures and unknown outcomes are selected by default, but they are sent only after notifications are enabled. Unknown means the post may already be live; inspect the channel before retrying. Delivery alerts have an **Open post** URL button to the configured public origin (`PUBLIC_ORIGIN` in Compose).
 
 A draft-ready alert names the brand and the saved post title (or **Untitled draft**
-when no title has been saved). Its **Review**, **Schedule**, and **Publish** buttons
+when no title has been saved). Its **Review**, **Schedule**, **Publish**, and **Reject** buttons
 open the authenticated post page and point to the relevant control. They are
-URL-only buttons: opening a link never approves, schedules, or publishes. The
-editor must still make and confirm the decision in Pubrick. If the post's state
-or the member's role no longer permits that action, the page explains that the
-requested control is unavailable and leaves the post readable.
+URL-only buttons: opening a link never approves, schedules, publishes, or rejects. The
+editor must still make the decision in Pubrick. Reject links focus the existing
+Reject control only while the post is still a draft; pressing that control is
+the explicit decision. A stale link shows the current post and asks the editor
+to review its controls. If the member's role does not permit a decision, the
+page explains that the requested control is unavailable.
 The worker sends this link only when `PUBLIC_ORIGIN` / `WEB_ORIGIN` is a plain
 HTTPS origin. Configure the public HTTPS address before enabling draft-ready
 alerts. A stale alert whose post has left the draft queue is skipped.

@@ -766,6 +766,8 @@
       "review": "Review the saved draft below. Opening this link did not approve or publish it.",
       "schedule": "Choose a time below, then confirm scheduling in Pubrick. Opening this link did not schedule it.",
       "publish": "Review the draft, then use Publish now to confirm delivery. Opening this link did not publish it.",
+      "reject": "Review the draft, then use Reject to decline it. Opening this link did not reject it.",
+      "rejectStale": "This draft alert is out of date. Review the post's current status and controls before deciding.",
       "unavailable": "This action is no longer available for this post or your role. You can still read the post here."
     },
     "costReceiptTitle": "Recorded AI costs for this post",

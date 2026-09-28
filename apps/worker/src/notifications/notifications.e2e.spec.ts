@@ -107,7 +107,7 @@ describe.skipIf(!url)("notification outbox", () => {
     expect(requests[0]?.path).toBe("/bot123:secret/sendMessage");
     expect(requests[0]?.body).toEqual({
       chat_id: "-10042",
-      text: "Draft ready for review\nBrand: North <Acme>\nTitle: Launch <new> & safer\nOpen Pubrick to read and decide. Links do not approve, schedule, or publish.",
+      text: "Draft ready for review\nBrand: North <Acme>\nTitle: Launch <new> & safer\nOpen Pubrick to read and decide. Links do not approve, schedule, publish, or reject.",
       reply_markup: {
         inline_keyboard: [
           [
@@ -116,9 +116,15 @@ describe.skipIf(!url)("notification outbox", () => {
               text: "Schedule",
               url: `https://pubrick.example/en/content/${targetId}?intent=schedule`,
             },
+          ],
+          [
             {
               text: "Publish",
               url: `https://pubrick.example/en/content/${targetId}?intent=publish`,
+            },
+            {
+              text: "Reject",
+              url: `https://pubrick.example/en/content/${targetId}?intent=reject`,
             },
           ],
         ],
@@ -148,6 +154,9 @@ describe.skipIf(!url)("notification outbox", () => {
     );
     expect(draftReviewUrl("https://pubrick.example", itemId, "publish")).toBe(
       `https://pubrick.example/en/content/${itemId}?intent=publish`,
+    );
+    expect(draftReviewUrl("https://pubrick.example", itemId, "reject")).toBe(
+      `https://pubrick.example/en/content/${itemId}?intent=reject`,
     );
     expect(draftReviewUrl("http://pubrick.example", itemId)).toBeNull();
     expect(draftReviewUrl("https://user:secret@pubrick.example", itemId)).toBeNull();

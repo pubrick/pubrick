@@ -282,6 +282,7 @@ describe("Telegram review links", () => {
     ["review", "review-draft", en.Publish.intent.review],
     ["schedule", "scheduledAt", en.Publish.intent.schedule],
     ["publish", "publish-action", en.Publish.intent.publish],
+    ["reject", "reject-action", en.Publish.intent.reject],
   ])("points %s at its control without making a decision", async (intent, targetId, copy) => {
     navigationState.searchParams = new URLSearchParams(`intent=${intent}`);
     const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
@@ -400,6 +401,56 @@ describe("Telegram review links", () => {
     expect(document.getElementById("scheduledAt")).toBeDisabled();
     expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
   });
+
+  it.each(["approved", "rejected", "partially_published", "published", "archived"] as const)(
+    "does not promise Reject after a draft becomes %s",
+    async (status) => {
+      navigationState.searchParams = new URLSearchParams("intent=reject");
+      const served = { current: makeItem({ status, adaptations: [makeAdaptation()] }) };
+      const calls: Call[] = [];
+      installBaseHandlers(served, calls);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      expect(await screen.findByText(en.Publish.intent.rejectStale)).toBeVisible();
+      expect(document.activeElement?.id).not.toBe("reject-action");
+      expect(calls.some((call) => call.path.endsWith("/reject"))).toBe(false);
+    },
+  );
+
+  it("does not promise Reject to a reader without decision permission", async () => {
+    navigationState.searchParams = new URLSearchParams("intent=reject");
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "author", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    const calls: Call[] = [];
+    installBaseHandlers({ current: makeItem() }, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(await screen.findByText(en.Publish.intent.unavailable)).toBeVisible();
+    expect(document.getElementById("reject-action")).toBeNull();
+    expect(calls.some((call) => call.path.endsWith("/reject"))).toBe(false);
+  });
+
+  it.each(["unknown", "partial"] as const)(
+    "does not promise Reject while a draft delivery outcome is %s",
+    async (deliveryOutcome) => {
+      navigationState.searchParams = new URLSearchParams("intent=reject");
+      installBaseHandlers(
+        {
+          current: makeItem({
+            adaptations: [makeAdaptation({ status: "failed", deliveryOutcome })],
+          }),
+        },
+        [],
+      );
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      expect(await screen.findByText(en.Publish.intent.unavailable)).toBeVisible();
+      expect(document.activeElement?.id).not.toBe("reject-action");
+    },
+  );
 
   it.each(["unknown", "partial"] as const)(
     "does not promise a schedule while delivery is %s",
