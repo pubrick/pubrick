@@ -11,6 +11,7 @@ import TopicsPage from "./page";
 const BRAND_ID = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const CHANNEL_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
 const TOPIC_ID = "40a21268-4c10-4ad9-b05d-519c11231322";
+const EMPTY_TOPIC_ID = "09ed42d2-41fd-4f8f-8b72-2e020aaefb77";
 
 function response(status: number, body: unknown): Response {
   return {
@@ -113,6 +114,146 @@ describe("topic bank page", () => {
     );
   });
 
+  it("shows per-topic activity, partial VK coverage, and an empty outcome without calling VK", async () => {
+    const calls: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics/outcomes?"))
+        return response(200, [
+          {
+            topicId: TOPIC_ID,
+            runCount: 3,
+            draftCount: 2,
+            publishedDraftCount: 1,
+            vk: {
+              publishedPosts: 2,
+              checkedPosts: 1,
+              views: { total: 0, posts: 1 },
+              likes: { total: 0, posts: 0 },
+              comments: { total: 2, posts: 1 },
+              shares: { total: 0, posts: 0 },
+              latestCheckedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+            },
+          },
+          {
+            topicId: EMPTY_TOPIC_ID,
+            runCount: 0,
+            draftCount: 0,
+            publishedDraftCount: 0,
+            vk: {
+              publishedPosts: 0,
+              checkedPosts: 0,
+              views: { total: 0, posts: 0 },
+              likes: { total: 0, posts: 0 },
+              comments: { total: 0, posts: 0 },
+              shares: { total: 0, posts: 0 },
+              latestCheckedAt: null,
+            },
+          },
+        ]);
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            id: TOPIC_ID,
+            title: "Measured idea",
+            description: "",
+            status: "approved",
+            origin: "manual",
+            plannedDate: null,
+            priority: 5,
+          },
+          {
+            id: EMPTY_TOPIC_ID,
+            title: "Fresh idea",
+            description: "",
+            status: "idea",
+            origin: "manual",
+            plannedDate: null,
+            priority: 5,
+          },
+        ]);
+      return response(200, {});
+    });
+
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const measured = document.getElementById(`topic-${TOPIC_ID}`);
+    const empty = document.getElementById(`topic-${EMPTY_TOPIC_ID}`);
+    await waitFor(() => expect(measured).toHaveTextContent("VK posts with saved metrics: 1/2"));
+    expect(measured).toHaveTextContent("Runs: 3 · Drafts on record: 2 · Published drafts: 1");
+    expect(measured).toHaveTextContent("Views: 0 (reported on 1/1 posts)");
+    expect(measured).toHaveTextContent("Likes: unavailable");
+    expect(measured).toHaveTextContent("Comments: 2 (reported on 1/1 posts)");
+    expect(measured).toHaveTextContent(en.Topics.outcomesStale);
+    expect(empty).toHaveTextContent(en.Topics.outcomesEmpty);
+    expect(calls.some((url) => url.includes(`/api/topics/outcomes?brandId=${BRAND_ID}`))).toBe(
+      true,
+    );
+    expect(calls.some((url) => url.includes("/refresh"))).toBe(false);
+  });
+
+  it("keeps topics usable when outcome observations fail to load", async () => {
+    let outcomeRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/api/brands/")) return response(200, { id: BRAND_ID, name: "Acme" });
+      if (url.includes("/api/channels?")) return response(200, []);
+      if (url.includes("/api/topics/suggestions/history?"))
+        return response(200, { rows: [], nextCursor: null });
+      if (url.includes("/api/topics/suggestions?")) return response(200, { request: null });
+      if (url.includes("/api/topics/outcomes?")) {
+        outcomeRequests++;
+        return outcomeRequests === 1
+          ? response(400, refusalBody(400, "invalid_request", "Provider supplied secret text"))
+          : response(200, [
+              {
+                topicId: TOPIC_ID,
+                runCount: 0,
+                draftCount: 0,
+                publishedDraftCount: 0,
+                vk: {
+                  publishedPosts: 0,
+                  checkedPosts: 0,
+                  views: { total: 0, posts: 0 },
+                  likes: { total: 0, posts: 0 },
+                  comments: { total: 0, posts: 0 },
+                  shares: { total: 0, posts: 0 },
+                  latestCheckedAt: null,
+                },
+              },
+            ]);
+      }
+      if (url.includes("/api/topics?"))
+        return response(200, [
+          {
+            id: TOPIC_ID,
+            title: "Still editable",
+            description: "",
+            status: "approved",
+            origin: "manual",
+            plannedDate: null,
+            priority: 5,
+          },
+        ]);
+      return response(200, {});
+    });
+
+    await renderAsync(<TopicsPage params={Promise.resolve({ id: BRAND_ID })} />, { locale: "es" });
+    expect(await screen.findByText("Still editable")).toBeInTheDocument();
+    expect(await screen.findByText(es.Topics.outcomesUnavailable)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: es.Topics.generate })).toBeEnabled();
+    expect(screen.queryByText("Provider supplied secret text")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: es.Topics.retry }));
+    expect(await screen.findByText(es.Topics.outcomesEmpty)).toBeInTheDocument();
+    expect(screen.queryByText(es.Topics.outcomesUnavailable)).not.toBeInTheDocument();
+    expect(outcomeRequests).toBe(2);
+  });
+
   it("requests suggestions, shows queued feedback, and does not generate automatically", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     const queued = {
@@ -168,6 +309,7 @@ describe("topic bank page", () => {
     let poll: (() => void) | undefined;
     let heartbeat = 0;
     let historyLoads = 0;
+    let outcomeLoads = 0;
     vi.spyOn(window, "setInterval").mockImplementation((handler, delay) => {
       if (delay === 5000 && typeof handler === "function") poll = handler;
       return 1 as unknown as ReturnType<typeof window.setInterval>;
@@ -208,6 +350,10 @@ describe("topic bank page", () => {
             updatedAt: `2026-09-23T12:00:0${heartbeat++}Z`,
           },
         });
+      if (url.includes("/api/topics/outcomes?")) {
+        outcomeLoads++;
+        return response(200, []);
+      }
       if (url.includes("/api/topics?")) return response(200, []);
       return response(200, {});
     });
@@ -218,8 +364,10 @@ describe("topic bank page", () => {
     expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
     expect(poll).toBeDefined();
     const loadsBeforeHeartbeat = historyLoads;
+    const outcomesBeforeHeartbeat = outcomeLoads;
     await act(async () => poll?.());
     expect(historyLoads).toBe(loadsBeforeHeartbeat);
+    expect(outcomeLoads).toBe(outcomesBeforeHeartbeat);
     expect(screen.getByRole("button", { name: en.Topics.historyLoading })).toBeDisabled();
     await act(async () => {
       resolveOlder(

@@ -8,6 +8,7 @@ import {
   type TopicRun,
   type TopicSuggestionHistoryQuery,
   type TopicUpdate,
+  topicOutcomesDtoSchema,
   topicSuggestionHistoryPageSchema,
   topicSuggestionScanDecisionsSchema,
 } from "@pubrick/shared";
@@ -73,6 +74,123 @@ export class TopicsRepository {
       .where(and(eq(schema.topics.orgId, orgId), eq(schema.topics.brandId, brandId)))
       .orderBy(desc(schema.topics.createdAt), desc(schema.topics.id))
       .limit(200);
+  }
+
+  async outcomes(orgId: string, brandId: string) {
+    await this.requireBrand(orgId, brandId);
+    // Aggregate each relationship at its own grain. Runs may share a draft,
+    // and one draft may have many adaptations and publication attempts.
+    const result = await db.execute(sql`
+      with selected_topics as (
+        select t.id, t.created_at
+        from topics t
+        where t.org_id = ${orgId} and t.brand_id = ${brandId}
+        order by t.created_at desc, t.id desc
+        limit 200
+      ), run_counts as (
+        select r.topic_id, count(*)::integer as run_count
+        from pipeline_runs r
+        join selected_topics t on t.id = r.topic_id
+        where r.org_id = ${orgId} and r.brand_id = ${brandId}
+        group by r.topic_id
+      ), draft_links as (
+        select distinct r.topic_id, ci.id as content_item_id
+        from pipeline_runs r
+        join selected_topics t on t.id = r.topic_id
+        join content_items ci on ci.id = r.content_item_id
+          and ci.org_id = ${orgId} and ci.brand_id = ${brandId}
+        where r.org_id = ${orgId} and r.brand_id = ${brandId}
+      ), draft_counts as (
+        select topic_id, count(*)::integer as draft_count
+        from draft_links group by topic_id
+      ), published_links as (
+        select distinct d.topic_id, d.content_item_id, p.id as publication_id,
+          c.platform, pm.status as metric_status, pm.checked_at,
+          pm.views, pm.likes, pm.comments, pm.shares
+        from draft_links d
+        join adaptations a on a.content_item_id = d.content_item_id
+          and a.org_id = ${orgId}
+        join publications p on p.adaptation_id = a.id
+          and p.org_id = ${orgId} and p.status = 'published'
+        join channels c on c.id = a.channel_id and c.id = p.channel_id
+          and c.org_id = ${orgId} and c.brand_id = ${brandId}
+        left join publication_metrics pm on pm.publication_id = p.id
+          and pm.org_id = ${orgId}
+      ), publication_counts as (
+        select topic_id, count(distinct content_item_id)::integer as published_draft_count
+        from published_links group by topic_id
+      ), vk_counts as (
+        select topic_id,
+          count(*)::integer as published_posts,
+          count(*) filter (where metric_status = 'available')::integer as checked_posts,
+          coalesce(sum(views) filter (where metric_status = 'available'), 0)::bigint as views_total,
+          count(views) filter (where metric_status = 'available')::integer as views_posts,
+          coalesce(sum(likes) filter (where metric_status = 'available'), 0)::bigint as likes_total,
+          count(likes) filter (where metric_status = 'available')::integer as likes_posts,
+          coalesce(sum(comments) filter (where metric_status = 'available'), 0)::bigint as comments_total,
+          count(comments) filter (where metric_status = 'available')::integer as comments_posts,
+          coalesce(sum(shares) filter (where metric_status = 'available'), 0)::bigint as shares_total,
+          count(shares) filter (where metric_status = 'available')::integer as shares_posts,
+          max(checked_at) filter (where metric_status = 'available') as latest_checked_at
+        from published_links where platform = 'vk' group by topic_id
+      )
+      select t.id as topic_id, coalesce(r.run_count, 0) as run_count,
+        coalesce(d.draft_count, 0) as draft_count,
+        coalesce(p.published_draft_count, 0) as published_draft_count,
+        coalesce(v.published_posts, 0) as published_posts,
+        coalesce(v.checked_posts, 0) as checked_posts,
+        coalesce(v.views_total, 0) as views_total,
+        coalesce(v.views_posts, 0) as views_posts,
+        coalesce(v.likes_total, 0) as likes_total,
+        coalesce(v.likes_posts, 0) as likes_posts,
+        coalesce(v.comments_total, 0) as comments_total,
+        coalesce(v.comments_posts, 0) as comments_posts,
+        coalesce(v.shares_total, 0) as shares_total,
+        coalesce(v.shares_posts, 0) as shares_posts,
+        v.latest_checked_at
+      from selected_topics t
+      left join run_counts r on r.topic_id = t.id
+      left join draft_counts d on d.topic_id = t.id
+      left join publication_counts p on p.topic_id = t.id
+      left join vk_counts v on v.topic_id = t.id
+      order by t.created_at desc, t.id desc
+    `);
+    type Row = {
+      topic_id: string;
+      run_count: number;
+      draft_count: number;
+      published_draft_count: number;
+      published_posts: number;
+      checked_posts: number;
+      views_total: string;
+      views_posts: number;
+      likes_total: string;
+      likes_posts: number;
+      comments_total: string;
+      comments_posts: number;
+      shares_total: string;
+      shares_posts: number;
+      latest_checked_at: string | null;
+    };
+    return topicOutcomesDtoSchema.parse(
+      (result.rows as Row[]).map((row) => ({
+        topicId: row.topic_id,
+        runCount: row.run_count,
+        draftCount: row.draft_count,
+        publishedDraftCount: row.published_draft_count,
+        vk: {
+          publishedPosts: row.published_posts,
+          checkedPosts: row.checked_posts,
+          views: { total: Number(row.views_total), posts: row.views_posts },
+          likes: { total: Number(row.likes_total), posts: row.likes_posts },
+          comments: { total: Number(row.comments_total), posts: row.comments_posts },
+          shares: { total: Number(row.shares_total), posts: row.shares_posts },
+          latestCheckedAt: row.latest_checked_at
+            ? new Date(row.latest_checked_at).toISOString()
+            : null,
+        },
+      })),
+    );
   }
 
   async latestSuggestionRequest(orgId: string, brandId: string) {

@@ -5,6 +5,7 @@ import {
   seoKeywordsSchema,
   TOPIC_CONTENT_TYPES,
   type TopicDto,
+  type TopicOutcomeDto,
   type TopicSuggestionRequestDto,
   topicBlockSchema,
   topicCreateSchema,
@@ -35,6 +36,8 @@ type Channel = { id: string; name: string; platform: string };
 type Run = { id: string };
 const FORM_ID = "topic-add-form";
 const EDIT_ID = "topic-edit-form";
+const VK_OBSERVATION_STALE_MS = 24 * 60 * 60 * 1000;
+const VK_METRICS = ["views", "likes", "comments", "shares"] as const;
 
 export default function TopicsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -45,6 +48,8 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
   const router = useRouter();
   const [brand, setBrand] = useState<Brand | null>(null);
   const [topics, setTopics] = useState<TopicDto[] | null>(null);
+  const [outcomes, setOutcomes] = useState<TopicOutcomeDto[] | null>(null);
+  const [outcomesUnavailable, setOutcomesUnavailable] = useState(false);
   const [suggestionRequest, setSuggestionRequest] = useState<TopicSuggestionRequestDto | null>(
     null,
   );
@@ -85,28 +90,106 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
     [locale, router, t, te],
   );
 
-  const load = useCallback(() => {
-    Promise.all([
-      api<Brand>(`/api/brands/${id}`),
-      api<TopicDto[]>(`/api/topics?brandId=${id}`),
-      api<Channel[]>(`/api/channels?brandId=${id}`),
-      api<{ request: TopicSuggestionRequestDto | null }>(`/api/topics/suggestions?brandId=${id}`),
-    ])
-      .then(([nextBrand, nextTopics, nextChannels, nextRequest]) => {
-        setBrand(nextBrand);
-        setTopics(
-          nextTopics.map((topic) => ({
-            ...topic,
-            contentType: topic.contentType ?? "social_post",
-            seoKeywords: topic.seoKeywords ?? [],
-          })),
-        );
-        setChannels(nextChannels);
-        setSuggestionRequest(nextRequest.request);
-        setError(null);
-      })
-      .catch((err) => setError(describeError(err)));
-  }, [id, describeError]);
+  const load = useCallback(
+    (includeOutcomes = true) => {
+      Promise.all([
+        api<Brand>(`/api/brands/${id}`),
+        api<TopicDto[]>(`/api/topics?brandId=${id}`),
+        api<Channel[]>(`/api/channels?brandId=${id}`),
+        api<{ request: TopicSuggestionRequestDto | null }>(`/api/topics/suggestions?brandId=${id}`),
+      ])
+        .then(([nextBrand, nextTopics, nextChannels, nextRequest]) => {
+          setBrand(nextBrand);
+          setTopics(
+            nextTopics.map((topic) => ({
+              ...topic,
+              contentType: topic.contentType ?? "social_post",
+              seoKeywords: topic.seoKeywords ?? [],
+            })),
+          );
+          setChannels(nextChannels);
+          setSuggestionRequest(nextRequest.request);
+          setError(null);
+        })
+        .catch((err) => setError(describeError(err)));
+
+      if (includeOutcomes) {
+        api<TopicOutcomeDto[]>(`/api/topics/outcomes?brandId=${id}`)
+          .then((nextOutcomes) => {
+            if (!Array.isArray(nextOutcomes)) throw new Error("Invalid topic outcomes response");
+            setOutcomes(nextOutcomes);
+            setOutcomesUnavailable(false);
+          })
+          .catch((err) => {
+            describeError(err);
+            setOutcomes(null);
+            setOutcomesUnavailable(true);
+          });
+      }
+    },
+    [id, describeError],
+  );
+
+  function observedOutcome(topicId: string) {
+    if (!outcomes || outcomesUnavailable) return null;
+    const outcome = outcomes.find((entry) => entry.topicId === topicId);
+    if (!outcome) return <span className="mt-1 block">{t("outcomesEmpty")}</span>;
+
+    const number = new Intl.NumberFormat(locale);
+    const { vk } = outcome;
+    if (
+      outcome.runCount === 0 &&
+      outcome.draftCount === 0 &&
+      outcome.publishedDraftCount === 0 &&
+      vk.publishedPosts === 0
+    ) {
+      return <span className="mt-1 block">{t("outcomesEmpty")}</span>;
+    }
+    const checkedAt = vk.latestCheckedAt ? new Date(vk.latestCheckedAt) : null;
+    const validCheckedAt = checkedAt && !Number.isNaN(checkedAt.getTime()) ? checkedAt : null;
+    const stale = validCheckedAt && Date.now() - validCheckedAt.getTime() > VK_OBSERVATION_STALE_MS;
+
+    return (
+      <span className="mt-1 block space-y-0.5">
+        <span className="block">
+          {t("outcomesActivity", {
+            runs: number.format(outcome.runCount),
+            drafts: number.format(outcome.draftCount),
+            published: number.format(outcome.publishedDraftCount),
+          })}
+        </span>
+        <span className="block">
+          {vk.publishedPosts === 0
+            ? t("outcomesVkEmpty")
+            : t("outcomesVkCoverage", {
+                checked: number.format(vk.checkedPosts),
+                published: number.format(vk.publishedPosts),
+              })}
+          {vk.checkedPosts > 0 &&
+            VK_METRICS.map((metric) => (
+              <span key={metric}>
+                {" · "}
+                {vk[metric].posts === 0
+                  ? t("outcomesMetricUnavailable", { metric: t(`outcomesMetric_${metric}`) })
+                  : t("outcomesMetric", {
+                      metric: t(`outcomesMetric_${metric}`),
+                      total: number.format(vk[metric].total),
+                      posts: number.format(vk[metric].posts),
+                      checked: number.format(vk.checkedPosts),
+                    })}
+              </span>
+            ))}
+          {validCheckedAt && (
+            <span>
+              {" · "}
+              {t("outcomesChecked", { date: validCheckedAt.toLocaleString(locale) })}
+              {stale && ` · ${t("outcomesStale")}`}
+            </span>
+          )}
+        </span>
+      </span>
+    );
+  }
 
   useEffect(() => {
     load();
@@ -114,7 +197,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
 
   useEffect(() => {
     if (suggestionRequest?.status !== "queued" && suggestionRequest?.status !== "running") return;
-    const timer = window.setInterval(load, 5000);
+    const timer = window.setInterval(() => load(false), 5000);
     return () => window.clearInterval(timer);
   }, [load, suggestionRequest?.status]);
 
@@ -435,6 +518,20 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
       >
         {t("autopilotLink")}
       </Link>
+      {topics && topics.length > 0 && (
+        <p className="mb-4 text-xs text-fg-tertiary">{t("outcomesHint")}</p>
+      )}
+      {topics && topics.length > 0 && !outcomes && !outcomesUnavailable && (
+        <p className="mb-4 text-xs text-fg-secondary">{t("outcomesLoading")}</p>
+      )}
+      {topics && outcomesUnavailable && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-fg-secondary">
+          <p>{t("outcomesUnavailable")}</p>
+          <Button size="sm" variant="secondary" onClick={() => load()}>
+            {t("retry")}
+          </Button>
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Button
           variant="secondary"
@@ -462,7 +559,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
           <EmptyState
             title={t("listError")}
             action={
-              <Button variant="secondary" onClick={load}>
+              <Button variant="secondary" onClick={() => load()}>
                 {t("retry")}
               </Button>
             }
@@ -489,7 +586,9 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
           topics.map((topic) => (
             <ListRow
               key={topic.id}
+              id={`topic-${topic.id}`}
               title={topic.title}
+              metaClassName="whitespace-normal"
               meta={
                 <span>
                   <StatusBadge status={topic.status === "approved" ? "published" : "draft"}>
@@ -540,6 +639,7 @@ export default function TopicsPage({ params }: { params: Promise<{ id: string }>
                   )}
                   {" · "}
                   {topic.description || t("noDescription")}
+                  {observedOutcome(topic.id)}
                 </span>
               }
               trailing={

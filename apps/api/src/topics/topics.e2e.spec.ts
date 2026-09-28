@@ -4,6 +4,7 @@ import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
 import {
   topicDtoSchema,
+  topicOutcomesDtoSchema,
   topicSuggestionHistoryPageSchema,
   topicSuggestionScanDecisionsSchema,
 } from "@pubrick/shared";
@@ -51,6 +52,217 @@ describe.skipIf(!url)("topic bank e2e", () => {
       .expect(200);
     return { agent, orgId: org.body.id as string, userId: signUp.body.user.id as string };
   }
+
+  it("reports linked topic outcomes without duplicate drafts, unknown counters, or tenant leakage", async () => {
+    const owner = await orgAgent();
+    const outsider = await orgAgent();
+    const brand = await owner.agent.post("/api/brands").send({ name: "Outcomes" }).expect(201);
+    const sibling = await owner.agent.post("/api/brands").send({ name: "Sibling" }).expect(201);
+    const active = await owner.agent
+      .post("/api/topics")
+      .send({ brandId: brand.body.id, title: "Active" })
+      .expect(201);
+    const empty = await owner.agent
+      .post("/api/topics")
+      .send({ brandId: brand.body.id, title: "Empty" })
+      .expect(201);
+    const [draft, anotherDraft, siblingDraft] = await db
+      .insert(schema.contentItems)
+      .values([
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Draft" },
+        { orgId: owner.orgId, brandId: brand.body.id, body: "Another draft" },
+        { orgId: owner.orgId, brandId: sibling.body.id, body: "Sibling draft" },
+      ])
+      .returning({ id: schema.contentItems.id });
+    if (!draft || !anotherDraft || !siblingDraft) throw new Error("Missing draft fixtures");
+    const input = { kind: "brief" as const, text: "Topic", channelIds: [] };
+    await db.insert(schema.pipelineRuns).values([
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: active.body.id,
+        contentItemId: draft.id,
+        input,
+        status: "succeeded",
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: active.body.id,
+        contentItemId: draft.id,
+        input,
+        status: "succeeded",
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: active.body.id,
+        contentItemId: anotherDraft.id,
+        input,
+        status: "succeeded",
+      },
+      {
+        orgId: owner.orgId,
+        brandId: brand.body.id,
+        topicId: active.body.id,
+        input,
+        status: "failed",
+      },
+      {
+        orgId: owner.orgId,
+        brandId: sibling.body.id,
+        topicId: active.body.id,
+        contentItemId: siblingDraft.id,
+        input,
+        status: "succeeded",
+      },
+    ]);
+    const vkChannel = async (brandId: string, name: string) =>
+      owner.agent
+        .post("/api/channels")
+        .send({
+          brandId,
+          platform: "vk",
+          name,
+          credentials: { accessToken: "fake-test-token", groupId: "123" },
+        })
+        .expect(201);
+    const vk = (await vkChannel(brand.body.id, "VK One")).body;
+    const secondVk = (await vkChannel(brand.body.id, "VK Two")).body;
+    const siblingVk = (await vkChannel(sibling.body.id, "Sibling VK")).body;
+    const telegram = (
+      await owner.agent
+        .post("/api/channels")
+        .send({
+          brandId: brand.body.id,
+          platform: "telegram",
+          name: "Telegram",
+          credentials: { botToken: "123:abc", chatId: "@pubrick" },
+        })
+        .expect(201)
+    ).body;
+    const [first, second, third, unrelated, wrongBrandChannel] = await db
+      .insert(schema.adaptations)
+      .values([
+        { orgId: owner.orgId, contentItemId: draft.id, channelId: vk.id, status: "published" },
+        {
+          orgId: owner.orgId,
+          contentItemId: draft.id,
+          channelId: secondVk.id,
+          status: "published",
+        },
+        {
+          orgId: owner.orgId,
+          contentItemId: draft.id,
+          channelId: telegram.id,
+          status: "published",
+        },
+        {
+          orgId: owner.orgId,
+          contentItemId: siblingDraft.id,
+          channelId: siblingVk.id,
+          status: "published",
+        },
+        {
+          orgId: owner.orgId,
+          contentItemId: anotherDraft.id,
+          channelId: siblingVk.id,
+          status: "published",
+        },
+      ])
+      .returning({ id: schema.adaptations.id });
+    if (!first || !second || !third || !unrelated || !wrongBrandChannel)
+      throw new Error("Missing adaptations");
+    const [measured, unavailable] = await db
+      .insert(schema.publications)
+      .values([
+        { orgId: owner.orgId, adaptationId: first.id, channelId: vk.id, status: "published" },
+        {
+          orgId: owner.orgId,
+          adaptationId: second.id,
+          channelId: secondVk.id,
+          status: "published",
+        },
+        { orgId: owner.orgId, adaptationId: third.id, channelId: telegram.id, status: "published" },
+        {
+          orgId: owner.orgId,
+          adaptationId: unrelated.id,
+          channelId: siblingVk.id,
+          status: "published",
+        },
+        {
+          orgId: owner.orgId,
+          adaptationId: wrongBrandChannel.id,
+          channelId: siblingVk.id,
+          status: "published",
+        },
+      ])
+      .returning({ id: schema.publications.id });
+    if (!measured || !unavailable) throw new Error("Missing publications");
+    const checkedAt = new Date("2026-09-27T12:00:00.000Z");
+    await db.insert(schema.publicationMetrics).values([
+      {
+        orgId: owner.orgId,
+        publicationId: measured.id,
+        status: "available",
+        views: 0,
+        likes: null,
+        comments: 2,
+        shares: null,
+        checkedAt,
+      },
+      {
+        orgId: owner.orgId,
+        publicationId: unavailable.id,
+        status: "unavailable",
+        views: 99,
+        likes: 9,
+        comments: 9,
+        shares: 9,
+        checkedAt: new Date("2026-09-28T12:00:00.000Z"),
+      },
+    ]);
+
+    await outsider.agent.get(`/api/topics/outcomes?brandId=${brand.body.id}`).expect(404);
+    await owner.agent.get(`/api/topics/outcomes?brandId=${randomUUID()}`).expect(404);
+    expect(
+      (await owner.agent.get(`/api/topics/outcomes?brandId=${sibling.body.id}`).expect(200)).body,
+    ).toEqual([]);
+    const rows = topicOutcomesDtoSchema.parse(
+      (await owner.agent.get(`/api/topics/outcomes?brandId=${brand.body.id}`).expect(200)).body,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.topicId === empty.body.id)).toEqual({
+      topicId: empty.body.id,
+      runCount: 0,
+      draftCount: 0,
+      publishedDraftCount: 0,
+      vk: {
+        publishedPosts: 0,
+        checkedPosts: 0,
+        views: { total: 0, posts: 0 },
+        likes: { total: 0, posts: 0 },
+        comments: { total: 0, posts: 0 },
+        shares: { total: 0, posts: 0 },
+        latestCheckedAt: null,
+      },
+    });
+    expect(rows.find((row) => row.topicId === active.body.id)).toEqual({
+      topicId: active.body.id,
+      runCount: 4,
+      draftCount: 2,
+      publishedDraftCount: 1,
+      vk: {
+        publishedPosts: 2,
+        checkedPosts: 1,
+        views: { total: 0, posts: 1 },
+        likes: { total: 0, posts: 0 },
+        comments: { total: 2, posts: 1 },
+        shares: { total: 0, posts: 0 },
+        latestCheckedAt: checkedAt.toISOString(),
+      },
+    });
+  });
 
   it("scopes topics and feedback, imports news once, and runs only approved topics", async () => {
     const owner = await orgAgent();
