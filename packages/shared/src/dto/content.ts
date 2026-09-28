@@ -683,6 +683,12 @@ export const adaptationRescheduleSchema = z.object({
 });
 export type AdaptationReschedule = z.infer<typeof adaptationRescheduleSchema>;
 
+/** Stop one scheduled automatic delivery without deleting its draft or receipts. */
+export const adaptationCancelScheduleSchema = adaptationRescheduleSchema.pick({
+  expectedScheduledAt: true,
+});
+export type AdaptationCancelSchedule = z.infer<typeof adaptationCancelScheduleSchema>;
+
 /**
  * WHAT A PERSON SAW WHEN THEY OPENED THE CHANNEL — the body of
  * `POST /api/content/:id/adaptations/:adaptationId/delivery`.
