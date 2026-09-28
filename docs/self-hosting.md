@@ -106,6 +106,9 @@ On an existing installation, the recent AI spend history index is prepared
 concurrently before transactional migrations. A large usage ledger can make
 startup take longer, but metering writes can continue while PostgreSQL builds
 the index. An interrupted build is retried at the next startup.
+The archived publication history index is likewise built concurrently after
+the nullable brand snapshot column is added; publication writes can continue
+during its scan, and an interrupted build is retried on the next startup.
 
 ## Connect Gemini
 

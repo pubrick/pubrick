@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PLATFORM_IDS } from "./channels.js";
-import { DELIVERY_OUTCOMES, PUBLISH_FAILURE_REASONS } from "./content.js";
+import { DELIVERY_OUTCOMES, PUBLICATION_STATUSES, PUBLISH_FAILURE_REASONS } from "./content.js";
 
 export const PUBLICATION_OPERATION_FILTERS = [
   "needs_attention",
@@ -41,3 +41,27 @@ export const publicationOperationsPageDtoSchema = z.strictObject({
   nextCursor: z.string().nullable(),
 });
 export type PublicationOperationsPageDto = z.infer<typeof publicationOperationsPageDtoSchema>;
+
+/** Historical receipt after its channel was deleted; no dead post or channel pointers. */
+export const archivedPublicationDtoSchema = z.strictObject({
+  id: z.uuid(),
+  channelName: z.string().nullable(),
+  channelPlatform: z.string().nullable(),
+  status: z.enum(PUBLICATION_STATUSES),
+  externalUrl: z.string().nullable(),
+  assertedAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+});
+export type ArchivedPublicationDto = z.infer<typeof archivedPublicationDtoSchema>;
+
+export const archivedPublicationsPageDtoSchema = z.strictObject({
+  rows: z.array(archivedPublicationDtoSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ArchivedPublicationsPageDto = z.infer<typeof archivedPublicationsPageDtoSchema>;
+
+export const archivedPublicationsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  cursor: z.string().max(4096).optional(),
+});
+export type ArchivedPublicationsQuery = z.infer<typeof archivedPublicationsQuerySchema>;

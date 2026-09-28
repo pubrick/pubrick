@@ -2504,6 +2504,21 @@
     "formerMember": "a former member",
     "publishedAt": "Published on {date}",
     "scheduledAt": "Scheduled for {date}",
+    "archiveTitle": "Archived receipts",
+    "archiveIntro": "Delivery records from deleted channels. These records are read-only and cannot reopen a deleted post.",
+    "archiveEmpty": "When a channel is deleted, its delivery receipts will appear here. Older receipts that lost their brand link cannot be recovered.",
+    "archiveLoadError": "Archived receipts could not be loaded.",
+    "archiveUnknownChannel": "Former channel",
+    "archiveUnknownPlatform": "Unknown platform",
+    "archiveRecordedAt": "Recorded on {date}",
+    "archiveAssertedAt": "Marked published by a person on {date}; no platform confirmation.",
+    "archiveOpenPublication": "Open publication",
+    "archiveStatus": {
+      "in_flight": "Unconfirmed",
+      "published": "Published",
+      "failed": "Failed",
+      "unknown": "Unknown"
+    },
     "failure": {
       "schedule_missed": "The scheduled window was missed.",
       "no_adapter": "No publisher is available for this platform.",

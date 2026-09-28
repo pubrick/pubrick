@@ -482,7 +482,89 @@ describe.skipIf(!url)("channels e2e", () => {
         adaptation_id: null,
         channel_name: "Announcements",
         channel_platform: "telegram",
+        brand_id: brand.body.id,
       });
+      const archive = await agent
+        .get(`/api/brands/${brand.body.id}/publications/archive`)
+        .expect(200);
+      expect(archive.headers["cache-control"]).toBe("private, no-store");
+      expect(archive.body.rows).toEqual([
+        {
+          id: publicationId,
+          channelName: "Announcements",
+          channelPlatform: "telegram",
+          status: "published",
+          externalUrl: "https://t.me/pubrick/777",
+          assertedAt: null,
+          createdAt: expect.any(String),
+        },
+      ]);
+      expect(JSON.stringify(archive.body)).not.toContain("adaptationId");
+    });
+
+    it("pages only this brand's archived receipts, keeps unconfirmed claims, and excludes legacy orphans", async () => {
+      const agent = await orgAgent();
+      const brand = await agent.post("/api/brands").send({ name: "Archive" }).expect(201);
+      const otherBrand = await agent.post("/api/brands").send({ name: "Other" }).expect(201);
+      const channel = await agent
+        .post("/api/channels")
+        .send({
+          brandId: brand.body.id,
+          platform: "telegram",
+          name: "Old feed",
+          credentials: { botToken: "111:t", chatId: "@pubrick" },
+        })
+        .expect(201);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId: brand.body.id, body: "History", channelIds: [channel.body.id] })
+        .expect(201);
+      const adaptationId = item.body.adaptations[0].id as string;
+      const failedId = randomUUID();
+      const claimId = randomUUID();
+      const legacyId = randomUUID();
+      const { createDb } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      const org = await db.execute(`SELECT org_id FROM adaptations WHERE id = '${adaptationId}'`);
+      const orgId = String((org.rows[0] as Record<string, unknown>).org_id);
+      await db.execute(`INSERT INTO publications
+        (id, org_id, adaptation_id, channel_id, status, error, created_at)
+        VALUES
+        ('${failedId}', '${orgId}', '${adaptationId}', '${channel.body.id}', 'failed', 'sensitive provider error', '2026-09-28T10:00:00.123456Z'),
+        ('${claimId}', '${orgId}', '${adaptationId}', '${channel.body.id}', 'in_flight', 'private claim detail', '2026-09-28T10:00:00.123456Z')`);
+      // Pre-migration orphan: its brand cannot be inferred from a name or URL.
+      await db.execute(`INSERT INTO publications
+        (id, org_id, status, channel_name, channel_platform)
+        VALUES ('${legacyId}', '${orgId}', 'failed', 'Old feed', 'telegram')`);
+      await pool.end();
+
+      await agent.delete(`/api/channels/${channel.body.id}`).expect(200);
+      const route = `/api/brands/${brand.body.id}/publications/archive`;
+      const first = await agent.get(`${route}?limit=1`).expect(200);
+      expect(first.body.rows).toHaveLength(1);
+      expect(first.body.nextCursor).toEqual(expect.any(String));
+      const second = await agent
+        .get(`${route}?limit=1&cursor=${encodeURIComponent(first.body.nextCursor)}`)
+        .expect(200);
+      expect(second.body.rows).toHaveLength(1);
+      expect(second.body.nextCursor).toBeNull();
+      expect(new Set([first.body.rows[0].id, second.body.rows[0].id])).toEqual(
+        new Set([failedId, claimId]),
+      );
+      expect(new Set([first.body.rows[0].status, second.body.rows[0].status])).toEqual(
+        new Set(["failed", "in_flight"]),
+      );
+      expect(JSON.stringify([first.body, second.body])).not.toContain("sensitive provider error");
+      expect(JSON.stringify([first.body, second.body])).not.toContain("private claim detail");
+      expect(JSON.stringify([first.body, second.body])).not.toContain(legacyId);
+      expect(
+        (await agent.get(`/api/brands/${otherBrand.body.id}/publications/archive`).expect(200)).body
+          .rows,
+      ).toEqual([]);
+      const outsider = await orgAgent();
+      await outsider.get(route).expect(404);
+      await agent.get(`${route}?limit=101`).expect(400);
+      await agent.get(`${route}?cursor=bad`).expect(400);
     });
 
     it("cancels the scheduled post's job instead of leaving it to fire into nothing", async () => {

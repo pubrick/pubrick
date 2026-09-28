@@ -2504,6 +2504,21 @@
     "formerMember": "um ex-integrante",
     "publishedAt": "Publicada em {date}",
     "scheduledAt": "Agendada para {date}",
+    "archiveTitle": "Recibos arquivados",
+    "archiveIntro": "Registros de entrega de canais excluídos. São somente leitura e não podem reabrir uma publicação excluída.",
+    "archiveEmpty": "Ao excluir um canal, os recibos de entrega aparecerão aqui. Recibos antigos sem vínculo com a marca não podem ser recuperados.",
+    "archiveLoadError": "Não foi possível carregar os recibos arquivados.",
+    "archiveUnknownChannel": "Canal anterior",
+    "archiveUnknownPlatform": "Plataforma desconhecida",
+    "archiveRecordedAt": "Registrado em {date}",
+    "archiveAssertedAt": "Uma pessoa marcou como publicada em {date}; sem confirmação da plataforma.",
+    "archiveOpenPublication": "Abrir publicação",
+    "archiveStatus": {
+      "in_flight": "Não confirmado",
+      "published": "Publicada",
+      "failed": "Falhou",
+      "unknown": "Desconhecida"
+    },
     "failure": {
       "schedule_missed": "A janela agendada foi perdida.",
       "no_adapter": "Não há publicador para esta plataforma.",

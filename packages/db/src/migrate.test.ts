@@ -985,6 +985,110 @@ describe.skipIf(!url)("runMigrations", () => {
     }
   });
 
+  it("attributes future channel tombstones without guessing older orphaned receipts", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0114_archived_publication_brand");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let channelId: string;
+      let brandId: string;
+      let receiptId: string;
+      let legacyId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        const oldColumn = await old.query(
+          "SELECT column_name FROM information_schema.columns WHERE table_name = 'publications' AND column_name = 'brand_id'",
+        );
+        expect(oldColumn.rows).toHaveLength(0);
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('receipt_upgrade', 'Receipts', 'receipt-upgrade')",
+        );
+        const brand = await old.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('receipt_upgrade', 'Brand') RETURNING id",
+        );
+        if (!brand.rows[0]) throw new Error("Missing brand fixture");
+        brandId = brand.rows[0].id;
+        const channel = await old.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name) VALUES ('receipt_upgrade', $1, 'dzen', 'Old Dzen') RETURNING id",
+          [brandId],
+        );
+        if (!channel.rows[0]) throw new Error("Missing channel fixture");
+        channelId = channel.rows[0].id;
+        const item = await old.query<{ id: string }>(
+          "INSERT INTO content_items (org_id, brand_id, body) VALUES ('receipt_upgrade', $1, 'History') RETURNING id",
+          [brandId],
+        );
+        const adaptation = await old.query<{ id: string }>(
+          "INSERT INTO adaptations (org_id, content_item_id, channel_id) VALUES ('receipt_upgrade', $1, $2) RETURNING id",
+          [item.rows[0]?.id, channelId],
+        );
+        const receipt = await old.query<{ id: string }>(
+          "INSERT INTO publications (org_id, adaptation_id, channel_id, status) VALUES ('receipt_upgrade', $1, $2, 'failed') RETURNING id",
+          [adaptation.rows[0]?.id, channelId],
+        );
+        const legacy = await old.query<{ id: string }>(
+          "INSERT INTO publications (org_id, status, channel_name, channel_platform) VALUES ('receipt_upgrade', 'failed', 'Old Dzen', 'dzen') RETURNING id",
+        );
+        if (!receipt.rows[0] || !legacy.rows[0]) throw new Error("Missing receipt fixture");
+        receiptId = receipt.rows[0].id;
+        legacyId = legacy.rows[0].id;
+      } finally {
+        await old.end();
+      }
+
+      await runMigrations(fresh.url);
+      const upgraded = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const archiveIndex = await upgraded.query<{ valid: boolean; definition: string }>(
+          `SELECT i.indisvalid AS valid, pg_get_indexdef(i.indexrelid) AS definition
+           FROM pg_index i
+           WHERE i.indexrelid = to_regclass('public.publications_archived_brand_created_idx')`,
+        );
+        expect(archiveIndex.rows).toHaveLength(1);
+        expect(archiveIndex.rows[0]?.valid).toBe(true);
+        expect(archiveIndex.rows[0]?.definition).toContain("(org_id, brand_id, created_at, id)");
+        expect(archiveIndex.rows[0]?.definition).toContain("channel_id IS NULL");
+        expect(archiveIndex.rows[0]?.definition).toContain("brand_id IS NOT NULL");
+        const initial = await upgraded.query<{ id: string; brand_id: string | null }>(
+          "SELECT id, brand_id FROM publications WHERE id IN ($1, $2) ORDER BY id",
+          [receiptId, legacyId],
+        );
+        expect(initial.rows).toEqual(
+          [
+            { id: receiptId, brand_id: null },
+            { id: legacyId, brand_id: null },
+          ].sort((a, b) => a.id.localeCompare(b.id)),
+        );
+        await upgraded.query("DELETE FROM channels WHERE id = $1", [channelId]);
+        const after = await upgraded.query<{
+          id: string;
+          brand_id: string | null;
+          channel_name: string | null;
+          channel_platform: string | null;
+        }>(
+          "SELECT id, brand_id, channel_name, channel_platform FROM publications WHERE id IN ($1, $2) ORDER BY id",
+          [receiptId, legacyId],
+        );
+        expect(after.rows).toEqual(
+          [
+            {
+              id: receiptId,
+              brand_id: brandId,
+              channel_name: "Old Dzen",
+              channel_platform: "dzen",
+            },
+            { id: legacyId, brand_id: null, channel_name: "Old Dzen", channel_platform: "dzen" },
+          ].sort((a, b) => a.id.localeCompare(b.id)),
+        );
+      } finally {
+        await upgraded.end();
+      }
+    } finally {
+      await fresh.drop();
+      await fs.rm(before, { recursive: true, force: true });
+    }
+  });
+
   it("adds public Telegram groups without rewriting existing sources", async () => {
     const fresh = await withFreshDatabase(url as string);
     const before = await migrationsFolderBefore("0108_public_telegram_groups");

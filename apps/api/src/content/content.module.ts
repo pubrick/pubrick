@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { AiCredentialsModule } from "../ai-credentials/ai-credentials.module";
 import { MediaModule } from "../media/media.module";
+import { ArchivedPublicationsController } from "./archived-publications.controller";
+import { ArchivedPublicationsRepository } from "./archived-publications.repository";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { ContentController } from "./content.controller";
 import { ContentRepository } from "./content.repository";
@@ -25,9 +27,10 @@ import { RefineCaller } from "./refine.caller";
  */
 @Module({
   imports: [AiCredentialsModule, MediaModule],
-  controllers: [ContentController, PublicationOperationsController],
+  controllers: [ContentController, PublicationOperationsController, ArchivedPublicationsController],
   providers: [
     ContentRepository,
+    ArchivedPublicationsRepository,
     ContentCostRepository,
     ContentImagesRepository,
     EditorialNotesRepository,

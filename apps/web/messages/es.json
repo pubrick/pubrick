@@ -2504,6 +2504,21 @@
     "formerMember": "un antiguo miembro",
     "publishedAt": "Publicada el {date}",
     "scheduledAt": "Programada para el {date}",
+    "archiveTitle": "Recibos archivados",
+    "archiveIntro": "Registros de entrega de canales eliminados. Son de solo lectura y no pueden reabrir una publicación eliminada.",
+    "archiveEmpty": "Al eliminar un canal, sus recibos de entrega aparecerán aquí. Los recibos antiguos que perdieron su vínculo con la marca no se pueden recuperar.",
+    "archiveLoadError": "No se pudieron cargar los recibos archivados.",
+    "archiveUnknownChannel": "Canal anterior",
+    "archiveUnknownPlatform": "Plataforma desconocida",
+    "archiveRecordedAt": "Registrado el {date}",
+    "archiveAssertedAt": "Una persona la marcó como publicada el {date}; sin confirmación de la plataforma.",
+    "archiveOpenPublication": "Abrir publicación",
+    "archiveStatus": {
+      "in_flight": "Sin confirmar",
+      "published": "Publicada",
+      "failed": "Fallida",
+      "unknown": "Desconocida"
+    },
     "failure": {
       "schedule_missed": "Se perdió la ventana programada.",
       "no_adapter": "No hay publicador para esta plataforma.",

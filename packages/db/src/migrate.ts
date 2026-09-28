@@ -63,6 +63,35 @@ async function prepareUsageBrandIndex(client: pg.PoolClient): Promise<void> {
 }
 
 /**
+ * 0114 adds a nullable receipt brand snapshot. Build its history index after
+ * that DDL commits, without blocking publication writes on populated installs.
+ */
+async function prepareArchivedPublicationIndex(client: pg.PoolClient): Promise<void> {
+  const column = await client.query<{ exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM pg_attribute
+       WHERE attrelid = to_regclass('public.publications')
+         AND attname = 'brand_id' AND NOT attisdropped
+     ) AS exists`,
+  );
+  if (!column.rows[0]?.exists) return;
+  const state = await client.query<{ valid: boolean }>(
+    `SELECT i.indisvalid AS valid FROM pg_index i
+     WHERE i.indexrelid = to_regclass('public.publications_archived_brand_created_idx')`,
+  );
+  if (state.rows[0]?.valid) return;
+  if (state.rows.length) {
+    // Interrupted concurrent builds can leave an invalid index behind.
+    await client.query(
+      'DROP INDEX CONCURRENTLY IF EXISTS "publications_archived_brand_created_idx"',
+    );
+  }
+  await client.query(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS "publications_archived_brand_created_idx" ON "publications" USING btree ("org_id", "brand_id", "created_at", "id") WHERE "channel_id" IS NULL AND "brand_id" IS NOT NULL',
+  );
+}
+
+/**
  * A populated run journal must keep accepting claims while its observational
  * template-cohort index is built. A fresh install gets the same index from 0098.
  */
@@ -359,6 +388,7 @@ export async function runMigrations(connectionString: string): Promise<void> {
         await prepareUsageHistoryIndex(client);
         await prepareTemplateCohortIndex(client);
         await migrate(drizzle(client), { migrationsFolder: migrationsFolder() });
+        await prepareArchivedPublicationIndex(client);
         await prepareUsageBrandIndex(client);
         await prepareTemplateCohortIndex(client);
         await backfillPaidReplyHistory(client);

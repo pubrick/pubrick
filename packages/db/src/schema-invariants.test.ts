@@ -264,6 +264,29 @@ describe("adaptations", () => {
 describe("publications", () => {
   const config = getTableConfig(schema.publications);
 
+  it("keeps archived brand attribution nullable and independent of brand deletion", () => {
+    const columns = getTableColumns(schema.publications);
+    expect(columns.brandId?.getSQLType()).toBe("uuid");
+    expect(columns.brandId?.notNull).toBe(false);
+    expect(
+      config.foreignKeys.some((key) =>
+        key.reference().columns.some((column) => column.name === "brand_id"),
+      ),
+    ).toBe(false);
+    const index = config.indexes.find(
+      (candidate) => candidate.config.name === "publications_archived_brand_created_idx",
+    );
+    expect(index?.config.columns.map((column) => (column as { name: string }).name)).toEqual([
+      "org_id",
+      "brand_id",
+      "created_at",
+      "id",
+    ]);
+    expect(index?.config.where ? dialect.sqlToQuery(index.config.where).sql : "").toContain(
+      "channel_id",
+    );
+  });
+
   function partialUnique(name: string) {
     const index = config.indexes.find((candidate) => candidate.config.name === name);
     expect(index, `${name} is gone`).toBeDefined();

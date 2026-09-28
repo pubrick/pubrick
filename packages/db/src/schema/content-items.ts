@@ -405,6 +405,15 @@ export const publications = pgTable(
     }),
     channelId: uuid("channel_id").references(() => channels.id, { onDelete: "set null" }),
     /**
+     * Brand snapshot for read-only archived history after a channel is deleted.
+     * Null while the channel is live: its brand is authoritative. The channel
+     * tombstone trigger stamps this at deletion. Pre-existing orphaned receipts
+     * cannot be attributed safely and stay null. Deliberately no FK: brand
+     * deletion must not erase or reassign a historical receipt, and archive
+     * reads still require a live brand in the requesting organization.
+     */
+    brandId: uuid("brand_id"),
+    /**
      * WHICH CHANNEL THIS WENT TO, ONCE `channel_id` CAN NO LONGER SAY.
      *
      * A surviving row whose every pointer is null is a receipt with no
@@ -522,6 +531,9 @@ export const publications = pgTable(
      * reader listing one channel's publications will want.
      */
     index("publications_channel_id_idx").on(t.channelId),
+    index("publications_archived_brand_created_idx")
+      .on(t.orgId, t.brandId, t.createdAt, t.id)
+      .where(sql`${t.channelId} is null and ${t.brandId} is not null`),
     /**
      * At most one PUBLISHED RECORD per adaptation, as a database invariant
      * rather than a convention.

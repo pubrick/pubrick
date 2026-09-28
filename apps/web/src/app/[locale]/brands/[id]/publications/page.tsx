@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  type ArchivedPublicationDto,
+  type ArchivedPublicationsPageDto,
   PUBLICATION_OPERATION_FILTERS,
   type PublicationOperationDto,
   type PublicationOperationFilter,
@@ -20,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { DELIVERY_BADGE_STATUS } from "@/lib/adaptations";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { isLinkableUrl } from "@/lib/external-url";
 import { platformName } from "@/lib/platform";
 
 export default function PublicationOperationsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -36,16 +39,44 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const version = useRef(0);
+  const [archivedRows, setArchivedRows] = useState<ArchivedPublicationDto[]>([]);
+  const [archiveCursor, setArchiveCursor] = useState<string | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(true);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const archiveVersion = useRef(0);
 
   const describeError = useCallback(
-    (cause: unknown) => {
+    (cause: unknown, fallback = t("loadError")) => {
       if (cause instanceof ApiError && cause.noActiveOrg) {
         router.replace(`/${locale}/onboarding`);
         return null;
       }
-      return errorMessage(cause, t("loadError"), te);
+      return errorMessage(cause, fallback, te);
     },
     [locale, router, t, te],
+  );
+
+  const loadArchive = useCallback(
+    async (next: string | null = null) => {
+      const current = ++archiveVersion.current;
+      setArchiveLoading(true);
+      setArchiveError(null);
+      try {
+        const page = await api<ArchivedPublicationsPageDto>(
+          `/api/brands/${brandId}/publications/archive${next ? `?cursor=${encodeURIComponent(next)}` : ""}`,
+          { cache: "no-store" },
+        );
+        if (current !== archiveVersion.current) return;
+        setArchivedRows((previous) => (next ? [...previous, ...page.rows] : page.rows));
+        setArchiveCursor(page.nextCursor);
+      } catch (cause) {
+        if (current === archiveVersion.current)
+          setArchiveError(describeError(cause, t("archiveLoadError")));
+      } finally {
+        if (current === archiveVersion.current) setArchiveLoading(false);
+      }
+    },
+    [brandId, describeError, t],
   );
 
   const load = useCallback(
@@ -76,6 +107,13 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
       ++version.current;
     };
   }, [filter, load]);
+
+  useEffect(() => {
+    void loadArchive();
+    return () => {
+      ++archiveVersion.current;
+    };
+  }, [loadArchive]);
 
   useEffect(() => {
     api<{ name: string }>(`/api/brands/${brandId}`)
@@ -179,6 +217,84 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
           </Button>
         </div>
       )}
+      <section aria-labelledby="publication-archive-heading" className="mt-10">
+        <h2 id="publication-archive-heading" className="mb-2 text-lg font-semibold text-fg">
+          {t("archiveTitle")}
+        </h2>
+        <p className="mb-5 text-sm text-fg-secondary">{t("archiveIntro")}</p>
+        {archiveError && (
+          <div role="alert" className="mb-5 text-sm text-danger">
+            {archiveError}{" "}
+            <Button variant="ghost" size="sm" onClick={() => void loadArchive()}>
+              {t("retry")}
+            </Button>
+          </div>
+        )}
+        {archiveLoading && archivedRows.length === 0 ? <Skeleton lines={3} /> : null}
+        {!archiveLoading && !archiveError && archivedRows.length === 0 && (
+          <p className="text-sm text-fg-tertiary">{t("archiveEmpty")}</p>
+        )}
+        {archivedRows.length > 0 && (
+          <Card className="overflow-hidden p-0">
+            {archivedRows.map((row) => (
+              <ListRow
+                key={row.id}
+                title={`${row.channelName ?? t("archiveUnknownChannel")} · ${row.channelPlatform ? platformName(row.channelPlatform) : t("archiveUnknownPlatform")}`}
+                meta={
+                  <>
+                    {t("archiveRecordedAt", { date: date(row.createdAt) })}
+                    {row.assertedAt && (
+                      <span className="block whitespace-normal">
+                        {t("archiveAssertedAt", { date: date(row.assertedAt) })}
+                      </span>
+                    )}
+                    {row.externalUrl && (
+                      <span className="block whitespace-normal">
+                        {isLinkableUrl(row.externalUrl) ? (
+                          <a
+                            href={row.externalUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-accent underline"
+                          >
+                            {t("archiveOpenPublication")}
+                          </a>
+                        ) : (
+                          row.externalUrl
+                        )}
+                      </span>
+                    )}
+                  </>
+                }
+                trailing={
+                  <StatusBadge
+                    status={
+                      row.status === "published"
+                        ? "published"
+                        : row.status === "failed"
+                          ? "failed"
+                          : "review"
+                    }
+                  >
+                    {t(`archiveStatus.${row.status}`)}
+                  </StatusBadge>
+                }
+              />
+            ))}
+          </Card>
+        )}
+        {archiveCursor && (
+          <div className="mt-5 text-center">
+            <Button
+              variant="secondary"
+              disabled={archiveLoading}
+              onClick={() => void loadArchive(archiveCursor)}
+            >
+              {archiveLoading ? t("loading") : t("loadMore")}
+            </Button>
+          </div>
+        )}
+      </section>
     </AppShell>
   );
 }

@@ -31,6 +31,7 @@ describe("publication operations inbox", () => {
         const url = String(input);
         calls.push(url);
         if (url.endsWith(`/api/brands/${brandId}`)) return response({ name: "Acme" });
+        if (url.includes("/publications/archive")) return response({ rows: [], nextCursor: null });
         return response({
           rows: [
             {
@@ -71,6 +72,7 @@ describe("publication operations inbox", () => {
         const url = String(input);
         requests.push(url);
         if (url.endsWith(`/api/brands/${brandId}`)) return response({ name: "Acme" });
+        if (url.includes("/publications/archive")) return response({ rows: [], nextCursor: null });
         const published = url.includes("filter=published");
         const second = url.includes("cursor=next");
         return response({
@@ -113,5 +115,52 @@ describe("publication operations inbox", () => {
       screen.queryByRole("button", { name: en.PublicationOperations.loadMore }),
     ).not.toBeInTheDocument();
     expect(requests.some((url) => url.includes("filter=published&cursor=next"))).toBe(true);
+  });
+
+  it("shows paged deleted-channel receipts without dead action links or unsafe external links", async () => {
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input) => {
+        const url = String(input);
+        requests.push(url);
+        if (url.endsWith(`/api/brands/${brandId}`)) return response({ name: "Acme" });
+        if (url.includes("/publications/archive")) {
+          const second = url.includes("cursor=next");
+          return response({
+            rows: [
+              {
+                id: second ? "1ec2fa88-a1aa-4a81-a79b-d340659984ba" : adaptationId,
+                channelName: "Old feed",
+                channelPlatform: "telegram",
+                status: second ? "in_flight" : "published",
+                externalUrl: second ? "javascript:alert(1)" : "https://t.me/old/1",
+                assertedAt: null,
+                createdAt: at,
+              },
+            ],
+            nextCursor: second ? null : "next",
+          });
+        }
+        return response({ rows: [], nextCursor: null });
+      }),
+    );
+    await renderAsync(<PublicationOperationsPage params={Promise.resolve({ id: brandId })} />);
+    expect(
+      await screen.findByRole("heading", { name: en.PublicationOperations.archiveTitle }),
+    ).toBeVisible();
+    const external = await screen.findByRole("link", {
+      name: en.PublicationOperations.archiveOpenPublication,
+    });
+    expect(external).toHaveAttribute("href", "https://t.me/old/1");
+    expect(screen.queryByRole("link", { name: /Old feed/ })).not.toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.PublicationOperations.loadMore }));
+    expect(await screen.findByText(en.PublicationOperations.archiveStatus.in_flight)).toBeVisible();
+    expect(screen.getByText("javascript:alert(1)")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "javascript:alert(1)" })).not.toBeInTheDocument();
+    expect(requests.some((url) => url.includes("/publications/archive?cursor=next"))).toBe(true);
+    expect(screen.queryByRole("link", { name: /Old feed/ })).not.toBeInTheDocument();
   });
 });
