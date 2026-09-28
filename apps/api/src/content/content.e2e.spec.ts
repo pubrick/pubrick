@@ -5486,7 +5486,7 @@ describe.skipIf(!url)("content e2e", () => {
               steps: { researcher: { status: "succeeded", output: { notes: "private notes" } } },
             },
           ])
-          .returning({ id: schema.pipelineRuns.id });
+          .returning({ id: schema.pipelineRuns.id, updatedAt: schema.pipelineRuns.updatedAt });
         expect(runs).toHaveLength(2);
         const runId = runs[0]?.id as string;
         const [ledger] = await db
@@ -5516,6 +5516,7 @@ describe.skipIf(!url)("content e2e", () => {
           expect(receipt.contentItemId).toBeNull();
           expect(receipt.currentStep).toBeNull();
           expect(receipt.errorCode).toBeNull();
+          expect(receipt.updatedAt).toBe(run.updatedAt.toISOString());
           const raw = JSON.stringify(receipt);
           for (const secret of [
             "private instructions",

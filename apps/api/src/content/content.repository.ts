@@ -5871,6 +5871,7 @@ export class ContentRepository {
           orgId: schema.pipelineRuns.orgId,
           brandId: schema.pipelineRuns.brandId,
           status: schema.pipelineRuns.status,
+          updatedAt: schema.pipelineRuns.updatedAt,
         })
         .from(schema.pipelineRuns)
         .where(eq(schema.pipelineRuns.contentItemId, id))
@@ -6007,6 +6008,7 @@ export class ContentRepository {
             topicId: null,
             activeJobId: null,
             leaseExpiresAt: null,
+            updatedAt: run.updatedAt,
           })
           .where(
             and(
