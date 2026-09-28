@@ -12,8 +12,10 @@ import {
 } from "@nestjs/common";
 import {
   type AutopilotConfig,
+  type AutopilotOperationsQuery,
   type AutopilotScanQuery,
   autopilotConfigSchema,
+  autopilotOperationsQuerySchema,
   autopilotScanQuerySchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
@@ -57,6 +59,17 @@ export class AutopilotController {
     @Query(new ZodValidationPipe(autopilotScanQuerySchema)) query: AutopilotScanQuery,
   ) {
     return this.autopilot.scanHistory(orgId, brandId, query);
+  }
+
+  @Get("operations")
+  @BrandScope({ kind: "brand", source: "param", roles: "manager" })
+  @UseGuards(AutopilotOwnerGuard)
+  operations(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(autopilotOperationsQuerySchema)) query: AutopilotOperationsQuery,
+  ) {
+    return this.autopilot.operations(orgId, brandId, query);
   }
 
   @Get("diagnostics")

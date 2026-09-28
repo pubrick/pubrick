@@ -1,33 +1,30 @@
 "use client";
 
 import type { AutopilotManualAttempt } from "@pubrick/shared";
-import Link from "next/link";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
-import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
-import { StatusBadge } from "@/components/ui/status-badge";
 import { ApiError, api, errorMessage } from "@/lib/api";
 
 export function AutopilotManualTrigger({
   brandId,
   disabled,
+  onRequested,
 }: {
   brandId: string;
   disabled: boolean;
+  onRequested?: () => void;
 }) {
   const t = useTranslations("Autopilot");
   const te = useTranslations("Errors");
-  const locale = useLocale();
   const [attempts, setAttempts] = useState<AutopilotManualAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [available, setAvailable] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requested, setRequested] = useState(false);
   const [now, setNow] = useState(Date.now());
   const load = useCallback(async () => {
     try {
@@ -67,6 +64,7 @@ export function AutopilotManualTrigger({
     if (disabled || active || cooldown || submitting) return;
     setSubmitting(true);
     setError(null);
+    setRequested(false);
     try {
       const attempt = await api<AutopilotManualAttempt>(
         `/api/brands/${brandId}/autopilot/trigger`,
@@ -76,6 +74,8 @@ export function AutopilotManualTrigger({
         [attempt, ...current.filter((entry) => entry.id !== attempt.id)].slice(0, 20),
       );
       setOpen(false);
+      setRequested(true);
+      onRequested?.();
     } catch (err) {
       setOpen(false);
       const message = errorMessage(err, t("triggerError"), te);
@@ -112,45 +112,11 @@ export function AutopilotManualTrigger({
           {error}
         </p>
       )}
-      <Card padded={false}>
-        {attempts.length === 0 ? (
-          <EmptyState title={t("triggerEmpty")} />
-        ) : (
-          attempts.map((entry) => (
-            <ListRow
-              key={entry.id}
-              title={
-                entry.runId ? (
-                  <Link
-                    className="text-accent underline"
-                    href={`/${locale}/content/runs/${entry.runId}`}
-                  >
-                    {t("triggerRun")}
-                  </Link>
-                ) : (
-                  t(`triggerDecision.${entry.decision ?? entry.status}`)
-                )
-              }
-              meta={new Date(entry.createdAt).toLocaleString(locale)}
-              trailing={
-                <StatusBadge
-                  status={
-                    entry.status === "failed"
-                      ? "failed"
-                      : entry.decision === "dispatched"
-                        ? "draft"
-                        : entry.status === "completed"
-                          ? "review"
-                          : "scheduled"
-                  }
-                >
-                  {t(`triggerStatus.${entry.status}`)}
-                </StatusBadge>
-              }
-            />
-          ))
-        )}
-      </Card>
+      {requested && (
+        <p role="status" className="mb-3 text-sm text-success">
+          {t("operations.requested")}
+        </p>
+      )}
       <Modal
         open={open}
         onClose={() => {

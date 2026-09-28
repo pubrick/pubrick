@@ -1966,6 +1966,55 @@
     "quietStart": "Quiet hours start",
     "quietEnd": "Quiet hours end",
     "quietHint": "The window may cross midnight. Set the same start and end to disable quiet hours.",
+    "operations": {
+      "title": "Operations",
+      "hint": "A single record of scheduled checks, draft dispatches, manual checks, calendar planning and topic ideas. A dispatch means generation was admitted; the linked run shows its eventual outcome.",
+      "empty": "No Autopilot operations yet.",
+      "restricted": "Only a brand manager who owns or administers this workspace can view operations.",
+      "error": "Could not load Autopilot operations. Try again.",
+      "loading": "Loading operations…",
+      "loadingMore": "Loading more…",
+      "loadMore": "Load more",
+      "admission": "Admission decision",
+      "decisionPending": "Decision pending",
+      "runOutcome": "Generation outcome",
+      "noRun": "No generation run for this check",
+      "runUnavailable": "The linked run outcome is unavailable",
+      "openTopic": "Open topic bank",
+      "openRun": "Open run receipt",
+      "openTopics": "Review topic ideas",
+      "suggestionCount": "Ideas created: {count}",
+      "requested": "Check requested. Its decision will appear in operations shortly.",
+      "kind": {
+        "scheduled_scan": "Scheduled generation check",
+        "automatic_dispatch": "Automatic draft dispatch",
+        "manual_generation": "Manual generation check",
+        "manual_topic_plan": "Manual calendar planning",
+        "topic_suggestions": "Topic ideas request"
+      },
+      "origin": {
+        "manual": "Requested manually",
+        "automatic": "Daily request"
+      },
+      "suggestionStatus": {
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Completed",
+        "failed": "Failed"
+      },
+      "runStatus": {
+        "queued": "Queued",
+        "running": "Running",
+        "succeeded": "Draft ready",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "suggestionError": {
+        "no_api_key": "No AI key is configured. Add one in Settings.",
+        "unreadable_key": "The saved AI key cannot be read. Replace it in Settings.",
+        "model_failed": "The model could not complete this request."
+      }
+    },
     "scanTitle": "Scheduled checks",
     "scanHint": "Checks record the scheduler's decision at the time. A dispatched entry means a draft was sent for generation; open its run to see the outcome. Only enabled brands are scanned. Entries are retained for 14 days.",
     "scanDispatchDecision": "Sent for draft generation",

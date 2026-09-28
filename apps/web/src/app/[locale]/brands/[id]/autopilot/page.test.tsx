@@ -16,14 +16,9 @@ vi.mock("./manual-trigger", () => ({
     <div data-testid="manual-trigger">{brandId}</div>
   ),
 }));
-vi.mock("./scheduled-checks", () => ({
-  AutopilotScheduledChecks: ({ brandId }: { brandId: string }) => (
-    <div data-testid="scheduled-checks">{brandId}</div>
-  ),
-}));
-vi.mock("./manual-planning-attempts", () => ({
-  ManualPlanningAttempts: ({ brandId }: { brandId: string }) => (
-    <div data-testid="manual-planning-attempts">{brandId}</div>
+vi.mock("./operations", () => ({
+  AutopilotOperations: ({ brandId }: { brandId: string }) => (
+    <div data-testid="operations">{brandId}</div>
   ),
 }));
 
@@ -211,29 +206,15 @@ describe("autopilot settings page", () => {
     );
   });
 
-  it("links recent automatic runs by topic title", async () => {
-    const runId = "2e838682-1948-4959-9ec6-79503d49e691";
-    vi.mocked(fetch).mockImplementation(async (input) => {
-      const url = String(input);
-      if (url.endsWith("/autopilot/history"))
-        return response(200, [
-          {
-            id: "dispatch",
-            topicId: "topic",
-            topicTitle: "Weekly release notes",
-            runId,
-            localDate: "2026-09-25",
-            runStatus: "running",
-            createdAt: "2026-09-25T10:00:00.000Z",
-          },
-        ]);
-      if (url.includes("/api/channels?")) return response(200, []);
-      return response(200, autopilotDefaults);
-    });
-    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
-    expect(await screen.findByRole("link", { name: "Weekly release notes" })).toHaveAttribute(
-      "href",
-      `/en/content/runs/${runId}`,
+  it("shows one operations surface alongside the existing controls", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).includes("/api/channels?")
+        ? response(200, [])
+        : response(200, autopilotDefaults),
     );
+    await renderAsync(<AutopilotPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(screen.getByTestId("diagnostics")).toHaveTextContent(BRAND_ID);
+    expect(screen.getByTestId("manual-trigger")).toHaveTextContent(BRAND_ID);
+    expect(screen.getByTestId("operations")).toHaveTextContent(BRAND_ID);
   });
 });
