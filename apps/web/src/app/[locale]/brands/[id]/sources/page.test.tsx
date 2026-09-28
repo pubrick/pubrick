@@ -171,6 +171,7 @@ describe("watched sources page", () => {
     sources: unknown[] = [],
     analysis?: unknown,
     rerankResults: unknown[] = [],
+    privateSample?: { sampleVersion: string | null; comments: unknown[] },
   ) {
     const calls: { url: string; method: string; body: unknown }[] = [];
     let autoEnabled = false;
@@ -225,7 +226,7 @@ describe("watched sources page", () => {
             : (analysis ?? { status: "unavailable" }),
         );
       if (url.includes("/comments/refresh")) return response(201, { queued: true });
-      if (url.includes("/comments?")) return response(200, []);
+      if (url.includes("/comments?")) return response(200, privateSample ?? []);
       if (url.endsWith("/api/sources/telegram-connection"))
         return response(200, { connected: false });
       if (url.includes("/api/sources/comment-collection?")) {
@@ -783,6 +784,17 @@ describe("watched sources page", () => {
         status: "not_analyzed",
         current: { status: "not_analyzed", sampleVersion, collectionStatus: "available" },
       },
+      [],
+      {
+        sampleVersion,
+        comments: [
+          {
+            id: "9c47f844-a184-443f-9932-b9b522a03d68",
+            body: "Member reply",
+            publishedAt: "2026-09-23T12:00:00.000Z",
+          },
+        ],
+      },
     );
     await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
     const user = userEvent.setup();
@@ -810,6 +822,78 @@ describe("watched sources page", () => {
     );
     expect(posted?.body).toEqual({ consent: true, sampleVersion });
     expect(privateReplyAnalysisConsentSchema.parse(posted?.body)).toEqual(posted?.body);
+  });
+
+  it("blocks private consent when displayed replies and analysis have different versions", async () => {
+    const analysisVersion = "e6551613-aa43-420e-a277-9a3aefb7d7e8";
+    const privateSample = {
+      sampleVersion: "a019c7ab-8aa6-477e-80c8-63a14b914ff7",
+      comments: [
+        {
+          id: "9c47f844-a184-443f-9932-b9b522a03d68",
+          body: "Older member reply",
+          publishedAt: "2026-09-23T12:00:00.000Z",
+        },
+      ],
+    };
+    const calls = install(
+      [
+        {
+          id: ITEM_ID,
+          brandId: BRAND_ID,
+          sourceId: SOURCE_ID,
+          title: "Member story",
+          summary: "Member story",
+          url: "https://t.me/c/123456/1",
+          publishedAt: null,
+          commentsStatus: "available",
+          commentsCheckedAt: "2026-09-23T12:00:00.000Z",
+          commentsErrorCode: null,
+          createdAt: "2026-09-23T12:00:00.000Z",
+        },
+      ],
+      [
+        {
+          id: SOURCE_ID,
+          kind: "telegram_private",
+          isActive: true,
+          name: "Joined channel",
+          url: "https://t.me/c/123456",
+        },
+      ],
+      {
+        status: "not_analyzed",
+        current: {
+          status: "not_analyzed",
+          sampleVersion: analysisVersion,
+          collectionStatus: "available",
+        },
+      },
+      [],
+      privateSample,
+    );
+    await renderAsync(<SourcesPage params={Promise.resolve({ id: BRAND_ID })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.Sources.comments }));
+    const dialog = within(screen.getByRole("dialog", { name: en.Sources.commentsTitle }));
+    expect(await dialog.findByText(en.Sources.privateAnalysisSampleChanged)).toBeInTheDocument();
+    expect(dialog.getByRole("button", { name: en.Sources.analyzeComments })).toBeDisabled();
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
+    privateSample.sampleVersion = analysisVersion;
+    await user.click(dialog.getByRole("button", { name: en.Sources.privateAnalysisRefresh }));
+    await waitFor(() =>
+      expect(
+        dialog.getByRole("button", {
+          name: en.Sources.analyzeComments,
+        }),
+      ).toBeEnabled(),
+    );
+    expect(dialog.queryByText(en.Sources.privateAnalysisSampleChanged)).not.toBeInTheDocument();
+    expect(
+      calls.some((call) => call.method === "POST" && call.url.includes("comment-analysis")),
+    ).toBe(false);
   });
 
   it("starts a source run with the article summary, URL, and explicitly chosen channel", async () => {

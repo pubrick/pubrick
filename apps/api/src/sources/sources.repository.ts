@@ -680,13 +680,73 @@ export class SourcesRepository {
   async comments(orgId: string, brandId: string, itemId: string) {
     const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
     if (item.sourceKind === "telegram_private") {
-      if (
-        !item.sourceActive ||
-        !item.commentsSampleVersion ||
-        item.commentsStatus === "private" ||
-        item.commentsStatus === "unavailable"
-      )
-        return [];
+      // The version and displayed rows must describe the same snapshot. A
+      // collector can replace both between ordinary READ COMMITTED selects.
+      return db.transaction(
+        async (tx) => {
+          const [snapshot] = await tx
+            .select({
+              sampleVersion: schema.newsItems.commentsSampleVersion,
+              status: schema.newsItems.commentsStatus,
+              active: schema.newsSources.isActive,
+              url: schema.newsItems.url,
+              sourceUrl: schema.newsSources.url,
+              peer: schema.newsSources.privatePeerEncrypted,
+            })
+            .from(schema.newsItems)
+            .innerJoin(schema.newsSources, eq(schema.newsSources.id, schema.newsItems.sourceId))
+            .where(
+              and(
+                eq(schema.newsItems.orgId, orgId),
+                eq(schema.newsItems.brandId, brandId),
+                eq(schema.newsItems.id, itemId),
+                eq(schema.newsSources.orgId, orgId),
+                eq(schema.newsSources.brandId, brandId),
+                eq(schema.newsSources.kind, "telegram_private"),
+              ),
+            )
+            .limit(1);
+          if (!snapshot) throw new NotFoundException("Story not found");
+          if (
+            !snapshot.active ||
+            !snapshot.peer ||
+            !snapshot.url.startsWith(`${snapshot.sourceUrl}/`) ||
+            !snapshot.sampleVersion ||
+            snapshot.status === "private" ||
+            snapshot.status === "unavailable"
+          )
+            return { sampleVersion: null, comments: [] };
+          const rows = await tx
+            .select({
+              id: schema.newsComments.id,
+              body: schema.newsComments.body,
+              publishedAt: schema.newsComments.publishedAt,
+              createdAt: schema.newsComments.createdAt,
+            })
+            .from(schema.newsComments)
+            .where(
+              and(
+                eq(schema.newsComments.orgId, orgId),
+                eq(schema.newsComments.brandId, brandId),
+                eq(schema.newsComments.itemId, itemId),
+              ),
+            )
+            .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
+            .limit(50);
+          const [account] = await tx
+            .select({ connectedAt: schema.telegramSourceAccounts.connectedAt })
+            .from(schema.telegramSourceAccounts)
+            .where(eq(schema.telegramSourceAccounts.orgId, orgId))
+            .limit(1);
+          if (!account || rows.some((row) => row.createdAt < account.connectedAt))
+            return { sampleVersion: null, comments: [] };
+          return {
+            sampleVersion: snapshot.sampleVersion,
+            comments: rows.map(({ createdAt: _createdAt, ...row }) => row),
+          };
+        },
+        { isolationLevel: "repeatable read" },
+      );
     }
     const rows = await db
       .select({
@@ -705,14 +765,6 @@ export class SourcesRepository {
       )
       .orderBy(desc(schema.newsComments.publishedAt), desc(schema.newsComments.id))
       .limit(50);
-    if (item.sourceKind === "telegram_private") {
-      const [account] = await db
-        .select({ connectedAt: schema.telegramSourceAccounts.connectedAt })
-        .from(schema.telegramSourceAccounts)
-        .where(eq(schema.telegramSourceAccounts.orgId, orgId))
-        .limit(1);
-      if (!account || rows.some((row) => row.createdAt < account.connectedAt)) return [];
-    }
     return rows.map(({ createdAt: _createdAt, ...row }) => row);
   }
 
@@ -911,7 +963,19 @@ export class SourcesRepository {
     )
       return current;
     const item = await this.requireTelegramItem(orgId, brandId, itemId, true);
-    const sample = await this.analysisSample(orgId, brandId, itemId);
+    const privateRead = consent?.success ? await this.comments(orgId, brandId, itemId) : null;
+    if (
+      consent?.success &&
+      (privateRead === null ||
+        Array.isArray(privateRead) ||
+        privateRead.sampleVersion !== consent.data.sampleVersion ||
+        item.commentsSampleVersion !== privateRead.sampleVersion)
+    )
+      return { status: "stale" as const };
+    const sample =
+      privateRead && !Array.isArray(privateRead)
+        ? privateRead.comments.slice(0, 30).map(({ body }) => ({ body }))
+        : await this.analysisSample(orgId, brandId, itemId);
     if (!item.commentsSampleVersion || sample.length === 0)
       return { status: "no_comments" as const };
     const status = await requestManualPaidReplyAnalysis({

@@ -13,6 +13,7 @@ import {
   newsRerankRequestSchema,
   newsSourceCreateSchema,
   newsSourceNameSchema,
+  type PrivateNewsCommentSampleDto,
   privateReplyAnalysisConsentSchema,
   privateTelegramSourceCreateSchema,
   runCreateSchema,
@@ -125,6 +126,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const [selectedItem, setSelectedItem] = useState<NewsItemDto | null>(null);
   const [commentsItem, setCommentsItem] = useState<NewsItemDto | null>(null);
   const [comments, setComments] = useState<NewsCommentDto[] | null>(null);
+  const [commentsVersion, setCommentsVersion] = useState<string | null>(null);
+  const activeCommentsRequest = useRef<string | null>(null);
   const [commentsError, setCommentsError] = useState<string | null>(null);
   const [commentAnalysis, setCommentAnalysis] = useState<CommentAnalysisDto | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
@@ -432,12 +435,18 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
 
   const loadComments = useCallback(
     (itemId: string) => {
-      api<NewsCommentDto[]>(`/api/sources/items/${itemId}/comments?brandId=${id}`)
-        .then((rows) => {
-          setComments(rows);
+      api<NewsCommentDto[] | PrivateNewsCommentSampleDto>(
+        `/api/sources/items/${itemId}/comments?brandId=${id}`,
+      )
+        .then((result) => {
+          if (activeCommentsRequest.current !== itemId) return;
+          setComments(Array.isArray(result) ? result : result.comments);
+          setCommentsVersion(Array.isArray(result) ? null : result.sampleVersion);
           setCommentsError(null);
         })
-        .catch((err) => setCommentsError(describeError(err)));
+        .catch((err) => {
+          if (activeCommentsRequest.current === itemId) setCommentsError(describeError(err));
+        });
     },
     [id, describeError],
   );
@@ -446,10 +455,13 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
     (itemId: string) => {
       api<CommentAnalysisDto>(`/api/sources/items/${itemId}/comment-analysis?brandId=${id}`)
         .then((result) => {
+          if (activeCommentsRequest.current !== itemId) return;
           setCommentAnalysis(result);
           setAnalysisError(null);
         })
-        .catch((err) => setAnalysisError(describeError(err)));
+        .catch((err) => {
+          if (activeCommentsRequest.current === itemId) setAnalysisError(describeError(err));
+        });
     },
     [id, describeError],
   );
@@ -671,11 +683,18 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const closeRun = useCallback(() => setSelectedItem(null), []);
   const closeDelete = useCallback(() => setPendingDelete(null), []);
   const closeComments = useCallback(() => {
+    activeCommentsRequest.current = null;
     setPrivateAnalysisConsent(null);
     setCommentsItem(null);
   }, []);
   const activeCommentsItem = items?.find((item) => item.id === commentsItem?.id) ?? commentsItem;
   const privateComments = commentsSourceKind === "telegram_private";
+  const privateAnalysisCurrentVersion = commentAnalysis?.current?.sampleVersion;
+  const privateSampleMatches =
+    !privateComments ||
+    (comments !== null &&
+      commentsVersion !== null &&
+      commentsVersion === privateAnalysisCurrentVersion);
 
   async function createDraft() {
     if (!selectedItem || selectedChannels.size === 0) return;
@@ -1173,8 +1192,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                       variant="secondary"
                       size="sm"
                       onClick={() => {
+                        activeCommentsRequest.current = item.id;
                         setCommentsItem(item);
                         setComments(null);
+                        setCommentsVersion(null);
                         setCommentsError(null);
                         setCommentAnalysis(null);
                         setAnalysisError(null);
@@ -1277,10 +1298,10 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
                 ) && (
                   <Button
                     size="sm"
-                    disabled={analysisBusy}
+                    disabled={analysisBusy || !privateSampleMatches}
                     onClick={() => {
                       const sampleVersion = commentAnalysis.current?.sampleVersion;
-                      if (privateComments && sampleVersion) {
+                      if (privateComments && privateSampleMatches && sampleVersion) {
                         setPrivateAnalysisConsent({
                           itemId: activeCommentsItem.id,
                           sampleVersion,
@@ -1310,6 +1331,31 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               {analysisError}
             </p>
           )}
+          {privateComments &&
+            comments !== null &&
+            commentAnalysis &&
+            ["not_analyzed", "stale"].includes(
+              commentAnalysis.current?.status ?? commentAnalysis.status,
+            ) &&
+            !privateSampleMatches && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <p role="status" className="text-sm text-fg-secondary">
+                  {t("privateAnalysisSampleChanged")}
+                </p>
+                {activeCommentsItem && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      loadComments(activeCommentsItem.id);
+                      loadCommentAnalysis(activeCommentsItem.id);
+                    }}
+                  >
+                    {t("privateAnalysisRefresh")}
+                  </Button>
+                )}
+              </div>
+            )}
           {!commentAnalysis ? (
             <Skeleton lines={2} />
           ) : commentAnalysis.status === "ready" &&
@@ -1355,7 +1401,11 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
               {t("close")}
             </Button>
             <Button
-              disabled={analysisBusy}
+              disabled={
+                analysisBusy ||
+                !privateSampleMatches ||
+                privateAnalysisConsent?.sampleVersion !== commentsVersion
+              }
               onClick={() =>
                 privateAnalysisConsent &&
                 analyzeComments(privateAnalysisConsent.itemId, privateAnalysisConsent.sampleVersion)

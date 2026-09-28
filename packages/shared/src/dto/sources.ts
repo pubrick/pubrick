@@ -273,6 +273,13 @@ export const newsCommentDtoSchema = z.object({
 });
 export type NewsCommentDto = z.infer<typeof newsCommentDtoSchema>;
 
+/** A private reply list and its version must come from one database snapshot. */
+export const privateNewsCommentSampleDtoSchema = z.object({
+  sampleVersion: z.string().uuid().nullable(),
+  comments: z.array(newsCommentDtoSchema),
+});
+export type PrivateNewsCommentSampleDto = z.infer<typeof privateNewsCommentSampleDtoSchema>;
+
 /** Explicit consent for one saved private story reply sample. */
 export const privateReplyAnalysisConsentSchema = z.strictObject({
   consent: z.literal(true),

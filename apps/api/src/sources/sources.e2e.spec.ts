@@ -3,7 +3,11 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { UsageRecord } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
-import { encryptJson, privateTelegramSourceCreateSchema } from "@pubrick/shared";
+import {
+  encryptJson,
+  privateNewsCommentSampleDtoSchema,
+  privateTelegramSourceCreateSchema,
+} from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
 import { and, eq } from "drizzle-orm";
 import request from "supertest";
@@ -550,7 +554,10 @@ describe.skipIf(!url)("watched sources e2e", () => {
     if (!privateItem) throw new Error("Private story fixture was not inserted");
     const privateComments = `/api/sources/items/${privateItem.id}/comments?brandId=${a.body.id}`;
     const privateRefresh = `/api/sources/items/${privateItem.id}/comments/refresh?brandId=${a.body.id}`;
-    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual({
+      sampleVersion: null,
+      comments: [],
+    });
     await other.get(privateComments).expect(404);
     await owner
       .get(`/api/sources/items/${privateItem.id}/comments?brandId=${b.body.id}`)
@@ -570,35 +577,53 @@ describe.skipIf(!url)("watched sources e2e", () => {
       body: "Earlier member reply",
       publishedAt: new Date(),
     });
+    const privateSampleVersion = randomUUID();
     await db
       .update(schema.newsItems)
       .set({
         commentsStatus: "available",
-        commentsSampleVersion: randomUUID(),
+        commentsSampleVersion: privateSampleVersion,
         commentsCheckedAt: new Date(),
       })
       .where(eq(schema.newsItems.id, privateItem.id));
-    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    const savedPrivateSample = (await owner.get(privateComments).expect(200)).body;
+    expect(privateNewsCommentSampleDtoSchema.parse(savedPrivateSample)).toEqual(savedPrivateSample);
+    expect(savedPrivateSample).toMatchObject({
+      sampleVersion: privateSampleVersion,
+      comments: [expect.objectContaining({ body: "Earlier member reply" })],
+    });
     await db
       .update(schema.newsItems)
       .set({ commentsStatus: "private" })
       .where(eq(schema.newsItems.id, privateItem.id));
-    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual({
+      sampleVersion: null,
+      comments: [],
+    });
     await db
       .update(schema.newsItems)
       .set({ commentsStatus: "error" })
       .where(eq(schema.newsItems.id, privateItem.id));
-    expect((await owner.get(privateComments).expect(200)).body).toHaveLength(1);
+    expect((await owner.get(privateComments).expect(200)).body).toMatchObject({
+      sampleVersion: privateSampleVersion,
+      comments: [expect.objectContaining({ body: "Earlier member reply" })],
+    });
     await db
       .update(schema.telegramSourceAccounts)
       .set({ sessionEncrypted: "replacement-session", connectedAt: new Date(Date.now() + 1_000) })
       .where(eq(schema.telegramSourceAccounts.orgId, ownerOrgId));
-    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual({
+      sampleVersion: null,
+      comments: [],
+    });
     await owner
       .patch(`/api/sources/${privateSource.id}?brandId=${a.body.id}`)
       .send({ isActive: false })
       .expect(200);
-    expect((await owner.get(privateComments).expect(200)).body).toEqual([]);
+    expect((await owner.get(privateComments).expect(200)).body).toEqual({
+      sampleVersion: null,
+      comments: [],
+    });
     await owner.post(privateRefresh).expect(409);
     await other.get(`/api/sources?brandId=${a.body.id}`).expect(404);
     await other.get(`/api/sources/items?brandId=${a.body.id}`).expect(404);

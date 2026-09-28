@@ -37,5 +37,10 @@ Gemini and records usage before storing a result. Deleting a story, publication,
 or brand immediately clears its encrypted prompt; a call that may have been
 dispatched retains its uncertain reservation.
 
+For manually confirmed private story samples, the encrypted request includes
+the story title and bounded reply text. It is retained for recovery and the
+worker schedules its deletion 30 days after the attempt completes. Cleanup can run later if the
+worker is offline; do not describe the aggregate result as the only saved data.
+
 For the field-level API, cost, and recovery contract, see
 [Paid reply analysis spec](specs/0002-paid-reply-analysis.md).
