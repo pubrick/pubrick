@@ -285,7 +285,12 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   }
 
   it("drives all five roles to a real draft, its adaptations and their first ai versions", async () => {
-    const seeded = await seed(2);
+    const seeded = await seed(2, (channelIds) => ({
+      kind: "brief",
+      title: "Autumn menu",
+      text: "Announce the autumn menu",
+      channelIds,
+    }));
     active = scriptedModel({
       editor: () => ({ body: EDITED, changes: ["Tightened the opening."], qualityScore: 0.84 }),
     });
@@ -313,7 +318,13 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       .select()
       .from(schema.contentItems)
       .where(eq(schema.contentItems.id, run?.contentItemId as string));
-    expect(item).toMatchObject({ body: EDITED, status: "draft", origin: "ai", qualityScore: 0.84 });
+    expect(item).toMatchObject({
+      title: "Autumn menu",
+      body: EDITED,
+      status: "draft",
+      origin: "ai",
+      qualityScore: 0.84,
+    });
     expect(
       await db
         .select({ id: schema.claimReviews.id })
@@ -335,6 +346,7 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
     // One for the master body and one per adaptation: the provenance reference
     // the publish gate and the badge are both derived from.
     expect(versions).toHaveLength(3);
+    expect(versions.find((row) => row.adaptationId === null)?.title).toBe("Autumn menu");
     expect(versions.every((row) => row.origin === "ai")).toBe(true);
     expect(versions.every((row) => row.runId === seeded.runId)).toBe(true);
 

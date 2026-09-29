@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
+import { contentCreateSchema } from "./content.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
@@ -260,6 +261,8 @@ const pastedMaterial = z
 export const runCreateSchema = z
   .object({
     brandId: z.string().uuid(),
+    /** Preserve the compose form's title on the generated draft. */
+    title: contentCreateSchema.shape.title,
     contentType: z.enum(CONTENT_TYPES).optional(),
     /** One additional BYOK Gemini image call, only when explicitly requested. */
     generateCover: z.boolean().optional(),
@@ -483,6 +486,7 @@ export const runEditorialFeedbackSchema = z
 
 const briefRunInputBaseSchema = z.object({
   kind: z.literal("brief"),
+  title: contentCreateSchema.shape.title,
   /** Optional for runs created before content types were introduced. */
   contentType: z.enum(CONTENT_TYPES).optional(),
   /** Optional so runs created before cover generation remain executable. */
@@ -518,6 +522,7 @@ export type BriefRunInput = z.infer<typeof briefRunInputSchema>;
  */
 export const sourceRunInputSchema = z.object({
   kind: z.literal("source"),
+  title: contentCreateSchema.shape.title,
   contentType: z.enum(CONTENT_TYPES).optional(),
   generateCover: z.boolean().optional(),
   generateInlineImages: z.boolean().optional(),

@@ -497,6 +497,7 @@ export class RunsRepository {
                 // that guarantee is invisible to the compiler.
                 {
                   kind: "brief",
+                  ...(data.title !== undefined && { title: data.title }),
                   text: brief as string,
                   channelIds: data.channelIds,
                   ...(data.generateCover && { generateCover: true }),
@@ -510,6 +511,7 @@ export class RunsRepository {
                 }
               : {
                   kind: "source",
+                  ...(data.title !== undefined && { title: data.title }),
                   text: brief,
                   sourceUrl: data.sourceUrl ?? null,
                   material,

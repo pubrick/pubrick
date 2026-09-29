@@ -898,6 +898,7 @@ export class GenerateService {
     }
 
     return {
+      ...(input.title !== undefined && { title: input.title }),
       body: edited.body,
       qualityScore: edited.qualityScore ?? null,
       adaptations,
