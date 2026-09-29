@@ -139,12 +139,12 @@ describe("Google proxy transport", () => {
         socket.end("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nthrough-proxy");
       });
     });
-    server.listen(0, "127.0.0.1");
+    server.listen(0, "localhost");
     await once(server, "listening");
     try {
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("expected TCP address");
-      process.env.GOOGLE_API_PROXY = `http://user:pass@127.0.0.1:${address.port}`;
+      process.env.GOOGLE_API_PROXY = `http://user:pass@localhost:${address.port}`;
       const response = await googleProxyFetch("http://upstream.invalid/v1beta/models");
       expect(await response.text()).toBe("through-proxy");
       expect(seenUrl).toMatch(/upstream\.invalid/);
