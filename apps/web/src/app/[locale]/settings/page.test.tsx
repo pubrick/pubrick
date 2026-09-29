@@ -346,7 +346,13 @@ describe("Settings — AI provider: saving a key", () => {
   it("teaches the next action when no key is stored yet", async () => {
     await renderSettings();
 
-    expect(screen.getByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).toBeInTheDocument();
+    expect(
+      screen.getByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google")),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(en.SettingsPage.aiKeyLabel)).toHaveAttribute(
+      "placeholder",
+      en.SettingsPage.aiKeyAddPlaceholder,
+    );
   });
 
   it("does not claim there is no key before the list has come back", async () => {
@@ -356,11 +362,15 @@ describe("Settings — AI provider: saving a key", () => {
     installApi([], { credentials: [googleKey] });
     render(<SettingsPage />);
 
-    expect(screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google")),
+    ).not.toBeInTheDocument();
 
     // …and the real answer still arrives.
     expect(await screen.findByText("Google")).toBeInTheDocument();
-    expect(screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google")),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the stored key separately from an empty replacement field and keeps Save with the form", async () => {
@@ -371,8 +381,36 @@ describe("Settings — AI provider: saving a key", () => {
       screen.getByText(en.SettingsPage.aiKeyStored.replace("{provider}", "Google")),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(en.SettingsPage.aiKeyLabel)).toHaveValue("");
+    expect(screen.getByLabelText(en.SettingsPage.aiKeyLabel)).toHaveAttribute(
+      "placeholder",
+      en.SettingsPage.aiKeyReplacePlaceholder,
+    );
     const main = within(screen.getByRole("main"));
     expect(main.getByRole("button", { name: en.SettingsPage.aiSave })).toBeInTheDocument();
+  });
+
+  it("keeps unsaved keys with their own provider when switching the selector", async () => {
+    const calls: Call[] = [];
+    installApi(calls);
+    await renderSettings();
+
+    const user = userEvent.setup();
+    const key = screen.getByLabelText(en.SettingsPage.aiKeyLabel);
+    await user.type(key, "google-key-draft");
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), "openrouter");
+    expect(key).toHaveValue("");
+    expect(screen.getByRole("button", { name: en.SettingsPage.aiSave })).toBeDisabled();
+    await user.type(key, "openrouter-key-draft");
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), "google");
+    expect(key).toHaveValue("google-key-draft");
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      provider: "google",
+      apiKey: "google-key-draft",
+    });
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), "openrouter");
+    expect(key).toHaveValue("openrouter-key-draft");
   });
 
   it("confirms a saved key independently of the test result", async () => {
@@ -796,7 +834,8 @@ describe("Settings — AI provider: saving cannot be fired twice", () => {
     expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
 
     release();
-    await waitFor(() => expect(save).toBeEnabled());
+    await waitFor(() => expect(screen.getByLabelText(en.SettingsPage.aiKeyLabel)).toHaveValue(""));
+    expect(save).toBeDisabled();
     expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
   });
 
@@ -948,6 +987,14 @@ describe("Settings — a refused credential action speaks the product's language
     mockApi.mockImplementation(async (...args: unknown[]) => {
       const path = args[0] as string;
       if (path === "/api/ai-credentials") throw gone;
+      if (path === "/api/paid-replies/organization")
+        return {
+          timezone: "UTC",
+          dailyThresholdUsd: 5,
+          revision: 0,
+          admittedCostUsd: 0,
+          blockedReason: null,
+        };
       return { kind: "exact", usd: 0 } satisfies CostSummary;
     });
 
@@ -1125,10 +1172,10 @@ describe("Settings — People", () => {
     ).not.toBeInTheDocument();
     expect(mockApi).not.toHaveBeenCalledWith("/api/ai-credentials");
     expect(
-      screen.queryByRole("link", { name: en.SettingsPage.promptsOpen }),
+      screen.queryByRole("link", { name: new RegExp(en.SettingsPage.promptsTitle) }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: en.SettingsPage.notificationsOpen }),
+      screen.queryByRole("link", { name: new RegExp(en.SettingsPage.notificationsTitle) }),
     ).not.toBeInTheDocument();
   });
 
@@ -1273,14 +1320,21 @@ describe("Settings — People", () => {
 describe("Settings — public API management", () => {
   it("links an owner to API key management", async () => {
     await renderSettings();
-    expect(screen.getByRole("link", { name: en.SettingsPage.publicApiOpen })).toHaveAttribute(
-      "href",
-      "/en/settings/api-keys",
-    );
-    expect(screen.getByRole("link", { name: en.SettingsPage.telegramSourcesOpen })).toHaveAttribute(
-      "href",
-      "/en/settings/telegram",
-    );
+    expect(
+      screen.getByRole("heading", { name: en.SettingsPage.contentSettingsTitle }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: en.SettingsPage.connectionsTitle }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: en.SettingsPage.personalTitle }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: new RegExp(en.SettingsPage.publicApiTitle) }),
+    ).toHaveAttribute("href", "/en/settings/api-keys");
+    expect(
+      screen.getByRole("link", { name: new RegExp(en.SettingsPage.telegramSourcesTitle) }),
+    ).toHaveAttribute("href", "/en/settings/telegram");
   });
 
   it("does not offer API key management to a regular member", async () => {

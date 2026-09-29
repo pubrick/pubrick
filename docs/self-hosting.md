@@ -138,8 +138,9 @@ shows the current token rates and free/paid tiers. Paid tier access requires
 billing on the Google project that owns the key.
 
 If the Google endpoint is unavailable from your server, open **Settings → AI
-provider → Advanced** and save an HTTP(S) forward proxy URL with an explicit
-port under **Google proxy URL**. This setting applies to the current workspace's
+provider → Google proxy URL** and save an HTTP(S) forward proxy URL with an explicit
+port. The proxy field and its save action are visible below the API-key form and
+are saved separately. This setting applies to the current workspace's
 Google calls in both API and worker. Pubrick encrypts it with the same key ring
 as the API key and never returns the saved URL to the browser. Use **Remove**
 there to clear it. The instance operator must first approve the proxy's
