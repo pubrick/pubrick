@@ -17,6 +17,9 @@ export function PaidReplyOrganizationSettings({ canManage }: { canManage: boolea
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const dirty =
+    settings !== null &&
+    (timezone.trim() !== settings.timezone || amount !== settings.dailyThresholdUsd.toFixed(2));
 
   const load = useCallback(async () => {
     try {
@@ -87,8 +90,14 @@ export function PaidReplyOrganizationSettings({ canManage }: { canManage: boolea
             <div className="mt-4 flex flex-wrap items-end gap-3">
               <Input
                 label={t("timezoneLabel")}
+                placeholder="Europe/Moscow"
                 value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
+                disabled={busy}
+                onChange={(event) => {
+                  setTimezone(event.target.value);
+                  setError(null);
+                  setNotice(null);
+                }}
                 autoComplete="off"
                 className="w-44"
               />
@@ -100,10 +109,15 @@ export function PaidReplyOrganizationSettings({ canManage }: { canManage: boolea
                 step="0.01"
                 inputMode="decimal"
                 value={amount}
-                onChange={(event) => setAmount(event.target.value)}
+                disabled={busy}
+                onChange={(event) => {
+                  setAmount(event.target.value);
+                  setError(null);
+                  setNotice(null);
+                }}
                 className="w-32"
               />
-              <Button variant="secondary" disabled={busy} onClick={() => void save()}>
+              <Button variant="secondary" disabled={busy || !dirty} onClick={() => void save()}>
                 {busy ? t("saving") : t("save")}
               </Button>
             </div>
@@ -113,6 +127,11 @@ export function PaidReplyOrganizationSettings({ canManage }: { canManage: boolea
                 timezone: settings.timezone,
                 amount: formatUsd(settings.dailyThresholdUsd),
               })}
+            </p>
+          )}
+          {canManage && (
+            <p aria-live="polite" className="mt-2 text-sm text-fg-secondary">
+              {t(dirty ? "orgUnsavedState" : "orgSavedState")}
             </p>
           )}
           <p className="mt-3 text-xs text-fg-tertiary">{t("estimateNote")}</p>

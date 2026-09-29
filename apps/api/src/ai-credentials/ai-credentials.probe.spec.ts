@@ -8,7 +8,7 @@ import {
 import { PermanentError, TransientError } from "@pubrick/shared";
 import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AiCredentialProbe, probeCallArgs } from "./ai-credentials.probe";
 
@@ -59,7 +59,23 @@ class StubbedProbe extends AiCredentialProbe {
   protected override call(_credential: AiCredential, onUsage: UsageSink): Promise<string> {
     return this.behaviour(onUsage);
   }
+
+  protected override async googleAcceptsKey(_credential: AiCredential): Promise<boolean> {
+    return false;
+  }
 }
+
+class CheckingProbe extends AiCredentialProbe {
+  constructor(private readonly behaviour: () => Promise<string>) {
+    super();
+  }
+
+  protected override call(): Promise<string> {
+    return this.behaviour();
+  }
+}
+
+afterEach(() => vi.restoreAllMocks());
 
 function probeThatThrows(error: unknown, records: readonly UsageRecord[] = []): AiCredentialProbe {
   return new StubbedProbe(async (onUsage) => {
@@ -108,6 +124,39 @@ describe("AiCredentialProbe — a provider error can never carry the key out", (
 
     expect(JSON.stringify(outcome)).not.toContain(SECRET_KEY);
     expect(outcome).toMatchObject({ ok: true, modelId: "gemini-3.7-flash" });
+  });
+});
+
+describe("AiCredentialProbe — Google quota diagnosis", () => {
+  it("marks a key accepted only when Google's models endpoint returns 200", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null));
+    const probe = new CheckingProbe(async () => {
+      throw new TransientError("Google 429", 30);
+    });
+
+    const outcome = await probe.run(credential);
+
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "rate_limited",
+      keyAccepted: true,
+      records: [],
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] ?? [];
+    expect(String(url)).toBe("https://generativelanguage.googleapis.com/v1beta/models");
+    expect(new Headers(init?.headers).get("x-goog-api-key")).toBe(SECRET_KEY);
+    expect(String(url)).not.toContain(SECRET_KEY);
+    expect(JSON.stringify(outcome)).not.toContain(SECRET_KEY);
+  });
+
+  it("does not claim acceptance when Google rejects the metadata request", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
+    const outcome = await new CheckingProbe(async () => {
+      throw new TransientError("Google 429", 30);
+    }).run(credential);
+
+    expect(outcome).toEqual({ ok: false, reason: "rate_limited", records: [] });
   });
 });
 
@@ -337,6 +386,10 @@ describe("what one press of Test buys", () => {
     // Three billed round trips for one click, and real exponential backoff
     // before the user is told about a rate limit.
     expect(probeCallArgs(credential).maxRetries).toBe(0);
+  });
+
+  it("bounds a Test below the web proxy deadline", () => {
+    expect(probeCallArgs(credential).timeoutMs).toBe(20_000);
   });
 
   it("asks for the cheapest thinking the house model accepts", () => {

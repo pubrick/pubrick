@@ -10,6 +10,7 @@ import {
   costTotals,
   decryptJson,
   encryptJson,
+  type GoogleProxyTestResult,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
@@ -25,6 +26,7 @@ import { notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
+import { GoogleProxyProbe } from "./google-proxy.probe";
 
 /**
  * Public response columns. The listing also selects ciphertext explicitly to
@@ -81,7 +83,27 @@ const TEST_BUDGET_WINDOW = sql`interval '1 hour'`;
 export class AiCredentialsRepository {
   private readonly logger = new Logger(AiCredentialsRepository.name);
 
-  constructor(private readonly probe: AiCredentialProbe) {}
+  constructor(
+    private readonly probe: AiCredentialProbe,
+    private readonly googleProxyProbe: GoogleProxyProbe,
+  ) {}
+
+  async testGoogleProxy(orgId: string, draftUrl?: string): Promise<GoogleProxyTestResult> {
+    // A draft can be checked before a Google key exists. An empty body checks
+    // the saved proxy without sending its encrypted URL back to the browser.
+    let proxyUrl = draftUrl;
+    if (!proxyUrl) {
+      try {
+        proxyUrl = (await this.getDecrypted(orgId, "google")).proxyUrl;
+      } catch (error) {
+        if (error instanceof NotFoundException) return { ok: false, reason: "not_configured" };
+        throw error;
+      }
+    }
+    if (!proxyUrl) return { ok: false, reason: "not_configured" };
+    if (!isAllowedGoogleProxy(proxyUrl)) return { ok: false, reason: "invalid_proxy" };
+    return this.googleProxyProbe.run(proxyUrl);
+  }
 
   async list(orgId: string) {
     const rows = await db
@@ -163,7 +185,7 @@ export class AiCredentialsRepository {
   async updateGoogleProxy(orgId: string, proxyUrl: string | null) {
     // Never echo a URL, username or password in an HTTP validation error.
     if (proxyUrl !== null && !isAllowedGoogleProxy(proxyUrl)) {
-      throw new BadRequestException("Invalid or unapproved Google proxy destination");
+      throw new BadRequestException("Invalid or non-public Google proxy destination");
     }
     return db.transaction(async (tx) => {
       const rows = await tx
@@ -447,7 +469,12 @@ export class AiCredentialsRepository {
     // under-reports spend.
     await this.recordUsage(orgId, outcome.records);
 
-    if (!outcome.ok) return { ok: false, reason: outcome.reason };
+    if (!outcome.ok)
+      return {
+        ok: false,
+        reason: outcome.reason,
+        ...(outcome.keyAccepted ? { keyAccepted: true as const } : {}),
+      };
     return {
       ok: true,
       modelId: outcome.modelId,

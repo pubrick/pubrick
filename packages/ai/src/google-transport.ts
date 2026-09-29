@@ -1,12 +1,14 @@
+import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import { BlockList, isIP, type LookupFunction } from "node:net";
 import { PermanentError, TransientError } from "@pubrick/shared";
-import { ProxyAgent } from "undici";
+import { Client, type Dispatcher, ProxyAgent } from "undici";
 import { z } from "zod";
 
 const hostPortPattern = /^(?:[a-z0-9.-]+|\[[0-9a-f:]+\]):[0-9]{1,5}$/i;
 
 function proxyDestination(value: string): string | null {
   // WHATWG URL treats a backslash as a path separator for http(s). Validate
-  // the original syntax before using its canonical hostname for the allowlist.
+  // the original syntax before using its canonical hostname for the public-IP check.
   for (const char of value) {
     const code = char.charCodeAt(0);
     if (char === "\\" || char.trim() === "" || code < 32 || code === 127) return null;
@@ -50,36 +52,113 @@ export const googleProxyEnvSchema = z.preprocess(
     .optional(),
 );
 
-/** Instance-approved egress destinations; never supplied by a workspace. */
-export const googleProxyAllowlistSchema = z
-  .string()
-  .default("")
-  .refine(
-    (value) => value === "" || value.split(",").every((part) => hostPortPattern.test(part.trim())),
-    "GOOGLE_PROXY_ALLOWED_HOSTS must be comma-separated host:port entries",
-  );
+// Workspace owners can choose any public HTTP(S) forward proxy. Refuse
+// non-public literal addresses at save time and resolve DNS through the same
+// filter at each new socket: checking only when saving permits DNS rebinding.
+const blockedV4 = new BlockList();
+for (const [base, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const)
+  blockedV4.addSubnet(base, prefix, "ipv4");
 
-function hostPort(proxyUrl: string): string {
-  const destination = proxyDestination(proxyUrl);
-  if (!destination) throw new PermanentError("Invalid Google proxy URL");
-  return destination;
+const globalV6 = new BlockList();
+globalV6.addSubnet("2000::", 3, "ipv6");
+const blockedV6 = new BlockList();
+for (const [base, prefix] of [
+  ["2001::", 32],
+  ["2001:10::", 28],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+] as const)
+  blockedV6.addSubnet(base, prefix, "ipv6");
+
+export function isPublicProxyAddress(address: string): boolean {
+  const bare = address.startsWith("[") && address.endsWith("]") ? address.slice(1, -1) : address;
+  const family = isIP(bare);
+  if (family === 4) return !blockedV4.check(bare, "ipv4");
+  return family === 6 && globalV6.check(bare, "ipv6") && !blockedV6.check(bare, "ipv6");
 }
 
-/** Reject arbitrary tenant-directed egress, including private-network and rebinding targets. */
+/** Validate URL syntax and any literal address without requiring an allowlist. */
 export function isAllowedGoogleProxy(proxyUrl: string): boolean {
   if (!googleProxyEnvSchema.safeParse(proxyUrl).success) return false;
-  const approved = googleProxyAllowlistSchema
-    .parse(process.env.GOOGLE_PROXY_ALLOWED_HOSTS)
-    .split(",")
-    .map((value) => value.trim().toLowerCase());
-  const fallback = googleProxyEnvSchema.safeParse(process.env.GOOGLE_API_PROXY);
-  if (fallback.success && fallback.data) approved.push(hostPort(fallback.data));
-  return approved.includes(hostPort(proxyUrl));
+  const hostname = new URL(proxyUrl).hostname;
+  return isIP(hostname.replace(/^\[|\]$/g, "")) === 0 || isPublicProxyAddress(hostname);
 }
+
+/** Resolve only public addresses, passing the chosen IP to the socket itself. */
+const publicProxyLookup: LookupFunction = (hostname, options, callback) => {
+  dnsLookup(hostname, { all: true, family: options.family }, (error, addresses) => {
+    if (error) return callback(error, options.all ? [] : "", 0);
+    const publicAddresses = addresses.filter((entry: LookupAddress) =>
+      isPublicProxyAddress(entry.address),
+    );
+    if (publicAddresses.length === 0) {
+      return callback(new Error("Proxy destination is not public"), options.all ? [] : "", 0);
+    }
+    if (options.all) return callback(null, publicAddresses);
+    const first = publicAddresses[0];
+    if (first) callback(null, first.address, first.family);
+  });
+};
 
 // Bound retained credentials and sockets across proxy rotations and workspaces.
 const MAX_CACHED_AGENTS = 32;
 const agents = new Map<string, ProxyAgent>();
+
+type ProxyConnectOptions = Omit<Dispatcher.ConnectOptions, "origin">;
+
+/**
+ * Some HTTP proxies silently stall CONNECT when Undici sets Host to the
+ * upstream destination. Python's requests client omits that target Host, and
+ * this matters for the workspace proxy used by Atools. Only the proxy handshake
+ * changes; the tunneled HTTPS request still carries its normal Host header
+ * and TLS verification.
+ *
+ * `clientFactory` is Undici's supported ProxyAgent extension point. Keeping a
+ * Client subclass here avoids a separate proxy implementation or dependency.
+ */
+class CompatibleProxyClient extends Client {
+  override connect(options: ProxyConnectOptions): Promise<Dispatcher.ConnectData>;
+  override connect(
+    options: ProxyConnectOptions,
+    callback: (error: Error | null, data: Dispatcher.ConnectData) => void,
+  ): void;
+  override connect(
+    options: ProxyConnectOptions,
+    callback?: (error: Error | null, data: Dispatcher.ConnectData) => void,
+  ): Promise<Dispatcher.ConnectData> | undefined {
+    const headers = options.headers;
+    const next =
+      headers && !Array.isArray(headers)
+        ? {
+            ...options,
+            headers: Object.fromEntries(
+              Object.entries(headers).filter(([name]) => name.toLowerCase() !== "host"),
+            ),
+          }
+        : options;
+    if (callback) {
+      super.connect(next, callback);
+      return;
+    }
+    return super.connect(next);
+  }
+}
 
 /** Keep the proxy URL and its optional credentials entirely in the server process. */
 export async function googleProxyFetch(
@@ -90,17 +169,25 @@ export async function googleProxyFetch(
   const url = orgProxyUrl ?? googleProxyEnvSchema.parse(process.env.GOOGLE_API_PROXY);
   if (!url) return fetch(input, init);
   if (orgProxyUrl && !isAllowedGoogleProxy(orgProxyUrl)) {
-    throw new PermanentError("Google proxy destination is not approved by the instance operator");
+    throw new PermanentError("Invalid or non-public Google proxy destination");
   }
   // Node's fetch accepts undici's dispatcher extension. The DOM RequestInit
   // type omits it, but the same dispatcher also drives @ai-sdk/google's fetch.
   try {
     // The organization-specific URL is captured in the caller's fetch function;
     // one global mutable selection could send a different org through this proxy.
-    let agent = agents.get(url);
+    // The operator's instance fallback may intentionally point at a local
+    // proxy. Keep its dispatcher separate from workspace-selected destinations.
+    const cacheKey = `${orgProxyUrl ? "workspace" : "instance"}:${url}`;
+    let agent = agents.get(cacheKey);
     if (!agent) {
-      agent = new ProxyAgent(url);
-      agents.set(url, agent);
+      agent = new ProxyAgent({
+        uri: url,
+        ...(orgProxyUrl ? { proxyTls: { lookup: publicProxyLookup } } : {}),
+        clientFactory: (origin, options) =>
+          new CompatibleProxyClient(origin, options as Client.Options),
+      });
+      agents.set(cacheKey, agent);
       if (agents.size > MAX_CACHED_AGENTS) {
         const oldest = agents.entries().next().value;
         if (oldest) {
@@ -110,11 +197,15 @@ export async function googleProxyFetch(
         }
       }
     } else {
-      agents.delete(url);
-      agents.set(url, agent);
+      agents.delete(cacheKey);
+      agents.set(cacheKey, agent);
     }
     return await fetch(input, { ...init, dispatcher: agent } as RequestInit);
-  } catch {
+  } catch (error) {
+    // A model call's deadline is carried by its signal. Replacing that abort
+    // with a generic proxy error hides the deadline from the classifier and
+    // leaves Test waiting until the browser's rewrite drops the connection.
+    if (init?.signal?.aborted) throw init.signal.reason ?? error;
     // A transport exception can carry the proxy URL and userinfo. It also
     // might follow an upstream charge, so callers keep their existing ledger
     // and ambiguity policies, while jobs may retry a temporary proxy outage.

@@ -38,19 +38,21 @@ CLAUDE.md gets a condensed copy so agents enforce them too.
    - Settings: desktop — bottom of the sidebar; mobile — rightmost tab.
    - The screen's primary action: ONE brick-colored button, top-right of
      the content area (mobile: a round brick button beside the large
-     title). On form screens (compose, settings) the same rule applies:
-     the submit/save button sits top-right in the toolbar, not at the
-     bottom of the form. Never two primary buttons on one screen.
+     title) when the screen has one task, such as Compose. A settings page
+     with independent forms places each Save beside its field group, with
+     a clear saved or unsaved state. It has no ambiguous page-wide Save.
    - Search: immediately left of the primary action.
    - The current user/workspace: bottom of the sidebar, under Settings
      (mobile: inside Settings).
-2. **Progressive disclosure.** Forms show only what is required. Every
-   advanced option lives inside the uniform `Advanced` component — a
+2. **Progressive disclosure.** Forms show the controls needed for the task,
+   including current configuration state. Optional configuration such as the
+   Google proxy lives inside the uniform `Advanced` component — a
    collapsed "Advanced" section at the END of a form, identical on every
    screen. When a collapsed section contains values changed from their
    defaults, its header shows a dot indicator, so hidden non-default
-   state is never invisible. No screen invents its own "show more"
-   pattern.
+   state is never invisible. Secret-bearing fields may show text while a user
+   enters it, but encrypted saved values are not returned to the browser.
+   No screen invents its own "show more" pattern.
 3. **One verb, one word.** Approve / Reject / Publish / Schedule / Test
    connection are called the same thing on every screen, in every toast
    and empty state. The vocabulary lives in `messages/en.json` and is

@@ -5,6 +5,11 @@ note has a title, content, category, tags, and an active switch. The API scopes
 every read and write by both the active organization and the brand. Removing a
 brand also removes its notes.
 
+Choose a category when adding a note; Pubrick does not silently classify it as
+product information. Tags in the editor use one line per tag, so a literal
+comma in a tag survives an edit. Anyone with access to the brand can open a
+note to read its full content without entering the edit form.
+
 The six familiar categories keep localized labels. Choose **Custom** to name
 another category; names are trimmed, limited to 100 characters, and cannot
 contain control characters. Custom names are displayed literally. The compact
@@ -50,6 +55,8 @@ Use **Index** on a saved note to create its vector. This needs the
 organization's Google key from Settings and uses `gemini-embedding-001` at 768
 dimensions. An edited title or body clears the old vector immediately, so the
 model cannot retrieve new prose by a stale vector. Index again after editing.
+Paused notes cannot be indexed until they are resumed; the API checks this
+before making a paid provider call and checks it again before storing the vector.
 The endpoint refuses a concurrent text edit by checking the note's text after
 the provider call. A provider failure leaves the note available to text search.
 

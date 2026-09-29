@@ -8,18 +8,17 @@ import {
   type AiTestFailure,
   type CostSummary,
   formatUsd,
+  type GoogleProxyTestResult,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
-import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
 import { PaidReplyOrganizationSettings } from "@/components/paid-reply-organization-settings";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { ListRow } from "@/components/ui/list-row";
 import { Modal } from "@/components/ui/modal";
@@ -90,11 +89,6 @@ const PROVIDER_NAMES: Record<AiProviderId, string> = {
   google: "Google",
   openrouter: "OpenRouter",
 };
-
-// The key form's id. The constitution puts the one primary action top-right in
-// the toolbar, never a save button at the foot of a form, so the submit button
-// lives in AppShell's header and is wired back here via `form={AI_FORM_ID}`.
-const AI_FORM_ID = "ai-credential-form";
 
 // Same mechanism for the invite dialog: the submit lives in the modal footer.
 const INVITE_FORM_ID = "invite-member-form";
@@ -200,12 +194,22 @@ export default function SettingsPage() {
   // most reassuring of all possible answers, and the one nobody had checked.
   const [spendError, setSpendError] = useState<string | null>(null);
   const [provider, setProvider] = useState<AiProviderId>("google");
-  const [apiKey, setApiKey] = useState("");
-  const [defaultModel, setDefaultModel] = useState("");
+  const [keyDrafts, setKeyDrafts] = useState<Partial<Record<AiProviderId, string>>>({});
+  const [modelDrafts, setModelDrafts] = useState<Partial<Record<AiProviderId, string>>>({});
+  const apiKey = keyDrafts[provider] ?? "";
+  const defaultModel = modelDrafts[provider] ?? "";
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [proxyMessage, setProxyMessage] = useState<"saved" | "removed" | "error" | null>(null);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<GoogleProxyTestResult | "error" | null>(
+    null,
+  );
+  const [proxyTestedDraft, setProxyTestedDraft] = useState(false);
+  const proxyRevision = useRef(0);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [keySaved, setKeySaved] = useState(false);
   // PUT /api/ai-credentials is idempotent per provider, but each submit is a
   // round trip with the key still in the field: a double-click sends the
   // secret twice and races two `loadAi()` refreshes against each other. Same
@@ -214,6 +218,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testResults, setTestResults] = useState<Partial<Record<AiProviderId, TestState>>>({});
   const googleCredential = credentials?.find((credential) => credential.provider === "google");
+  const selectedCredential = credentials?.find((credential) => credential.provider === provider);
 
   // An account with no organization yet is an onboarding state, not an error to
   // shout about on the Settings screen — every other failure gets a sentence.
@@ -254,7 +259,9 @@ export default function SettingsPage() {
 
   async function saveKey(e: React.FormEvent) {
     e.preventDefault();
-    setAiError(null);
+    if (saving || !apiKey.trim()) return;
+    setKeyError(null);
+    setKeySaved(false);
     setSaving(true);
     // The field is omitted rather than sent empty: null in that column means
     // "use the provider's own default model", and "" is not a model id.
@@ -265,16 +272,24 @@ export default function SettingsPage() {
       ...(trimmedModel === "" ? {} : { defaultModel: trimmedModel }),
     };
     try {
-      await api("/api/ai-credentials", { method: "PUT", body: JSON.stringify(body) });
-      setApiKey("");
-      setDefaultModel("");
+      const saved = await api<AiCredentialPublic>("/api/ai-credentials", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      setCredentials((previous) => [
+        ...(previous ?? []).filter((credential) => credential.provider !== saved.provider),
+        saved,
+      ]);
+      setKeyDrafts((previous) => ({ ...previous, [provider]: "" }));
+      setModelDrafts((previous) => ({ ...previous, [provider]: "" }));
+      setKeySaved(true);
       // A new key makes every earlier verdict meaningless. Same reason the
       // server never caches a test: a green tick must always describe the key
       // that is stored right now.
       setTestResults({});
       loadAi();
     } catch (err) {
-      handleAiError(err);
+      setKeyError(errorMessage(err, t("genericError"), te));
     } finally {
       setSaving(false);
     }
@@ -282,13 +297,19 @@ export default function SettingsPage() {
 
   async function updateProxy(nextUrl: string | null) {
     if (proxySaving) return;
+    proxyRevision.current += 1;
+    setProxyTestResult(null);
     setProxyMessage(null);
     setProxySaving(true);
     try {
-      await api("/api/ai-credentials/google/proxy", {
+      const saved = await api<AiCredentialPublic>("/api/ai-credentials/google/proxy", {
         method: "PUT",
         body: JSON.stringify({ proxyUrl: nextUrl }),
       });
+      setCredentials((previous) => [
+        ...(previous ?? []).filter((credential) => credential.provider !== "google"),
+        saved,
+      ]);
       setProxyUrl("");
       setProxyMessage(nextUrl === null ? "removed" : "saved");
       // A previous Test result described the old network route.
@@ -300,6 +321,30 @@ export default function SettingsPage() {
       setProxyMessage("error");
     } finally {
       setProxySaving(false);
+    }
+  }
+
+  async function testProxy() {
+    if (proxyTesting || proxySaving) return;
+    const draftUrl = proxyUrl.trim();
+    if (!draftUrl && !googleCredential?.proxyConfigured) return;
+    const revision = ++proxyRevision.current;
+    setProxyTestResult(null);
+    setProxyTesting(true);
+    try {
+      const result = await api<GoogleProxyTestResult>("/api/ai-credentials/google/proxy/test", {
+        method: "POST",
+        body: JSON.stringify(draftUrl ? { proxyUrl: draftUrl } : {}),
+      });
+      if (proxyRevision.current === revision) {
+        setProxyTestedDraft(Boolean(draftUrl));
+        setProxyTestResult(result);
+      }
+    } catch {
+      // A proxy URL can include credentials; never render the thrown error.
+      if (proxyRevision.current === revision) setProxyTestResult("error");
+    } finally {
+      setProxyTesting(false);
     }
   }
 
@@ -493,9 +538,31 @@ export default function SettingsPage() {
       );
     }
     if (!result.ok) {
+      if (id === "google" && result.reason === "invalid_key") {
+        return (
+          <span role="alert" className="text-danger">
+            {t("aiTestFailGoogleKey")}
+          </span>
+        );
+      }
+      if (id === "google" && result.reason === "rate_limited" && result.keyAccepted) {
+        return (
+          <span role="alert" className="text-danger">
+            {t("aiTestGoogleKeyAcceptedQuota")}
+          </span>
+        );
+      }
+      const proxyTimedOut =
+        id === "google" &&
+        result.reason === "timed_out" &&
+        credentials?.some(
+          (credential) => credential.provider === "google" && credential.proxyConfigured,
+        );
       return (
         <span role="alert" className="text-danger">
-          {t(TEST_FAILURE_KEYS[result.reason], TEST_FAILURE_VALUES[result.reason])}
+          {proxyTimedOut
+            ? t("aiTestFailTimedOutProxy")
+            : t(TEST_FAILURE_KEYS[result.reason], TEST_FAILURE_VALUES[result.reason])}
         </span>
       );
     }
@@ -544,32 +611,8 @@ export default function SettingsPage() {
   ];
 
   return (
-    <AppShell
-      title={t("title")}
-      primaryAction={
-        canManageApiKeys ? (
-          <Button type="submit" form={AI_FORM_ID} disabled={saving}>
-            {t("aiSave")}
-          </Button>
-        ) : undefined
-      }
-    >
-      <div className="flex max-w-xl flex-col gap-4">
-        <Card>
-          <h2 className="mb-3 text-base font-semibold text-fg">{t("appearanceTitle")}</h2>
-          <Segmented options={themeOptions} value={pref} onChange={changeTheme} />
-        </Card>
-
-        {/* Language sits beside the theme because both are preferences of the
-            same kind — a small mutually-exclusive choice this person makes for
-            themselves, at the constitution's one fixed location for a setting.
-            It is handed the unsaved-key state because switching locale is a
-            navigation, and the API key above is the one field on this screen
-            no endpoint can give back. */}
-        <LanguageCard
-          hasUnsavedText={apiKey !== "" || defaultModel.trim() !== "" || proxyUrl !== ""}
-        />
-
+    <AppShell title={t("title")}>
+      <div className="flex max-w-2xl flex-col gap-4">
         {canManageApiKeys && (
           <Card>
             <h2 className="mb-1 text-base font-semibold text-fg">{t("aiTitle")}</h2>
@@ -602,14 +645,13 @@ export default function SettingsPage() {
               aiError === null ? (
                 <Skeleton lines={2} className="mb-4 py-2" />
               ) : null
-            ) : credentials.length === 0 ? (
-              <EmptyState title={t("aiEmpty")} className="py-6" />
-            ) : (
+            ) : credentials.length > 0 ? (
               <div className="mb-4 overflow-hidden rounded-card border border-border">
                 {credentials.map((credential) => (
                   <ListRow
                     key={credential.provider}
                     title={PROVIDER_NAMES[credential.provider] ?? credential.provider}
+                    metaClassName="whitespace-normal break-words"
                     meta={
                       testMeta(credential.provider) ??
                       (credential.defaultModel || t("aiProviderDefault"))
@@ -639,15 +681,20 @@ export default function SettingsPage() {
                   />
                 ))}
               </div>
-            )}
+            ) : null}
 
-            <form id={AI_FORM_ID} onSubmit={saveKey} className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-3">
+            <form onSubmit={saveKey} className="flex flex-col gap-3">
+              <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
                 <Select
                   label={t("aiProviderLabel")}
                   value={provider}
-                  onChange={(e) => setProvider(e.target.value as AiProviderId)}
-                  className="min-w-[160px]"
+                  disabled={saving}
+                  onChange={(e) => {
+                    setProvider(e.target.value as AiProviderId);
+                    setKeySaved(false);
+                    setKeyError(null);
+                  }}
+                  className="w-full"
                 >
                   {AI_PROVIDERS.map((id) => (
                     <option key={id} value={id}>
@@ -659,12 +706,33 @@ export default function SettingsPage() {
                   type="password"
                   autoComplete="off"
                   label={t("aiKeyLabel")}
+                  placeholder={t(
+                    selectedCredential ? "aiKeyReplacePlaceholder" : "aiKeyAddPlaceholder",
+                  )}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  disabled={saving}
+                  onChange={(e) => {
+                    setKeyDrafts((previous) => ({ ...previous, [provider]: e.target.value }));
+                    setKeySaved(false);
+                    setKeyError(null);
+                  }}
                   required
-                  className="min-w-[200px] flex-1"
+                  className="w-full"
                 />
               </div>
+              {credentials !== null && (
+                <p className="text-sm text-fg-secondary">
+                  {t(selectedCredential ? "aiKeyStored" : "aiKeyNotStored", {
+                    provider: PROVIDER_NAMES[provider],
+                  })}
+                </p>
+              )}
+              {apiKey !== "" && <p className="text-sm text-accent">{t("aiKeyPending")}</p>}
+              {keySaved && (
+                <p role="status" className="text-sm text-success">
+                  {t("aiKeySavedNotice")}
+                </p>
+              )}
               {provider === "google" && (
                 <p className="text-sm text-fg-secondary">
                   {t("aiGoogleKeyHint")}{" "}
@@ -678,101 +746,145 @@ export default function SettingsPage() {
                   </a>
                 </p>
               )}
-              {/* Constitution rule 2: the one option most people never set lives
-                behind the shared disclosure, never loose on the form. */}
               <Advanced
                 dirty={
                   defaultModel.trim() !== "" ||
-                  (provider === "google" &&
-                    (proxyUrl !== "" || !!googleCredential?.proxyConfigured))
+                  proxyUrl.trim() !== "" ||
+                  Boolean(googleCredential?.proxyConfigured)
                 }
               >
                 <Input
                   label={t("aiModelLabel")}
                   placeholder={t("aiModelPlaceholder")}
                   value={defaultModel}
-                  onChange={(e) => setDefaultModel(e.target.value)}
+                  disabled={saving}
+                  onChange={(e) =>
+                    setModelDrafts((previous) => ({ ...previous, [provider]: e.target.value }))
+                  }
                   className="w-full"
                 />
-                {provider === "google" && (
-                  <div className="mt-4 border-t border-border-soft pt-4">
-                    <Input
-                      type="password"
-                      autoComplete="off"
-                      label={t("aiProxyLabel")}
-                      placeholder={t("aiProxyPlaceholder")}
-                      value={proxyUrl}
-                      onChange={(event) => {
-                        setProxyUrl(event.target.value);
-                        setProxyMessage(null);
-                      }}
-                      onKeyDown={(event) => {
-                        // This field saves through its own endpoint. Enter must
-                        // not submit the surrounding API-key form.
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          if (googleCredential && proxyUrl.trim())
-                            void updateProxy(proxyUrl.trim());
-                        }
-                      }}
-                      className="w-full"
-                    />
-                    <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyHint")}</p>
-                    {credentials === null ? null : googleCredential ? (
-                      <>
-                        <p className="mt-2 text-sm text-fg-secondary">
-                          {t(
-                            googleCredential.proxyConfigured
-                              ? "aiProxyConfigured"
-                              : "aiProxyDirect",
-                          )}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            disabled={proxySaving || proxyUrl.trim() === ""}
-                            onClick={() => updateProxy(proxyUrl.trim())}
-                          >
-                            {t("aiProxySave")}
-                          </Button>
-                          {googleCredential.proxyConfigured && (
-                            <Button
-                              variant="danger"
-                              size="sm"
-                              aria-label={t("aiProxyRemove")}
-                              disabled={proxySaving}
-                              onClick={() => updateProxy(null)}
-                            >
-                              {t("remove")}
-                            </Button>
-                          )}
-                        </div>
-                      </>
-                    ) : (
-                      <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyNeedsKey")}</p>
-                    )}
-                    {proxyMessage && (
-                      <p
-                        role={proxyMessage === "error" ? "alert" : "status"}
-                        className={
-                          proxyMessage === "error"
-                            ? "mt-2 text-sm text-danger"
-                            : "mt-2 text-sm text-fg-secondary"
-                        }
+                <div className="mt-4 border-t border-border-soft pt-4">
+                  <Input
+                    type="text"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    label={t("aiProxyLabel")}
+                    placeholder={t("aiProxyPlaceholder")}
+                    value={proxyUrl}
+                    onChange={(event) => {
+                      proxyRevision.current += 1;
+                      setProxyUrl(event.target.value);
+                      setProxyMessage(null);
+                      setProxyTestResult(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        if (googleCredential && proxyUrl.trim()) void updateProxy(proxyUrl.trim());
+                      }
+                    }}
+                    className="w-full"
+                  />
+                  <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyHint")}</p>
+                  {credentials !== null && (
+                    <p className="mt-2 text-sm text-fg-secondary">
+                      {t(googleCredential?.proxyConfigured ? "aiProxyConfigured" : "aiProxyDirect")}
+                    </p>
+                  )}
+                  {!googleCredential && credentials !== null && (
+                    <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyNeedsKey")}</p>
+                  )}
+                  {proxyUrl !== "" && (
+                    <p className="mt-2 text-sm text-accent">{t("aiProxyPending")}</p>
+                  )}
+                  {proxyMessage && (
+                    <p
+                      role={proxyMessage === "error" ? "alert" : "status"}
+                      className={
+                        proxyMessage === "error"
+                          ? "mt-2 text-sm text-danger"
+                          : "mt-2 text-sm text-success"
+                      }
+                    >
+                      {t(
+                        proxyMessage === "saved"
+                          ? "aiProxySaved"
+                          : proxyMessage === "removed"
+                            ? "aiProxyRemoved"
+                            : "aiProxyError",
+                      )}
+                    </p>
+                  )}
+                  {proxyTestResult && (
+                    <p
+                      role={proxyTestResult === "error" || !proxyTestResult.ok ? "alert" : "status"}
+                      className={`mt-2 text-sm ${proxyTestResult !== "error" && proxyTestResult.ok ? "text-success" : "text-danger"}`}
+                    >
+                      {proxyTestResult === "error"
+                        ? t("aiProxyTestError")
+                        : proxyTestResult.ok
+                          ? t(proxyTestedDraft ? "aiProxyTestDraftOk" : "aiProxyTestSavedOk")
+                          : t(
+                              proxyTestResult.reason === "timeout"
+                                ? "aiProxyTestTimeout"
+                                : proxyTestResult.reason === "invalid_proxy"
+                                  ? "aiProxyTestInvalid"
+                                  : proxyTestResult.reason === "not_configured"
+                                    ? "aiProxyTestMissing"
+                                    : "aiProxyTestUnreachable",
+                            )}
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={proxySaving || !googleCredential || !proxyUrl.trim()}
+                      onClick={() => updateProxy(proxyUrl.trim())}
+                    >
+                      {t("aiProxySave")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={
+                        proxySaving ||
+                        proxyTesting ||
+                        (!proxyUrl.trim() && !googleCredential?.proxyConfigured)
+                      }
+                      onClick={testProxy}
+                    >
+                      {t(proxyTesting ? "aiProxyTesting" : "aiProxyTest")}
+                    </Button>
+                    {googleCredential?.proxyConfigured && (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        aria-label={t("aiProxyRemove")}
+                        disabled={proxySaving}
+                        onClick={() => updateProxy(null)}
                       >
-                        {t(
-                          proxyMessage === "saved"
-                            ? "aiProxySaved"
-                            : proxyMessage === "removed"
-                              ? "aiProxyRemoved"
-                              : "aiProxyError",
-                        )}
-                      </p>
+                        {t("remove")}
+                      </Button>
                     )}
                   </div>
-                )}
+                </div>
               </Advanced>
+              <div>
+                <Button
+                  type="submit"
+                  variant={apiKey.trim() ? "primary" : "secondary"}
+                  disabled={saving || !apiKey.trim()}
+                >
+                  {t("aiSave")}
+                </Button>
+              </div>
+              {keyError && (
+                <p role="alert" className="text-sm text-danger">
+                  {keyError}
+                </p>
+              )}
             </form>
           </Card>
         )}
@@ -780,90 +892,58 @@ export default function SettingsPage() {
         {organization && canManageApiKeys && <PaidReplyOrganizationSettings canManage />}
 
         {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("promptsTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("promptsHint")}</p>
-            <Link
-              href={`/${locale}/settings/prompts`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("promptsOpen")}
-            </Link>
+          <Card padded={false}>
+            <h2 className="px-4 pt-4 text-base font-semibold text-fg">
+              {t("contentSettingsTitle")}
+            </h2>
+            <div className="mt-2">
+              <ListRow
+                href={`/${locale}/settings/prompts`}
+                title={t("promptsTitle")}
+                meta={t("promptsHint")}
+                metaClassName="whitespace-normal"
+              />
+              <ListRow
+                href={`/${locale}/settings/telegram`}
+                title={t("telegramSourcesTitle")}
+                meta={t("telegramSourcesHint")}
+                metaClassName="whitespace-normal"
+              />
+              <ListRow
+                href={`/${locale}/settings/search`}
+                title={t("searchTitle")}
+                meta={t("searchHint")}
+                metaClassName="whitespace-normal"
+              />
+            </div>
           </Card>
         )}
 
         {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("notificationsTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("notificationsHint")}</p>
-            <Link
-              href={`/${locale}/settings/notifications`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("notificationsOpen")}
-            </Link>
+          <Card padded={false}>
+            <h2 className="px-4 pt-4 text-base font-semibold text-fg">{t("connectionsTitle")}</h2>
+            <div className="mt-2">
+              <ListRow
+                href={`/${locale}/settings/notifications`}
+                title={t("notificationsTitle")}
+                meta={t("notificationsHint")}
+                metaClassName="whitespace-normal"
+              />
+              <ListRow
+                href={`/${locale}/settings/api-keys`}
+                title={t("publicApiTitle")}
+                meta={t("publicApiHint")}
+                metaClassName="whitespace-normal"
+              />
+              <ListRow
+                href={`/${locale}/settings/webhooks`}
+                title={t("webhooksTitle")}
+                meta={t("webhooksHint")}
+                metaClassName="whitespace-normal"
+              />
+            </div>
           </Card>
         )}
-
-        {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("telegramSourcesTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("telegramSourcesHint")}</p>
-            <Link
-              href={`/${locale}/settings/telegram`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("telegramSourcesOpen")}
-            </Link>
-          </Card>
-        )}
-
-        {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("searchTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("searchHint")}</p>
-            <Link
-              href={`/${locale}/settings/search`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("searchOpen")}
-            </Link>
-          </Card>
-        )}
-
-        {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("publicApiTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("publicApiHint")}</p>
-            <Link
-              href={`/${locale}/settings/api-keys`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("publicApiOpen")}
-            </Link>
-          </Card>
-        )}
-
-        {canManageApiKeys && (
-          <Card>
-            <h2 className="mb-2 text-base font-semibold text-fg">{t("webhooksTitle")}</h2>
-            <p className="mb-3 text-sm text-fg-secondary">{t("webhooksHint")}</p>
-            <Link
-              href={`/${locale}/settings/webhooks`}
-              className="text-sm font-medium text-accent underline"
-            >
-              {t("webhooksOpen")}
-            </Link>
-          </Card>
-        )}
-
-        <Card>
-          <h2 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h2>
-          <p className="mb-3 text-sm text-fg-secondary">{session?.user?.email}</p>
-          <Button variant="secondary" onClick={() => void signOut()}>
-            {tLanding("signOut")}
-          </Button>
-        </Card>
 
         {/* The workspace and its people, in one card because they are one
             subject: the constitution's one-place rule puts "who is in this
@@ -965,9 +1045,6 @@ export default function SettingsPage() {
                 </p>
               )}
 
-              {/* Secondary: this screen's one primary action is the key form's
-                  Save, up in the header. Two primaries on one screen is the
-                  other half of the same rule. */}
               {canInvite && (
                 <Button
                   variant="secondary"
@@ -983,6 +1060,30 @@ export default function SettingsPage() {
             </>
           )}
         </Card>
+
+        <section aria-labelledby="personal-settings-title" className="flex flex-col gap-4">
+          <h2 id="personal-settings-title" className="text-base font-semibold text-fg">
+            {t("personalTitle")}
+          </h2>
+          <Card>
+            <h3 className="mb-3 text-base font-semibold text-fg">{t("appearanceTitle")}</h3>
+            <Segmented options={themeOptions} value={pref} onChange={changeTheme} />
+          </Card>
+          <LanguageCard
+            hasUnsavedText={
+              Object.values(keyDrafts).some(Boolean) ||
+              Object.values(modelDrafts).some((value) => value?.trim()) ||
+              proxyUrl !== ""
+            }
+          />
+          <Card>
+            <h3 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h3>
+            <p className="mb-3 text-sm text-fg-secondary">{session?.user?.email}</p>
+            <Button variant="secondary" onClick={() => void signOut()}>
+              {tLanding("signOut")}
+            </Button>
+          </Card>
+        </section>
       </div>
 
       {/* One modal, two phases: ask for the address, then hand over the link.

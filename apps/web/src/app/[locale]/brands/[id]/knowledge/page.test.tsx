@@ -57,6 +57,11 @@ describe("brand knowledge screen", () => {
 
       await renderAsync(<KnowledgePage params={Promise.resolve({ id: brandId })} />);
       expect(await screen.findByText("Shared facts")).toBeVisible();
+      await userEvent.setup().click(screen.getByRole("button", { name: en.Knowledge.view }));
+      expect(within(screen.getByRole("dialog")).getByText("Reviewable facts")).toBeVisible();
+      await userEvent
+        .setup()
+        .click(within(screen.getByRole("dialog")).getByRole("button", { name: en.Ui.close }));
       expect(screen.getByText(en.Knowledge.autoIndexOff)).toBeVisible();
       expect(screen.getByRole("button", { name: en.Knowledge.csvExport })).toBeInTheDocument();
       for (const label of [
@@ -364,6 +369,15 @@ describe("brand knowledge screen", () => {
       dialog.getByRole("textbox", { name: en.Knowledge.contentLabel }),
       "Arabica beans only.",
     );
+    expect(dialog.getByRole("combobox", { name: en.Knowledge.categoryLabel })).toHaveValue("");
+    await user.selectOptions(
+      dialog.getByRole("combobox", { name: en.Knowledge.categoryLabel }),
+      "product_info",
+    );
+    await user.type(
+      dialog.getByRole("textbox", { name: en.Knowledge.tagsLabel }),
+      "coffee, roasted{enter}bulk|B2B",
+    );
     await user.click(dialog.getByRole("button", { name: en.Knowledge.save }));
 
     await waitFor(() =>
@@ -379,7 +393,7 @@ describe("brand knowledge screen", () => {
       title: "Winter espresso",
       content: "Arabica beans only.",
       category: "product_info",
-      tags: [],
+      tags: ["coffee, roasted", "bulk|B2B"],
     });
     expect(knowledgeCreateSchema.parse(body)).toEqual(body);
   });

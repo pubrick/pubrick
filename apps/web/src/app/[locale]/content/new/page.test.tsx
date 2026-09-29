@@ -449,6 +449,7 @@ describe("Generate (Task 10)", () => {
     await screen.findByRole("option", { name: "Acme" });
     const user = userEvent.setup();
     await pickBrandAndChannel(user);
+    await user.type(screen.getByLabelText(en.ContentNew.titleLabel), "Launch headline");
     await user.type(screen.getByLabelText(en.ContentNew.briefLabel), "Announce the new pricing");
 
     expect(
@@ -461,6 +462,7 @@ describe("Generate (Task 10)", () => {
     const post = calls.find((c) => c.method === "POST" && c.path === "/api/runs");
     expect(parsedBody(post)).toEqual({
       brandId: B1,
+      title: "Launch headline",
       brief: "Announce the new pricing",
       channelIds: [CH1],
     });

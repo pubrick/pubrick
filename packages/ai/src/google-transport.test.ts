@@ -20,45 +20,61 @@ import {
 import { resolveModel } from "./provider.js";
 
 const original = process.env.GOOGLE_API_PROXY;
-const originalAllowlist = process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
 afterEach(() => {
   if (original === undefined) delete process.env.GOOGLE_API_PROXY;
   else process.env.GOOGLE_API_PROXY = original;
-  if (originalAllowlist === undefined) delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
-  else process.env.GOOGLE_PROXY_ALLOWED_HOSTS = originalAllowlist;
   vi.restoreAllMocks();
 });
 
 describe("Google proxy transport", () => {
-  it("rejects unapproved workspace proxy destinations even after saving", async () => {
+  it("accepts any public proxy destination without operator setup and rejects private addresses", async () => {
     delete process.env.GOOGLE_API_PROXY;
-    delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
     const workspace = "http://alice:private@proxy.example:8080";
-    expect(isAllowedGoogleProxy(workspace)).toBe(false);
-    const fetcher = vi.spyOn(globalThis, "fetch");
-    await expect(googleProxyFetch("https://example.invalid", undefined, workspace)).rejects.toThrow(
-      "not approved",
-    );
-    expect(fetcher).not.toHaveBeenCalled();
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
     expect(isAllowedGoogleProxy(workspace)).toBe(true);
-    expect(isAllowedGoogleProxy("http://alice:private@other.example:8080")).toBe(false);
-    process.env.GOOGLE_API_PROXY = "http://different:secret@fallback.example:3128";
-    expect(isAllowedGoogleProxy("http://alice:private@fallback.example:3128")).toBe(true);
+    expect(isAllowedGoogleProxy("http://alice:private@other.example:8080")).toBe(true);
+    expect(isAllowedGoogleProxy("http://alice:private@143.20.164.214:6917")).toBe(true);
+    for (const host of ["127.0.0.1", "10.0.0.1", "169.254.169.254", "[::1]"]) {
+      expect(isAllowedGoogleProxy(`http://${host}:8080`)).toBe(false);
+    }
+    const fetcher = vi.spyOn(globalThis, "fetch");
+    await expect(
+      googleProxyFetch("https://example.invalid", undefined, "http://127.0.0.1:8080"),
+    ).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("rejects URL syntax that points somewhere other than the approved host", () => {
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
+  it("rejects ambiguous URL syntax and URL-encoded local addresses", () => {
     const ambiguous = "http://127.0.0.1:8080\\@proxy.example:8080/..";
     expect(new URL(ambiguous).hostname).toBe("127.0.0.1");
     expect(googleProxyEnvSchema.safeParse(ambiguous).success).toBe(false);
     expect(isAllowedGoogleProxy(ambiguous)).toBe(false);
     expect(isAllowedGoogleProxy("http://proxy.example:08080")).toBe(true);
-    expect(isAllowedGoogleProxy("http://proxy.example:80")).toBe(false);
+    expect(isAllowedGoogleProxy("http://proxy.example:80")).toBe(true);
+    expect(isAllowedGoogleProxy("http://2130706433:8080")).toBe(false);
+  });
+
+  it("never opens a socket to a hostname that resolves to a private address", async () => {
+    let connections = 0;
+    const server = createServer();
+    server.on("connection", () => connections++);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected TCP address");
+      const proxyUrl = `http://localhost:${address.port}`;
+      expect(isAllowedGoogleProxy(proxyUrl)).toBe(true);
+      await expect(
+        googleProxyFetch("https://example.invalid", undefined, proxyUrl),
+      ).rejects.toThrow("Gemini proxy transport failed");
+      expect(connections).toBe(0);
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
   });
 
   it("keeps concurrent organizations on their own proxy dispatchers", async () => {
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "one.example:8080,two.example:8080";
     const fetcher = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("refused", { status: 400 }));
@@ -104,6 +120,7 @@ describe("Google proxy transport", () => {
   it("uses Node's HTTP proxy dispatcher and sends proxy auth only to the proxy", async () => {
     let seenUrl: string | undefined;
     let seenAuth: string | undefined;
+    let seenConnectHost: string | undefined;
     const sockets = new Set<Socket>();
     const server = createServer((request, response) => {
       seenUrl = request.url;
@@ -118,21 +135,25 @@ describe("Google proxy transport", () => {
     server.on("connect", (request, socket) => {
       seenUrl = request.url;
       seenAuth = request.headers["proxy-authorization"];
+      seenConnectHost = request.headers.host;
       socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       socket.once("data", () => {
         socket.end("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nthrough-proxy");
       });
     });
-    server.listen(0, "127.0.0.1");
+    server.listen(0, "localhost");
     await once(server, "listening");
     try {
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("expected TCP address");
-      process.env.GOOGLE_API_PROXY = `http://user:pass@127.0.0.1:${address.port}`;
+      process.env.GOOGLE_API_PROXY = `http://user:pass@localhost:${address.port}`;
       const response = await googleProxyFetch("http://upstream.invalid/v1beta/models");
       expect(await response.text()).toBe("through-proxy");
       expect(seenUrl).toMatch(/upstream\.invalid/);
       expect(seenAuth).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
+      // Undici's proxy Client supplies its own Host after we remove the
+      // target Host. The Atools proxy hangs when CONNECT carries the target.
+      expect(seenConnectHost).toBe(`localhost:${address.port}`);
     } finally {
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();
@@ -195,5 +216,22 @@ describe("Google proxy transport", () => {
       expect(classified).toBeInstanceOf(TransientError);
       expect(classified.message).not.toContain("secret");
     }
+  });
+
+  it("preserves a caller deadline when an in-flight proxy request aborts", async () => {
+    const controller = new AbortController();
+    const deadline = new DOMException("probe deadline", "TimeoutError");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      controller.abort(deadline);
+      throw init?.signal?.reason;
+    });
+
+    await expect(
+      googleProxyFetch(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        { signal: controller.signal },
+        "http://user:secret@proxy.example:8080",
+      ),
+    ).rejects.toBe(deadline);
   });
 });

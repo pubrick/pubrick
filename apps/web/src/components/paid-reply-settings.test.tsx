@@ -174,8 +174,11 @@ describe("paid reply organization settings", () => {
     const user = userEvent.setup();
     render(<PaidReplyOrganizationSettings canManage />);
     const zone = await screen.findByLabelText(en.PaidReplies.timezoneLabel);
+    expect(screen.getByText(en.PaidReplies.orgSavedState)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.PaidReplies.save })).toBeDisabled();
     await user.clear(zone);
     await user.type(zone, "Not/A_Zone");
+    expect(screen.getByText(en.PaidReplies.orgUnsavedState)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: en.PaidReplies.save }));
     expect(screen.getByRole("alert")).toHaveTextContent(en.PaidReplies.orgInvalid);
     expect(calls.filter((call) => call.method !== "GET")).toEqual([]);
@@ -191,6 +194,7 @@ describe("paid reply organization settings", () => {
         body: { timezone: "Europe/Moscow", dailyThresholdUsd: 4.5 },
       }),
     );
+    expect(await screen.findByText(en.PaidReplies.orgSavedState)).toBeInTheDocument();
   });
 
   it("shows organization settings to members without edit controls", async () => {

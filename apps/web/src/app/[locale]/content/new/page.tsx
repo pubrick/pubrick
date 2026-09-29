@@ -418,6 +418,7 @@ export default function NewContentPage() {
         // does not silently edit what someone pasted.
         body: JSON.stringify({
           brandId,
+          ...(title.trim() !== "" && { title }),
           channelIds: [...channelIds],
           ...(contentType !== "social_post" && { contentType }),
           ...(generateCover && { generateCover: true }),

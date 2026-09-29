@@ -18,7 +18,9 @@ import {
   type AiProviderId,
   aiCredentialUpsertSchema,
   aiProviderSchema,
+  type GoogleProxyTest,
   type GoogleProxyUpdate,
+  googleProxyTestSchema,
   googleProxyUpdateSchema,
 } from "@pubrick/shared";
 import { ActiveOrgGuard } from "../org/active-org.guard";
@@ -90,6 +92,16 @@ export class AiCredentialsController {
     @Body(new ZodValidationPipe(googleProxyUpdateSchema)) body: GoogleProxyUpdate,
   ) {
     return this.credentials.updateGoogleProxy(orgId, body.proxyUrl);
+  }
+
+  /** Check only the proxy route; this makes no paid model call. */
+  @Post("google/proxy/test")
+  @HttpCode(200)
+  testGoogleProxy(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(googleProxyTestSchema)) body: GoogleProxyTest,
+  ) {
+    return this.credentials.testGoogleProxy(orgId, body.proxyUrl);
   }
 
   @Delete(":provider")

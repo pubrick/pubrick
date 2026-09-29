@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AiCredentialsController, ParseAiProviderPipe } from "./ai-credentials.controller";
 import { AiCredentialProbe } from "./ai-credentials.probe";
 import { AiCredentialsRepository } from "./ai-credentials.repository";
+import { GoogleProxyProbe } from "./google-proxy.probe";
 
 /**
  * `AiCredentialsRepository` is exported for this app's own model callers — the
@@ -27,7 +28,7 @@ import { AiCredentialsRepository } from "./ai-credentials.repository";
  */
 @Module({
   controllers: [AiCredentialsController],
-  providers: [AiCredentialsRepository, AiCredentialProbe, ParseAiProviderPipe],
+  providers: [AiCredentialsRepository, AiCredentialProbe, GoogleProxyProbe, ParseAiProviderPipe],
   exports: [AiCredentialsRepository],
 })
 export class AiCredentialsModule {}

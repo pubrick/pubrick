@@ -412,6 +412,23 @@ describe.skipIf(!url)("runs e2e", () => {
     expect((jobs.rows[0] as { n: number }).n).toBe(1);
   });
 
+  it("preserves a supplied title in brief and source run receipts", async () => {
+    const agent = await orgAgent();
+    const { brandId, channelId } = await brandWithChannel(agent);
+    for (const input of [
+      { brief: "Write a short announcement" },
+      { brief: "Summarize the supplied text", material: "A product launched today." },
+    ]) {
+      const response = await agent
+        .post("/api/runs")
+        .send({ brandId, channelIds: [channelId], title: "Requested headline", ...input })
+        .expect(201);
+      expect(parseExecutableRunDetail(response.body).input.title).toBe("Requested headline");
+      const detail = await agent.get(`/api/runs/${response.body.id}`).expect(200);
+      expect(parseExecutableRunDetail(detail.body).input.title).toBe("Requested headline");
+    }
+  });
+
   it("does not accept a caller-supplied topic lineage on generic runs", async () => {
     const agent = await orgAgent();
     const { brandId, channelId } = await brandWithChannel(agent);
