@@ -33,9 +33,9 @@ type Entry = {
   isActive: boolean;
   hasEmbedding: boolean;
 };
-type Form = { title: string; content: string; category: Entry["category"]; tags: string };
+type Form = { title: string; content: string; category: Entry["category"] | null; tags: string };
 type AutoIndexConfig = { enabled: boolean; lastAttemptAt: string | null };
-const EMPTY_FORM: Form = { title: "", content: "", category: "product_info", tags: "" };
+const EMPTY_FORM: Form = { title: "", content: "", category: null, tags: "" };
 const FORM_ID = "knowledge-form";
 
 export default function KnowledgePage({ params }: { params: Promise<{ id: string }> }) {
@@ -59,6 +59,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editor, setEditor] = useState<"add" | Entry | null>(null);
+  const [viewing, setViewing] = useState<Entry | null>(null);
   const [pendingRemoval, setPendingRemoval] = useState<Entry | null>(null);
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
@@ -157,7 +158,7 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
       title: entry.title,
       content: entry.content,
       category: entry.category,
-      tags: entry.tags.join(", "),
+      tags: entry.tags.join("\n"),
     });
     setError(null);
     setEditor(entry);
@@ -170,9 +171,9 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
     const body = {
       title: form.title,
       content: form.content,
-      category: form.category,
+      category: form.category ?? "",
       tags: form.tags
-        .split(",")
+        .split(/\r?\n/)
         .map((tag) => tag.trim())
         .filter(Boolean),
     };
@@ -184,26 +185,30 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
     setBusy(true);
     setError(null);
     try {
+      let saved: Entry;
       if (editor === "add") {
-        await api("/api/knowledge", { method: "POST", body: JSON.stringify(payload.data) });
+        saved = await api<Entry>("/api/knowledge", {
+          method: "POST",
+          body: JSON.stringify(payload.data),
+        });
       } else {
         const changes = {
           ...(payload.data.title !== editor.title ? { title: payload.data.title } : {}),
           ...(payload.data.content !== editor.content ? { content: payload.data.content } : {}),
           ...(payload.data.category !== editor.category ? { category: payload.data.category } : {}),
-          ...(form.tags !== editor.tags.join(", ") ? { tags: payload.data.tags } : {}),
+          ...(form.tags !== editor.tags.join("\n") ? { tags: payload.data.tags } : {}),
         };
         if (Object.keys(changes).length === 0) {
           closeEditor();
           return;
         }
-        await api(`/api/knowledge/${editor.id}?brandId=${brandId}`, {
+        saved = await api<Entry>(`/api/knowledge/${editor.id}?brandId=${brandId}`, {
           method: "PATCH",
           body: JSON.stringify(changes),
         });
       }
       closeEditor();
-      setNotice(t("savedHint"));
+      setNotice(t(saved.hasEmbedding ? "saved" : "savedHint"));
       load();
     } catch (err) {
       setError(describeError(err));
@@ -574,27 +579,37 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
                   title={entry.title}
                   meta={`${categoryLabel(entry.category)} · ${entry.isActive ? t("active") : t("paused")} · ${entry.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}`}
                   trailing={
-                    canEditKnowledge && (
-                      <div className="flex max-w-full flex-wrap gap-2">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => index(entry)}
-                          disabled={indexing === entry.id}
-                        >
-                          {indexing === entry.id ? t("indexing") : t("index")}
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
-                          {t("edit")}
-                        </Button>
-                        <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
-                          {entry.isActive ? t("pause") : t("resume")}
-                        </Button>
-                        <Button size="sm" variant="danger" onClick={() => setPendingRemoval(entry)}>
-                          {t("remove")}
-                        </Button>
-                      </div>
-                    )
+                    <div className="flex max-w-full flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => setViewing(entry)}>
+                        {t("view")}
+                      </Button>
+                      {canEditKnowledge && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => index(entry)}
+                            disabled={!entry.isActive || indexing === entry.id}
+                            title={!entry.isActive ? t("resumeToIndex") : undefined}
+                          >
+                            {indexing === entry.id ? t("indexing") : t("index")}
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={() => openEdit(entry)}>
+                            {t("edit")}
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={() => setActive(entry)}>
+                            {entry.isActive ? t("pause") : t("resume")}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => setPendingRemoval(entry)}
+                          >
+                            {t("remove")}
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   }
                 />
               ))}
@@ -602,6 +617,23 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           )}
         </>
       )}
+
+      <Modal open={viewing !== null} onClose={() => setViewing(null)} title={viewing?.title ?? ""}>
+        {viewing && (
+          <div className="space-y-4">
+            <p className="text-sm text-fg-secondary">
+              {categoryLabel(viewing.category)} · {viewing.isActive ? t("active") : t("paused")} ·{" "}
+              {viewing.hasEmbedding ? t("indexedStatus") : t("textSearchStatus")}
+            </p>
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+              {viewing.content}
+            </p>
+            {viewing.tags.length > 0 && (
+              <p className="text-sm text-fg-secondary">{viewing.tags.join(" · ")}</p>
+            )}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={canEditKnowledge && editor !== null}
@@ -641,14 +673,20 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
           <Select
             label={t("categoryLabel")}
             value={
-              KNOWLEDGE_CATEGORIES.some((category) => category === form.category)
-                ? form.category
-                : "__custom__"
+              form.category === null
+                ? ""
+                : KNOWLEDGE_CATEGORIES.some((category) => category === form.category)
+                  ? form.category
+                  : "__custom__"
             }
+            required
             onChange={(e) =>
               setForm({ ...form, category: e.target.value === "__custom__" ? "" : e.target.value })
             }
           >
+            <option value="" disabled>
+              {t("categoryPlaceholder")}
+            </option>
             {KNOWLEDGE_CATEGORIES.map((category) => (
               <option key={category} value={category}>
                 {t(`categories.${category}`)}
@@ -656,19 +694,21 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
             ))}
             <option value="__custom__">{t("customCategory")}</option>
           </Select>
-          {!KNOWLEDGE_CATEGORIES.some((category) => category === form.category) && (
-            <Input
-              label={t("customCategoryLabel")}
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              maxLength={100}
-              required
-            />
-          )}
-          <Input
+          {form.category !== null &&
+            !KNOWLEDGE_CATEGORIES.some((category) => category === form.category) && (
+              <Input
+                label={t("customCategoryLabel")}
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                maxLength={100}
+                required
+              />
+            )}
+          <Textarea
             label={t("tagsLabel")}
             value={form.tags}
             onChange={(e) => setForm({ ...form, tags: e.target.value })}
+            rows={3}
           />
           <p className="text-xs text-fg-tertiary">{t("indexHint")}</p>
         </form>

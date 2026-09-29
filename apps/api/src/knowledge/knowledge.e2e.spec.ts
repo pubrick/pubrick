@@ -114,12 +114,19 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .send({ isActive: false })
       .expect(200);
     expect(paused.body.hasEmbedding).toBe(true);
+    expect(paused.body.tags).toEqual(["coffee"]);
+    const pausedIndex = await owner
+      .post(`/api/knowledge/${entry.body.id}/index?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(pausedIndex.body).toEqual({ indexed: false, reason: "entry_inactive" });
+    expect(embedKnowledgeText).not.toHaveBeenCalled();
     const recategorized = await owner
       .patch(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
       .send({ category: "  Retail Partners  " })
       .expect(200);
     expect(recategorized.body.category).toBe("Retail Partners");
     expect(recategorized.body.hasEmbedding).toBe(true);
+    expect(recategorized.body.tags).toEqual(["coffee"]);
     expect(
       (
         await owner
@@ -144,6 +151,7 @@ describe.skipIf(!url)("knowledge e2e", () => {
       .expect(200);
     expect(edited.body.hasEmbedding).toBe(false);
     expect(edited.body.content).toBe("Only Robusta beans.");
+    expect(edited.body.tags).toEqual(["coffee"]);
     const [cleared] = await db
       .select({
         model: schema.knowledgeEntries.embeddingModel,
@@ -163,6 +171,10 @@ describe.skipIf(!url)("knowledge e2e", () => {
         Array(768).fill(0.1),
       ),
     ).toBeUndefined();
+    await owner
+      .patch(`/api/knowledge/${entry.body.id}?brandId=${brand.body.id}`)
+      .send({ isActive: true })
+      .expect(200);
     const noKey = await owner
       .post(`/api/knowledge/${entry.body.id}/index?brandId=${brand.body.id}`)
       .expect(201);
@@ -213,6 +225,26 @@ describe.skipIf(!url)("knowledge e2e", () => {
       "Green tea\n\nOur tea is roasted.",
       "RETRIEVAL_DOCUMENT",
     );
+    await agent
+      .patch(`/api/knowledge/${note.body.id}?brandId=${brand.body.id}`)
+      .send({ isActive: false })
+      .expect(200);
+    const paused = await agent
+      .post(`/api/knowledge/${note.body.id}/index?brandId=${brand.body.id}`)
+      .expect(201);
+    expect(paused.body).toEqual({ indexed: false, reason: "entry_inactive" });
+    expect(embedKnowledgeText).toHaveBeenCalledTimes(1);
+    const { KnowledgeRepository } = await import("./knowledge.repository");
+    expect(
+      await new KnowledgeRepository().setEmbedding(
+        orgId,
+        brand.body.id,
+        note.body.id,
+        "Green tea",
+        "Our tea is roasted.",
+        Array(768).fill(0.1),
+      ),
+    ).toBeUndefined();
     const ledger = await db
       .select({
         inputTokens: schema.usageLedger.inputTokens,

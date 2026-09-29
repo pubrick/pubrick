@@ -18,6 +18,17 @@ export const knowledgeCategorySchema = z
   .min(1)
   .max(100);
 
+const knowledgeTagsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .min(1)
+      .max(50)
+      .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
+  )
+  .max(20);
+
 export const knowledgeCreateSchema = z.object({
   brandId: z.uuid(),
   title: z
@@ -33,24 +44,16 @@ export const knowledgeCreateSchema = z.object({
     .max(20_000)
     .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
   category: knowledgeCategorySchema,
-  tags: z
-    .array(
-      z
-        .string()
-        .trim()
-        .min(1)
-        .max(50)
-        .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE),
-    )
-    .max(20)
-    .default([]),
+  tags: knowledgeTagsSchema.default([]),
 });
 export type KnowledgeCreate = z.infer<typeof knowledgeCreateSchema>;
 
 export const knowledgeUpdateSchema = knowledgeCreateSchema
   .omit({ brandId: true })
   .partial()
-  .extend({ isActive: z.boolean().optional() });
+  // Zod 4 retains a field's default through partial(), which would otherwise
+  // turn an unrelated PATCH into tags: [] and silently erase saved tags.
+  .extend({ tags: knowledgeTagsSchema.optional(), isActive: z.boolean().optional() });
 export type KnowledgeUpdate = z.infer<typeof knowledgeUpdateSchema>;
 
 export const knowledgeImportSchema = z.object({

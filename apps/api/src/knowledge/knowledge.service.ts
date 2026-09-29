@@ -154,6 +154,7 @@ export class KnowledgeService {
 
   private async indexLocked(orgId: string, brandId: string, id: string) {
     const entry = await this.entries.indexInput(orgId, brandId, id);
+    if (!entry.isActive) return { indexed: false, reason: "entry_inactive" as const };
     const apiKey = await this.entries.googleKey(orgId);
     if (!apiKey) return { indexed: false, reason: "google_key_required" as const };
     const started = Date.now();

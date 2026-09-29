@@ -283,6 +283,7 @@ export class KnowledgeRepository {
         id: schema.knowledgeEntries.id,
         title: schema.knowledgeEntries.title,
         content: schema.knowledgeEntries.content,
+        isActive: schema.knowledgeEntries.isActive,
       })
       .from(schema.knowledgeEntries)
       .where(
@@ -320,6 +321,7 @@ export class KnowledgeRepository {
           eq(schema.knowledgeEntries.id, id),
           eq(schema.knowledgeEntries.title, title),
           eq(schema.knowledgeEntries.content, content),
+          eq(schema.knowledgeEntries.isActive, true),
         ),
       )
       .returning(PUBLIC_COLUMNS);

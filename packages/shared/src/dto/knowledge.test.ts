@@ -3,6 +3,7 @@ import {
   knowledgeCategorySchema,
   knowledgeCreateSchema,
   knowledgeImportSchema,
+  knowledgeUpdateSchema,
 } from "./knowledge.js";
 
 const brandId = "b4c85667-4c08-4f94-89e0-af5ee4f638af";
@@ -52,5 +53,15 @@ describe("knowledge bulk import", () => {
         false,
       );
     }
+  });
+});
+
+describe("knowledge updates", () => {
+  it("leaves tags untouched when a PATCH changes another field", () => {
+    expect(knowledgeUpdateSchema.parse({ category: "brand_guidelines" })).toEqual({
+      category: "brand_guidelines",
+    });
+    expect(knowledgeUpdateSchema.parse({ isActive: false })).toEqual({ isActive: false });
+    expect(knowledgeUpdateSchema.parse({ tags: [] })).toEqual({ tags: [] });
   });
 });
