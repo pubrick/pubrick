@@ -604,6 +604,7 @@ export default function SettingsPage() {
                   <ListRow
                     key={credential.provider}
                     title={PROVIDER_NAMES[credential.provider] ?? credential.provider}
+                    metaClassName="whitespace-normal break-words"
                     meta={
                       testMeta(credential.provider) ??
                       (credential.defaultModel || t("aiProviderDefault"))

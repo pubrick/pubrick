@@ -662,9 +662,10 @@ describe("Settings — AI provider: Test", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      en.SettingsPage.aiTestFailTimedOutProxy,
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(en.SettingsPage.aiTestFailTimedOutProxy);
+    expect(alert.parentElement).toHaveClass("whitespace-normal");
+    expect(alert.parentElement).not.toHaveClass("truncate");
   });
 
   it("names the real limit when the workspace has spent its hourly test budget", async () => {
