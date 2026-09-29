@@ -4,6 +4,7 @@ import {
   type AiCredentialTestResult,
   aiCredentialUpsertSchema,
   type CostSummary,
+  type GoogleProxyTestResult,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
@@ -52,6 +53,8 @@ type Handlers = {
   spend?: CostSummary;
   test?: AiCredentialTestResult;
   proxyError?: Error;
+  proxyTest?: GoogleProxyTestResult;
+  proxyTestGate?: Promise<void>;
   /** When set, POST …/test hangs until this resolves — the in-flight window. */
   testGate?: Promise<void>;
 };
@@ -105,6 +108,10 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
       proxyConfigured =
         (JSON.parse(String(init?.body)) as { proxyUrl: string | null }).proxyUrl !== null;
       return { ...googleKey, proxyConfigured };
+    }
+    if (method === "POST" && path === "/api/ai-credentials/google/proxy/test") {
+      if (handlers.proxyTestGate) await handlers.proxyTestGate;
+      return handlers.proxyTest ?? { ok: true };
     }
     if (method === "POST" && path.endsWith("/test")) {
       if (handlers.testGate) await handlers.testGate;
@@ -498,6 +505,86 @@ describe("Settings — AI provider: saving a key", () => {
 });
 
 describe("Settings — Google proxy", () => {
+  it("tests an entered proxy before saving it, without checking the API key", async () => {
+    const calls: Call[] = [];
+    installApi(calls);
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    const testButton = screen.getByRole("button", { name: en.SettingsPage.aiProxyTest });
+    expect(testButton).toBeDisabled();
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiProxyLabel),
+      "http://proxy.example:8080",
+    );
+    await user.click(testButton);
+    expect(await screen.findByText(en.SettingsPage.aiProxyTestDraftOk)).toBeInTheDocument();
+    expect(calls).toContainEqual({
+      path: "/api/ai-credentials/google/proxy/test",
+      method: "POST",
+      body: { proxyUrl: "http://proxy.example:8080" },
+    });
+    expect(calls.some((call) => call.path === "/api/ai-credentials/google/test")).toBe(false);
+    expect(
+      calls.some(
+        (call) => call.path === "/api/ai-credentials/google/proxy" && call.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  it("tests the saved proxy without asking the browser for its secret URL", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [{ ...googleKey, proxyConfigured: true }] });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyTest }));
+    expect(await screen.findByText(en.SettingsPage.aiProxyTestSavedOk)).toBeInTheDocument();
+    expect(calls).toContainEqual({
+      path: "/api/ai-credentials/google/proxy/test",
+      method: "POST",
+      body: {},
+    });
+  });
+
+  it("shows progress and prevents a second proxy check while one is running", async () => {
+    const calls: Call[] = [];
+    let release!: () => void;
+    installApi(calls, {
+      credentials: [{ ...googleKey, proxyConfigured: true }],
+      proxyTestGate: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyTest }));
+    expect(screen.getByRole("button", { name: en.SettingsPage.aiProxyTesting })).toBeDisabled();
+    expect(
+      calls.filter((call) => call.path === "/api/ai-credentials/google/proxy/test"),
+    ).toHaveLength(1);
+    release();
+    expect(await screen.findByText(en.SettingsPage.aiProxyTestSavedOk)).toBeInTheDocument();
+  });
+
+  it("reports a timeout beside the proxy controls and clears the verdict after an edit", async () => {
+    installApi([], {
+      credentials: [{ ...googleKey, proxyConfigured: true }],
+      proxyTest: { ok: false, reason: "timeout" },
+    });
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyTest }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.SettingsPage.aiProxyTestTimeout);
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiProxyLabel),
+      "http://proxy.example:8080",
+    );
+    expect(screen.queryByText(en.SettingsPage.aiProxyTestTimeout)).not.toBeInTheDocument();
+  });
+
   it("asks for a saved Google key before proxy setup", async () => {
     await renderSettings();
     const user = userEvent.setup();

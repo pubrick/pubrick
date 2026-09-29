@@ -50,6 +50,15 @@ export const googleProxyUpdateSchema = z.object({
 });
 export type GoogleProxyUpdate = z.infer<typeof googleProxyUpdateSchema>;
 
+/** Omitting the URL checks the saved proxy; supplying one checks an unsaved draft. */
+export const googleProxyTestSchema = z.object({
+  proxyUrl: z.string().min(1).max(4096).optional(),
+});
+export type GoogleProxyTest = z.infer<typeof googleProxyTestSchema>;
+export type GoogleProxyTestResult =
+  | { ok: true }
+  | { ok: false; reason: "invalid_proxy" | "not_configured" | "timeout" | "unreachable" };
+
 /**
  * The plaintext `AiCredentialsRepository.upsert` seals — what a decrypted
  * `ai_credentials.credentials_encrypted` MUST hold before its contents go

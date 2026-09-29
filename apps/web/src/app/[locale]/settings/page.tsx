@@ -8,10 +8,11 @@ import {
   type AiTestFailure,
   type CostSummary,
   formatUsd,
+  type GoogleProxyTestResult,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
 import { PaidReplyOrganizationSettings } from "@/components/paid-reply-organization-settings";
@@ -200,6 +201,12 @@ export default function SettingsPage() {
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [proxyMessage, setProxyMessage] = useState<"saved" | "removed" | "error" | null>(null);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<GoogleProxyTestResult | "error" | null>(
+    null,
+  );
+  const [proxyTestedDraft, setProxyTestedDraft] = useState(false);
+  const proxyRevision = useRef(0);
   const [aiError, setAiError] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [keySaved, setKeySaved] = useState(false);
@@ -290,6 +297,8 @@ export default function SettingsPage() {
 
   async function updateProxy(nextUrl: string | null) {
     if (proxySaving) return;
+    proxyRevision.current += 1;
+    setProxyTestResult(null);
     setProxyMessage(null);
     setProxySaving(true);
     try {
@@ -312,6 +321,30 @@ export default function SettingsPage() {
       setProxyMessage("error");
     } finally {
       setProxySaving(false);
+    }
+  }
+
+  async function testProxy() {
+    if (proxyTesting || proxySaving) return;
+    const draftUrl = proxyUrl.trim();
+    if (!draftUrl && !googleCredential?.proxyConfigured) return;
+    const revision = ++proxyRevision.current;
+    setProxyTestResult(null);
+    setProxyTesting(true);
+    try {
+      const result = await api<GoogleProxyTestResult>("/api/ai-credentials/google/proxy/test", {
+        method: "POST",
+        body: JSON.stringify(draftUrl ? { proxyUrl: draftUrl } : {}),
+      });
+      if (proxyRevision.current === revision) {
+        setProxyTestedDraft(Boolean(draftUrl));
+        setProxyTestResult(result);
+      }
+    } catch {
+      // A proxy URL can include credentials; never render the thrown error.
+      if (proxyRevision.current === revision) setProxyTestResult("error");
+    } finally {
+      setProxyTesting(false);
     }
   }
 
@@ -726,8 +759,10 @@ export default function SettingsPage() {
                     placeholder={t("aiProxyPlaceholder")}
                     value={proxyUrl}
                     onChange={(event) => {
+                      proxyRevision.current += 1;
                       setProxyUrl(event.target.value);
                       setProxyMessage(null);
+                      setProxyTestResult(null);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -767,6 +802,26 @@ export default function SettingsPage() {
                       )}
                     </p>
                   )}
+                  {proxyTestResult && (
+                    <p
+                      role={proxyTestResult === "error" || !proxyTestResult.ok ? "alert" : "status"}
+                      className={`mt-2 text-sm ${proxyTestResult !== "error" && proxyTestResult.ok ? "text-success" : "text-danger"}`}
+                    >
+                      {proxyTestResult === "error"
+                        ? t("aiProxyTestError")
+                        : proxyTestResult.ok
+                          ? t(proxyTestedDraft ? "aiProxyTestDraftOk" : "aiProxyTestSavedOk")
+                          : t(
+                              proxyTestResult.reason === "timeout"
+                                ? "aiProxyTestTimeout"
+                                : proxyTestResult.reason === "invalid_proxy"
+                                  ? "aiProxyTestInvalid"
+                                  : proxyTestResult.reason === "not_configured"
+                                    ? "aiProxyTestMissing"
+                                    : "aiProxyTestUnreachable",
+                            )}
+                    </p>
+                  )}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button
                       type="button"
@@ -775,6 +830,18 @@ export default function SettingsPage() {
                       onClick={() => updateProxy(proxyUrl.trim())}
                     >
                       {t("aiProxySave")}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={
+                        proxySaving ||
+                        proxyTesting ||
+                        (!proxyUrl.trim() && !googleCredential?.proxyConfigured)
+                      }
+                      onClick={testProxy}
+                    >
+                      {t(proxyTesting ? "aiProxyTesting" : "aiProxyTest")}
                     </Button>
                     {googleCredential?.proxyConfigured && (
                       <Button

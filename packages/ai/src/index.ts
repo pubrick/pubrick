@@ -26,6 +26,7 @@ export {
 } from "./generate.js";
 export {
   googleProxyEnvSchema,
+  googleProxyFetch,
   isAllowedGoogleProxy,
 } from "./google-transport.js";
 export {

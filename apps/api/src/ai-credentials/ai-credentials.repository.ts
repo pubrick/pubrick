@@ -10,6 +10,7 @@ import {
   costTotals,
   decryptJson,
   encryptJson,
+  type GoogleProxyTestResult,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
@@ -25,6 +26,7 @@ import { notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
+import { GoogleProxyProbe } from "./google-proxy.probe";
 
 /**
  * Public response columns. The listing also selects ciphertext explicitly to
@@ -81,7 +83,27 @@ const TEST_BUDGET_WINDOW = sql`interval '1 hour'`;
 export class AiCredentialsRepository {
   private readonly logger = new Logger(AiCredentialsRepository.name);
 
-  constructor(private readonly probe: AiCredentialProbe) {}
+  constructor(
+    private readonly probe: AiCredentialProbe,
+    private readonly googleProxyProbe: GoogleProxyProbe,
+  ) {}
+
+  async testGoogleProxy(orgId: string, draftUrl?: string): Promise<GoogleProxyTestResult> {
+    // A draft can be checked before a Google key exists. An empty body checks
+    // the saved proxy without sending its encrypted URL back to the browser.
+    let proxyUrl = draftUrl;
+    if (!proxyUrl) {
+      try {
+        proxyUrl = (await this.getDecrypted(orgId, "google")).proxyUrl;
+      } catch (error) {
+        if (error instanceof NotFoundException) return { ok: false, reason: "not_configured" };
+        throw error;
+      }
+    }
+    if (!proxyUrl) return { ok: false, reason: "not_configured" };
+    if (!isAllowedGoogleProxy(proxyUrl)) return { ok: false, reason: "invalid_proxy" };
+    return this.googleProxyProbe.run(proxyUrl);
+  }
 
   async list(orgId: string) {
     const rows = await db

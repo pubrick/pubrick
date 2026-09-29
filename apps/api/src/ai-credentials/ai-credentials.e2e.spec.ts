@@ -19,6 +19,7 @@ import { eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiCredentialProbe, type ProbeOutcome } from "./ai-credentials.probe";
+import { GoogleProxyProbe } from "./google-proxy.probe";
 
 // Type-only: `ai-credentials.repository` reaches `../db`, which validates env at
 // module load, and `beforeAll` is where DATABASE_URL is set. Same rule the app
@@ -44,6 +45,8 @@ describe.skipIf(!url)("ai credentials e2e", () => {
    * rules, response shape) runs for real against a real database.
    */
   const probeCalls: AiCredential[] = [];
+  const proxyProbeCalls: string[] = [];
+  const proxyProbeOutcome = { ok: true } as const;
   let probeOutcome: ProbeOutcome = { ok: true, modelId: "gemini-3.7-flash", records: [] };
 
   beforeAll(async () => {
@@ -59,6 +62,13 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         run: async (credential: AiCredential): Promise<ProbeOutcome> => {
           probeCalls.push(credential);
           return probeOutcome;
+        },
+      })
+      .overrideProvider(GoogleProxyProbe)
+      .useValue({
+        run: async (proxyUrl: string) => {
+          proxyProbeCalls.push(proxyUrl);
+          return proxyProbeOutcome;
         },
       })
       .compile();
@@ -86,6 +96,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
   beforeEach(() => {
     probeCalls.length = 0;
+    proxyProbeCalls.length = 0;
     probeOutcome = { ok: true, modelId: "gemini-3.7-flash", records: [] };
   });
 
@@ -222,6 +233,50 @@ describe.skipIf(!url)("ai credentials e2e", () => {
   });
 
   describe("saving", () => {
+    it("checks a draft or stored Google proxy without a model call or ledger entry", async () => {
+      const { agent, orgId } = await orgAgent();
+      const proxyUrl = "http://alice:private@proxy.example:8080";
+      const draft = await agent
+        .post("/api/ai-credentials/google/proxy/test")
+        .send({ proxyUrl })
+        .expect(200);
+      expect(draft.body).toEqual({ ok: true });
+      expect(proxyProbeCalls).toEqual([proxyUrl]);
+      expect(JSON.stringify(draft.body)).not.toContain("private");
+      expect(
+        (await agent.post("/api/ai-credentials/google/proxy/test").send({}).expect(200)).body,
+      ).toEqual({ ok: false, reason: "not_configured" });
+
+      await save(agent).expect(200);
+      await agent.put("/api/ai-credentials/google/proxy").send({ proxyUrl }).expect(200);
+      expect(
+        (await agent.post("/api/ai-credentials/google/proxy/test").send({}).expect(200)).body,
+      ).toEqual({ ok: true });
+      expect(proxyProbeCalls).toEqual([proxyUrl, proxyUrl]);
+      expect(probeCalls).toHaveLength(0);
+      const rows = await direct.db
+        .select({ id: schema.usageLedger.id })
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, orgId));
+      expect(rows).toHaveLength(0);
+    });
+
+    it("rejects private and malformed proxy test URLs without contacting a proxy or echoing a password", async () => {
+      const { agent } = await orgAgent();
+      const privateResult = await agent
+        .post("/api/ai-credentials/google/proxy/test")
+        .send({ proxyUrl: "http://alice:private@127.0.0.1:8080" })
+        .expect(200);
+      expect(privateResult.body).toEqual({ ok: false, reason: "invalid_proxy" });
+      const malformed = await agent
+        .post("/api/ai-credentials/google/proxy/test")
+        .send({ proxyUrl: "http://alice:private@proxy.example:8080/path" })
+        .expect(200);
+      expect(malformed.body).toEqual({ ok: false, reason: "invalid_proxy" });
+      expect(JSON.stringify([privateResult.body, malformed.body])).not.toContain("private");
+      expect(proxyProbeCalls).toHaveLength(0);
+    });
+
     it("stores a Google proxy encrypted, preserves it on key rotation, and never returns it", async () => {
       const { agent, orgId } = await orgAgent();
       const proxyUrl = "http://alice:private@proxy.example:8080";
