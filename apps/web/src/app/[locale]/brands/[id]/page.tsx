@@ -563,6 +563,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <Link href={`/${locale}/brands/${id}/topics`} className="text-accent underline">
           {tb("topicsLink")}
         </Link>
+        <Link href={`/${locale}/brands/${id}/autopilot`} className="text-accent underline">
+          {tb("autopilotLink")}
+        </Link>
         <Link href={`/${locale}/brands/${id}/media`} className="text-accent underline">
           {tb("mediaLink")}
         </Link>
