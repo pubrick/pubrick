@@ -43,7 +43,7 @@
   },
   "Ui": {
     "advanced": "Advanced",
-    "advancedDirtyHint": "Contains something you entered",
+    "advancedDirtyHint": "Contains configured or unsaved settings",
     "close": "Close"
   },
   "Brands": {
@@ -1192,7 +1192,7 @@
     "aiModelPlaceholder": "Provider default",
     "aiProxyLabel": "Google proxy URL",
     "aiProxyPlaceholder": "http://user:password@host:port",
-    "aiProxyHint": "Optional for this workspace's Google requests. The URL is encrypted and cannot be shown again.",
+    "aiProxyHint": "Optional for this workspace's Google requests. You can read the URL while entering it; after saving, it is encrypted and cannot be shown again.",
     "aiProxyConfigured": "Proxy configured",
     "aiProxyDirect": "No workspace proxy configured",
     "aiProxyNeedsKey": "Save a Google API key before saving a proxy.",
@@ -1200,7 +1200,7 @@
     "aiProxyRemove": "Remove Google proxy",
     "aiProxySaved": "Proxy saved.",
     "aiProxyRemoved": "Proxy removed.",
-    "aiProxyError": "Could not save the proxy. Check its URL and add its host:port to GOOGLE_PROXY_ALLOWED_HOSTS in the server .env, then restart API and worker.",
+    "aiProxyError": "Could not save the proxy. Enter a public HTTP(S) proxy URL with an explicit port and no path.",
     "aiProviderDefault": "Provider default",
     "aiSave": "Save key",
     "test": "Test",

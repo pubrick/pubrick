@@ -138,17 +138,18 @@ shows the current token rates and free/paid tiers. Paid tier access requires
 billing on the Google project that owns the key.
 
 If the Google endpoint is unavailable from your server, open **Settings → AI
-provider → Google proxy URL** and save an HTTP(S) forward proxy URL with an explicit
-port. The proxy field and its save action are visible below the API-key form and
-are saved separately. This setting applies to the current workspace's
-Google calls in both API and worker. Pubrick encrypts it with the same key ring
+provider → Advanced → Google proxy URL** and save an HTTP(S) forward proxy URL
+with an explicit port. The proxy field shows what you type so you can check it;
+its save action is beside the field and independent of the API-key save action.
+This setting applies to the current workspace's Google calls in both API and
+worker. Pubrick encrypts it with the same key ring
 as the API key and never returns the saved URL to the browser. Use **Remove**
-there to clear it. The instance operator must first approve the proxy's
-`host:port` in `GOOGLE_PROXY_ALLOWED_HOSTS` in `.env`; the host and port of an
-existing `GOOGLE_API_PROXY` are approved automatically. This server-side gate
-prevents workspace admins from directing server requests to arbitrary internal
-addresses. An instance operator may also set `GOOGLE_API_PROXY` in `.env` as a
-fallback for workspaces without their own proxy. Changes to either environment
+there to clear it. Workspace admins can enter any public HTTP(S) forward proxy
+without changing the server configuration. Literal private or reserved IP
+addresses are rejected, and DNS addresses are checked again for every new
+connection so a hostname cannot redirect requests into the server's internal
+network. An instance operator may also set `GOOGLE_API_PROXY` in `.env` as a
+fallback for workspaces without their own proxy. Changes to that environment
 variable require recreating both `api` and `worker` containers. Keep the proxy
 URL and Gemini key private.
 
@@ -458,7 +459,6 @@ each one in full.
 | 2026-09-11 | `PUBLISH_MAX_LATENESS_HOURS` | no | how many hours past its slot a scheduled post may still go out (default `6`); beyond it the delivery is recorded failed having sent nothing, and **Publish now** re-sends it. Setting it low fails posts the queue merely retried, so there is a floor — about **2 h**, derived from the queue's whole retry chain plus the abandoned-attempt sweep — and **the worker refuses to start** below it, naming the exact number. No off switch: `0` is refused, and "effectively never" is `8760` |
 | 2026-09-25 | `PAID_REPLY_DISPATCH_AFTER` | no | optional ISO instant with a timezone offset; only automatic reply-analysis handoffs collected at or after this instant may start a paid Gemini call. Unset means no automatic paid dispatch. Existing manual Analyze remains available. Brand-level paid switches and daily admission thresholds must also be configured. |
 | 2026-09-25 | `GOOGLE_API_PROXY` | no | instance fallback HTTP(S) forward proxy with an explicit port for Google generation, credential tests, embeddings, images and reply analysis. A workspace proxy saved in Settings overrides it. An authenticated URL is accepted; keep it secret. Unset uses direct Google access. Set it for both API and worker; Compose passes the same value to each. |
-| 2026-09-26 | `GOOGLE_PROXY_ALLOWED_HOSTS` | no | comma-separated `host:port` destinations workspace admins may save as Google proxies in Settings. An existing `GOOGLE_API_PROXY` host and port are also allowed. No destination is accepted without either approval. This list contains no proxy passwords. |
 
 The three required ones stop `docker compose up` outright, so an upgrade cannot
 miss them. The optional ones are worth reading: an `.env` written

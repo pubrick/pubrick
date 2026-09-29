@@ -690,7 +690,13 @@ export default function SettingsPage() {
                   </a>
                 </p>
               )}
-              <Advanced dirty={defaultModel.trim() !== ""}>
+              <Advanced
+                dirty={
+                  defaultModel.trim() !== "" ||
+                  proxyUrl.trim() !== "" ||
+                  Boolean(googleCredential?.proxyConfigured)
+                }
+              >
                 <Input
                   label={t("aiModelLabel")}
                   placeholder={t("aiModelPlaceholder")}
@@ -701,6 +707,79 @@ export default function SettingsPage() {
                   }
                   className="w-full"
                 />
+                <div className="mt-4 border-t border-border-soft pt-4">
+                  <Input
+                    type="text"
+                    autoComplete="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    label={t("aiProxyLabel")}
+                    placeholder={t("aiProxyPlaceholder")}
+                    value={proxyUrl}
+                    onChange={(event) => {
+                      setProxyUrl(event.target.value);
+                      setProxyMessage(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        if (googleCredential && proxyUrl.trim()) void updateProxy(proxyUrl.trim());
+                      }
+                    }}
+                    className="w-full"
+                  />
+                  <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyHint")}</p>
+                  {credentials !== null && (
+                    <p className="mt-2 text-sm text-fg-secondary">
+                      {t(googleCredential?.proxyConfigured ? "aiProxyConfigured" : "aiProxyDirect")}
+                    </p>
+                  )}
+                  {!googleCredential && credentials !== null && (
+                    <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyNeedsKey")}</p>
+                  )}
+                  {proxyUrl !== "" && (
+                    <p className="mt-2 text-sm text-accent">{t("aiProxyPending")}</p>
+                  )}
+                  {proxyMessage && (
+                    <p
+                      role={proxyMessage === "error" ? "alert" : "status"}
+                      className={
+                        proxyMessage === "error"
+                          ? "mt-2 text-sm text-danger"
+                          : "mt-2 text-sm text-success"
+                      }
+                    >
+                      {t(
+                        proxyMessage === "saved"
+                          ? "aiProxySaved"
+                          : proxyMessage === "removed"
+                            ? "aiProxyRemoved"
+                            : "aiProxyError",
+                      )}
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={proxySaving || !googleCredential || !proxyUrl.trim()}
+                      onClick={() => updateProxy(proxyUrl.trim())}
+                    >
+                      {t("aiProxySave")}
+                    </Button>
+                    {googleCredential?.proxyConfigured && (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        aria-label={t("aiProxyRemove")}
+                        disabled={proxySaving}
+                        onClick={() => updateProxy(null)}
+                      >
+                        {t("remove")}
+                      </Button>
+                    )}
+                  </div>
+                </div>
               </Advanced>
               <div>
                 <Button
@@ -716,75 +795,6 @@ export default function SettingsPage() {
                   {keyError}
                 </p>
               )}
-            </form>
-
-            <form
-              className="mt-5 border-t border-border-soft pt-5"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (googleCredential && proxyUrl.trim()) void updateProxy(proxyUrl.trim());
-              }}
-            >
-              <Input
-                type="password"
-                autoComplete="off"
-                label={t("aiProxyLabel")}
-                placeholder={t("aiProxyPlaceholder")}
-                value={proxyUrl}
-                onChange={(event) => {
-                  setProxyUrl(event.target.value);
-                  setProxyMessage(null);
-                }}
-                className="w-full"
-              />
-              <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyHint")}</p>
-              {credentials !== null && (
-                <p className="mt-2 text-sm text-fg-secondary">
-                  {t(googleCredential?.proxyConfigured ? "aiProxyConfigured" : "aiProxyDirect")}
-                </p>
-              )}
-              {!googleCredential && credentials !== null && (
-                <p className="mt-2 text-sm text-fg-secondary">{t("aiProxyNeedsKey")}</p>
-              )}
-              {proxyUrl !== "" && <p className="mt-2 text-sm text-accent">{t("aiProxyPending")}</p>}
-              {proxyMessage && (
-                <p
-                  role={proxyMessage === "error" ? "alert" : "status"}
-                  className={
-                    proxyMessage === "error"
-                      ? "mt-2 text-sm text-danger"
-                      : "mt-2 text-sm text-success"
-                  }
-                >
-                  {t(
-                    proxyMessage === "saved"
-                      ? "aiProxySaved"
-                      : proxyMessage === "removed"
-                        ? "aiProxyRemoved"
-                        : "aiProxyError",
-                  )}
-                </p>
-              )}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  disabled={proxySaving || !googleCredential || !proxyUrl.trim()}
-                >
-                  {t("aiProxySave")}
-                </Button>
-                {googleCredential?.proxyConfigured && (
-                  <Button
-                    type="button"
-                    variant="danger"
-                    aria-label={t("aiProxyRemove")}
-                    disabled={proxySaving}
-                    onClick={() => updateProxy(null)}
-                  >
-                    {t("remove")}
-                  </Button>
-                )}
-              </div>
             </form>
           </Card>
         )}

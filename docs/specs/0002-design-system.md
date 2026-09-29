@@ -45,14 +45,14 @@ CLAUDE.md gets a condensed copy so agents enforce them too.
    - The current user/workspace: bottom of the sidebar, under Settings
      (mobile: inside Settings).
 2. **Progressive disclosure.** Forms show the controls needed for the task,
-   including current configuration state. Optional configuration that users
-   commonly need to locate, such as the Google proxy, stays visible. Truly
-   advanced options live inside the uniform `Advanced` component — a
+   including current configuration state. Optional configuration such as the
+   Google proxy lives inside the uniform `Advanced` component — a
    collapsed "Advanced" section at the END of a form, identical on every
    screen. When a collapsed section contains values changed from their
    defaults, its header shows a dot indicator, so hidden non-default
-   state is never invisible. No screen invents its own "show more"
-   pattern.
+   state is never invisible. Secret-bearing fields may show text while a user
+   enters it, but encrypted saved values are not returned to the browser.
+   No screen invents its own "show more" pattern.
 3. **One verb, one word.** Approve / Reject / Publish / Schedule / Test
    connection are called the same thing on every screen, in every toast
    and empty state. The vocabulary lives in `messages/en.json` and is

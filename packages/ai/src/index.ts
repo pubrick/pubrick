@@ -25,7 +25,6 @@ export {
   type ModelCallOptions,
 } from "./generate.js";
 export {
-  googleProxyAllowlistSchema,
   googleProxyEnvSchema,
   isAllowedGoogleProxy,
 } from "./google-transport.js";

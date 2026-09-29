@@ -43,7 +43,7 @@
   },
   "Ui": {
     "advanced": "Avançado",
-    "advancedDirtyHint": "Contém algo que você digitou",
+    "advancedDirtyHint": "Contém configurações definidas ou não salvas",
     "close": "Fechar"
   },
   "Brands": {
@@ -1192,7 +1192,7 @@
     "aiModelPlaceholder": "Modelo do provedor",
     "aiProxyLabel": "URL do proxy do Google",
     "aiProxyPlaceholder": "http://user:password@host:port",
-    "aiProxyHint": "Opcional para as solicitações ao Google deste espaço. A URL é criptografada e não aparece novamente.",
+    "aiProxyHint": "Opcional para as solicitações ao Google deste espaço. Você pode ler a URL enquanto a digita; após salvar, ela é criptografada e não aparece novamente.",
     "aiProxyConfigured": "Proxy configurado",
     "aiProxyDirect": "Nenhum proxy do espaço configurado",
     "aiProxyNeedsKey": "Salve uma chave de API do Google antes de salvar o proxy.",
@@ -1200,7 +1200,7 @@
     "aiProxyRemove": "Remover proxy do Google",
     "aiProxySaved": "Proxy salvo.",
     "aiProxyRemoved": "Proxy removido.",
-    "aiProxyError": "Não foi possível salvar o proxy. Verifique a URL e adicione seu host:port a GOOGLE_PROXY_ALLOWED_HOSTS no .env do servidor; depois reinicie a API e o worker.",
+    "aiProxyError": "Não foi possível salvar o proxy. Insira a URL de um proxy HTTP(S) público com uma porta explícita e sem caminho.",
     "aiProviderDefault": "Modelo do provedor",
     "aiSave": "Salvar chave",
     "test": "Testar",

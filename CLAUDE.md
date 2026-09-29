@@ -33,7 +33,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 
 Every screen shares one design direction (`app/globals.css` + `components/ui/*`). New UI must keep these rules:
 - **One place** — a setting/action lives at exactly one fixed location, never duplicated: Settings pins to the sidebar bottom (mobile: rightmost tab), with the user/workspace block under it (mobile: inside Settings). A single-task screen puts its one primary action top-right (mobile: beside the title), with search immediately left of it. A settings page with independent forms places each Save beside its own field group and shows whether that value is saved.
-- **Advanced-only disclosure** — genuinely advanced options hide behind the shared `Advanced` component, never a bespoke "show more". Commonly needed configuration and its current state stay visible.
+- **Advanced-only disclosure** — optional settings such as the Google proxy use the shared `Advanced` component, never a bespoke "show more". Its dot marks configured or unsaved values; the expanded section shows current status beside each action.
 - **One verb, one word** — a recurring action keeps one fixed one-word verb everywhere (Add, Remove, Approve, Test), never rotating synonyms.
 - **Five statuses** — `StatusBadge`'s five colors are the only status colors that exist; no screen invents a sixth.
 - **Empty states teach** — an empty list names the one next action via `EmptyState`, never a bare "no results".

@@ -53,6 +53,27 @@ describe("Google proxy transport", () => {
     expect(isAllowedGoogleProxy("http://2130706433:8080")).toBe(false);
   });
 
+  it("never opens a socket to a hostname that resolves to a private address", async () => {
+    let connections = 0;
+    const server = createServer();
+    server.on("connection", () => connections++);
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected TCP address");
+      const proxyUrl = `http://localhost:${address.port}`;
+      expect(isAllowedGoogleProxy(proxyUrl)).toBe(true);
+      await expect(
+        googleProxyFetch("https://example.invalid", undefined, proxyUrl),
+      ).rejects.toThrow("Gemini proxy transport failed");
+      expect(connections).toBe(0);
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+  });
+
   it("keeps concurrent organizations on their own proxy dispatchers", async () => {
     const fetcher = vi
       .spyOn(globalThis, "fetch")

@@ -43,7 +43,7 @@
   },
   "Ui": {
     "advanced": "Дополнительно",
-    "advancedDirtyHint": "Здесь есть то, что вы ввели",
+    "advancedDirtyHint": "Здесь есть настроенные или несохранённые параметры",
     "close": "Закрыть"
   },
   "Brands": {
@@ -1192,7 +1192,7 @@
     "aiModelPlaceholder": "Модель провайдера",
     "aiProxyLabel": "URL прокси Google",
     "aiProxyPlaceholder": "http://user:password@host:port",
-    "aiProxyHint": "Необязательно для запросов Google этой рабочей области. URL шифруется и больше не показывается.",
+    "aiProxyHint": "Необязательно для запросов Google этой рабочей области. При вводе URL виден; после сохранения он шифруется и больше не показывается.",
     "aiProxyConfigured": "Прокси настроен",
     "aiProxyDirect": "Прокси рабочей области не настроен",
     "aiProxyNeedsKey": "Сначала сохраните API-ключ Google.",
@@ -1200,7 +1200,7 @@
     "aiProxyRemove": "Удалить прокси Google",
     "aiProxySaved": "Прокси сохранён.",
     "aiProxyRemoved": "Прокси удалён.",
-    "aiProxyError": "Не удалось сохранить прокси. Проверьте URL и добавьте его host:port в GOOGLE_PROXY_ALLOWED_HOSTS в серверном .env, затем перезапустите API и worker.",
+    "aiProxyError": "Не удалось сохранить прокси. Введите URL публичного HTTP(S)-прокси с портом, без пути.",
     "aiProviderDefault": "Модель провайдера",
     "aiSave": "Сохранить ключ",
     "test": "Проверить",

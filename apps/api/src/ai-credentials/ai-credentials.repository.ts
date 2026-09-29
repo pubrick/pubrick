@@ -163,7 +163,7 @@ export class AiCredentialsRepository {
   async updateGoogleProxy(orgId: string, proxyUrl: string | null) {
     // Never echo a URL, username or password in an HTTP validation error.
     if (proxyUrl !== null && !isAllowedGoogleProxy(proxyUrl)) {
-      throw new BadRequestException("Invalid or unapproved Google proxy destination");
+      throw new BadRequestException("Invalid or non-public Google proxy destination");
     }
     return db.transaction(async (tx) => {
       const rows = await tx
