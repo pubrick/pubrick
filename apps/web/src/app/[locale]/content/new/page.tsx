@@ -162,17 +162,24 @@ export default function NewContentPage() {
   }, []);
 
   useEffect(() => {
-    if (!brandId) {
-      setChannels([]);
-      setChannelIds(new Set());
-      return;
-    }
+    let current = true;
+    setChannels([]);
+    setChannelIds(new Set());
+    if (!brandId)
+      return () => {
+        current = false;
+      };
     api<Channel[]>(`/api/channels?brandId=${brandId}`)
       .then((cs) => {
+        if (!current) return;
         setChannels(cs);
-        setChannelIds(new Set());
       })
-      .catch(handleError);
+      .catch((error: unknown) => {
+        if (current) handleError(error);
+      });
+    return () => {
+      current = false;
+    };
   }, [brandId, handleError]);
 
   function toggleChannel(id: string) {
