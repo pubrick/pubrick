@@ -634,6 +634,17 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       expect(result.body).toEqual({ ok: false, reason: "invalid_key" });
     });
 
+    it("passes an accepted Google key verdict through without exposing the key", async () => {
+      const { agent } = await orgAgent();
+      await save(agent).expect(200);
+      probeOutcome = { ok: false, reason: "rate_limited", keyAccepted: true, records: [] };
+
+      const result = await agent.post("/api/ai-credentials/google/test").expect(200);
+
+      expect(result.body).toEqual({ ok: false, reason: "rate_limited", keyAccepted: true });
+      expect(JSON.stringify(result.body)).not.toContain(SECRET_KEY);
+    });
+
     it("bills the ledger for a call that failed after the provider counted tokens", async () => {
       const { agent } = await orgAgent();
       await save(agent).expect(200);

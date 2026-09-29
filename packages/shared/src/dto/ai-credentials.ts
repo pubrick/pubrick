@@ -248,4 +248,5 @@ export const MAX_TEST_CALLS_PER_HOUR = 60;
  */
 export type AiCredentialTestResult =
   | { ok: true; modelId: string; cost: CostSummary }
-  | { ok: false; reason: AiTestFailure };
+  // A Google models-list 200 can affirm the key even when generation failed.
+  | { ok: false; reason: AiTestFailure; keyAccepted?: true };

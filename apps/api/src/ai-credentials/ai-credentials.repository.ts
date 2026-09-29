@@ -469,7 +469,12 @@ export class AiCredentialsRepository {
     // under-reports spend.
     await this.recordUsage(orgId, outcome.records);
 
-    if (!outcome.ok) return { ok: false, reason: outcome.reason };
+    if (!outcome.ok)
+      return {
+        ok: false,
+        reason: outcome.reason,
+        ...(outcome.keyAccepted ? { keyAccepted: true as const } : {}),
+      };
     return {
       ok: true,
       modelId: outcome.modelId,

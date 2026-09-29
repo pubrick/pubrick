@@ -3,6 +3,7 @@ import {
   type AiCredential,
   classifyAiError,
   generateStructured,
+  googleProxyFetch,
   probeThinkingOptions,
   resolveModel,
   runFailureOf,
@@ -22,7 +23,7 @@ import { z } from "zod";
 export type ProbeOutcome = {
   /** Every physical round trip the SDK made, in ledger shape. */
   records: UsageRecord[];
-} & ({ ok: true; modelId: string } | { ok: false; reason: AiTestFailure });
+} & ({ ok: true; modelId: string } | { ok: false; reason: AiTestFailure; keyAccepted?: true });
 
 /** The smallest thing a model can be asked to produce and still prove structured output. */
 const PROBE_SCHEMA = z.object({ ok: z.literal(true) });
@@ -39,6 +40,8 @@ const PROBE_INSTRUCTIONS =
 // A settings Test must return a verdict while the first-party web rewrite is
 // still waiting. Full generation keeps its separate two-minute budget.
 const PROBE_TIMEOUT_MS = 20_000;
+const GOOGLE_KEY_CHECK_TIMEOUT_MS = 8_000;
+const GOOGLE_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 /**
  * The live half of the Test action: resolve the org's key into a model and make
@@ -95,7 +98,19 @@ export class AiCredentialProbe {
         records.push(record);
       });
     } catch (error) {
-      return { ok: false, reason: classifyProbeFailure(error, records), records };
+      const reason = classifyProbeFailure(error, records);
+      // A retryable generation error does not establish whether Google
+      // accepts the key. The models endpoint checks it without another paid
+      // generation. Only a 200 is affirmative; every other outcome keeps the
+      // original verdict and never exposes Google's response or proxy URL.
+      if (
+        credential.provider === "google" &&
+        reason === "rate_limited" &&
+        (await this.googleAcceptsKey(credential))
+      ) {
+        return { ok: false, reason, keyAccepted: true, records };
+      }
+      return { ok: false, reason, records };
     }
 
     // Which model actually answered: the id telemetry reported for the round
@@ -106,8 +121,9 @@ export class AiCredentialProbe {
   }
 
   /**
-   * The only lines in this feature that reach a provider — and the seam every
-   * test replaces.
+   * The only billable model call in this feature — and the seam every test
+   * replaces. A separate metadata request may follow a rate-limit failure to
+   * determine whether Google accepted the key.
    *
    * `protected`, not private: `run`'s failure classification is the part that
    * must never leak a key, so it has to be exercised for real. A test subclass
@@ -133,6 +149,29 @@ export class AiCredentialProbe {
     const args = probeCallArgs(credential);
     await generateStructured({ ...args, onUsage });
     return args.model.modelId;
+  }
+
+  protected async googleAcceptsKey(credential: AiCredential): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), GOOGLE_KEY_CHECK_TIMEOUT_MS);
+    try {
+      const response = await googleProxyFetch(
+        GOOGLE_MODELS_URL,
+        {
+          method: "GET",
+          headers: { "x-goog-api-key": credential.apiKey },
+          redirect: "manual",
+          signal: controller.signal,
+        },
+        credential.proxyUrl,
+      );
+      await response.body?.cancel();
+      return response.status === 200;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

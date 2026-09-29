@@ -538,6 +538,13 @@ export default function SettingsPage() {
       );
     }
     if (!result.ok) {
+      if (id === "google" && result.reason === "rate_limited" && result.keyAccepted) {
+        return (
+          <span role="alert" className="text-danger">
+            {t("aiTestGoogleKeyAcceptedQuota")}
+          </span>
+        );
+      }
       const proxyTimedOut =
         id === "google" &&
         result.reason === "timed_out" &&

@@ -739,6 +739,22 @@ describe("Settings — AI provider: Test", () => {
     );
   });
 
+  it("distinguishes an accepted Google key from exhausted generation quota", async () => {
+    installApi([], {
+      credentials: [googleKey],
+      test: { ok: false, reason: "rate_limited", keyAccepted: true },
+    });
+    await renderSettings();
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: en.SettingsPage.test }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      en.SettingsPage.aiTestGoogleKeyAcceptedQuota,
+    );
+  });
+
   it("points a proxied Google timeout at the saved proxy without blaming the key", async () => {
     installApi([], {
       credentials: [{ ...googleKey, proxyConfigured: true }],
