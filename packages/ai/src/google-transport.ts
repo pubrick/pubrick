@@ -136,10 +136,15 @@ export async function googleProxyFetch(
   try {
     // The organization-specific URL is captured in the caller's fetch function;
     // one global mutable selection could send a different org through this proxy.
-    let agent = agents.get(url);
+    // The operator's instance fallback may intentionally point at a local
+    // proxy. Keep its dispatcher separate from workspace-selected destinations.
+    const cacheKey = `${orgProxyUrl ? "workspace" : "instance"}:${url}`;
+    let agent = agents.get(cacheKey);
     if (!agent) {
-      agent = new ProxyAgent({ uri: url, proxyTls: { lookup: publicProxyLookup } });
-      agents.set(url, agent);
+      agent = orgProxyUrl
+        ? new ProxyAgent({ uri: url, proxyTls: { lookup: publicProxyLookup } })
+        : new ProxyAgent(url);
+      agents.set(cacheKey, agent);
       if (agents.size > MAX_CACHED_AGENTS) {
         const oldest = agents.entries().next().value;
         if (oldest) {
@@ -149,8 +154,8 @@ export async function googleProxyFetch(
         }
       }
     } else {
-      agents.delete(url);
-      agents.set(url, agent);
+      agents.delete(cacheKey);
+      agents.set(cacheKey, agent);
     }
     return await fetch(input, { ...init, dispatcher: agent } as RequestInit);
   } catch {
