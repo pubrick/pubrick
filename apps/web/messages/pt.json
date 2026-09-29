@@ -1223,6 +1223,7 @@
     "aiCostUnknown": "custo não informado ({count, plural, one {# chamada} other {# chamadas}})",
     "genericError": "Algo deu errado. Tente novamente.",
     "aiTestFailInvalidKey": "O provedor rejeitou esta chave de API.",
+    "aiTestFailGoogleKey": "A API Gemini não aceitou esta chave. O Pubrick usa atualmente a API do Google AI Studio; uma credencial do Google Cloud ou Vertex precisa de outra conexão.",
     "aiTestFailModelNotFound": "O provedor não reconhece este identificador de modelo.",
     "aiTestFailNoStructuredOutput": "O modelo respondeu, mas não conseguiu devolver a saída estruturada que o Pubrick precisa. Tente outro modelo.",
     "aiTestFailRateLimited": "O provedor está limitando as requisições ou está indisponível. Tente novamente em instantes.",

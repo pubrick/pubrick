@@ -1223,6 +1223,7 @@
     "aiCostUnknown": "стоимость не сообщена ({count, plural, one {# вызов} few {# вызова} many {# вызовов} other {# вызова}})",
     "genericError": "Что-то пошло не так. Попробуйте ещё раз.",
     "aiTestFailInvalidKey": "Провайдер отклонил этот API-ключ.",
+    "aiTestFailGoogleKey": "Gemini API не принял этот ключ. Сейчас Pubrick подключается через Google AI Studio; для ключа Google Cloud или Vertex потребуется отдельное подключение.",
     "aiTestFailModelNotFound": "Провайдер не знает такой идентификатор модели.",
     "aiTestFailNoStructuredOutput": "Модель ответила, но не смогла вернуть структурированный результат, который нужен Pubrick. Попробуйте другую модель.",
     "aiTestFailRateLimited": "Провайдер ограничивает запросы или временно недоступен. Попробуйте ещё раз чуть позже.",

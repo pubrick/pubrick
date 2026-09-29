@@ -538,6 +538,13 @@ export default function SettingsPage() {
       );
     }
     if (!result.ok) {
+      if (id === "google" && result.reason === "invalid_key") {
+        return (
+          <span role="alert" className="text-danger">
+            {t("aiTestFailGoogleKey")}
+          </span>
+        );
+      }
       if (id === "google" && result.reason === "rate_limited" && result.keyAccepted) {
         return (
           <span role="alert" className="text-danger">

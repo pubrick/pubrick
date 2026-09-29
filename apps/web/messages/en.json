@@ -1223,6 +1223,7 @@
     "aiCostUnknown": "cost not reported ({count, plural, one {# call} other {# calls}})",
     "genericError": "Something went wrong. Please try again.",
     "aiTestFailInvalidKey": "The provider rejected this API key.",
+    "aiTestFailGoogleKey": "The Gemini API did not accept this key. Pubrick currently uses the Google AI Studio API; a Google Cloud or Vertex credential needs a separate connection.",
     "aiTestFailModelNotFound": "The provider does not recognise this model id.",
     "aiTestFailNoStructuredOutput": "The model answered, but could not return the structured output Pubrick needs. Try another model.",
     "aiTestFailRateLimited": "The provider is rate-limiting or temporarily unavailable. Try again shortly.",

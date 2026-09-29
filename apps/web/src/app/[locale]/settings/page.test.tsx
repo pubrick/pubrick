@@ -724,7 +724,7 @@ describe("Settings — AI provider: Test", () => {
     expect(line.textContent).not.toContain("$0.00");
   });
 
-  it("translates the failure code — the provider's own sentence never reaches the screen", async () => {
+  it("explains a rejected Google key without leaking the provider's sentence", async () => {
     // The API answers with a code precisely because a provider's 401 body can
     // quote the submitted key back. A code also has four translations; an
     // English sentence from Google has one.
@@ -734,9 +734,7 @@ describe("Settings — AI provider: Test", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      en.SettingsPage.aiTestFailInvalidKey,
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.SettingsPage.aiTestFailGoogleKey);
   });
 
   it("distinguishes an accepted Google key from exhausted generation quota", async () => {
