@@ -501,6 +501,7 @@ describe("Settings — Google proxy", () => {
   it("asks for a saved Google key before proxy setup", async () => {
     await renderSettings();
     const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
     await user.type(
       screen.getByLabelText(en.SettingsPage.aiProxyLabel),
       "http://proxy.example:8080",
@@ -509,16 +510,19 @@ describe("Settings — Google proxy", () => {
     expect(screen.getByRole("button", { name: en.SettingsPage.aiProxySave })).toBeDisabled();
   });
 
-  it("shows the proxy without expanding Advanced and saves it independently of the key", async () => {
+  it("keeps the proxy in Advanced, shows entered text, and saves it independently", async () => {
     const calls: Call[] = [];
     installApi(calls, { credentials: [googleKey] });
     await renderSettings();
 
     const user = userEvent.setup();
     const proxy = screen.getByLabelText(en.SettingsPage.aiProxyLabel);
-    expect(proxy).toHaveAttribute("type", "password");
+    expect(proxy).not.toBeVisible();
+    await user.click(screen.getByText(en.Ui.advanced));
+    expect(proxy).toHaveAttribute("type", "text");
     expect(proxy).toBeVisible();
     await user.type(proxy, "http://user:secret@proxy.example:8080");
+    expect(proxy).toHaveValue("http://user:secret@proxy.example:8080");
     expect(screen.getByText(en.SettingsPage.aiProxyPending)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxySave }));
 
@@ -537,12 +541,38 @@ describe("Settings — Google proxy", () => {
     expect(screen.queryByText(/user:secret/)).not.toBeInTheDocument();
   });
 
+  it("submits the proxy with Enter without submitting the key form", async () => {
+    const calls: Call[] = [];
+    installApi(calls, { credentials: [googleKey] });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiProxyLabel),
+      "http://proxy.example:8080{enter}",
+    );
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: "/api/ai-credentials/google/proxy",
+        method: "PUT",
+        body: { proxyUrl: "http://proxy.example:8080" },
+      }),
+    );
+    expect(calls.some((call) => call.path === "/api/ai-credentials" && call.method === "PUT")).toBe(
+      false,
+    );
+  });
+
   it("removes a stored proxy without sending or deleting the Google key", async () => {
     const calls: Call[] = [];
     installApi(calls, { credentials: [{ ...googleKey, proxyConfigured: true }] });
     await renderSettings();
 
     const user = userEvent.setup();
+    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+    await user.click(screen.getByText(en.Ui.advanced));
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyRemove }));
 
     await waitFor(() =>
@@ -565,6 +595,7 @@ describe("Settings — Google proxy", () => {
     await renderSettings();
 
     const user = userEvent.setup();
+    await user.click(screen.getByText(en.Ui.advanced));
     await user.type(
       screen.getByLabelText(en.SettingsPage.aiProxyLabel),
       "http://user:secret@proxy.example:8080",
