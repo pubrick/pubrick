@@ -339,6 +339,10 @@ describe("what one press of Test buys", () => {
     expect(probeCallArgs(credential).maxRetries).toBe(0);
   });
 
+  it("bounds a Test below the web proxy deadline", () => {
+    expect(probeCallArgs(credential).timeoutMs).toBe(20_000);
+  });
+
   it("asks for the cheapest thinking the house model accepts", () => {
     // The prompt is two words and the answer is two words. Everything else the
     // press is billed for is reasoning the model does by default, at the output

@@ -212,4 +212,21 @@ describe("Google proxy transport", () => {
       expect(classified.message).not.toContain("secret");
     }
   });
+
+  it("preserves a caller deadline when an in-flight proxy request aborts", async () => {
+    const controller = new AbortController();
+    const deadline = new DOMException("probe deadline", "TimeoutError");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      controller.abort(deadline);
+      throw init?.signal?.reason;
+    });
+
+    await expect(
+      googleProxyFetch(
+        "https://generativelanguage.googleapis.com/v1beta/models",
+        { signal: controller.signal },
+        "http://user:secret@proxy.example:8080",
+      ),
+    ).rejects.toBe(deadline);
+  });
 });

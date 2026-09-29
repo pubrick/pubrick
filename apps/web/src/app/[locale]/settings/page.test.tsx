@@ -652,6 +652,21 @@ describe("Settings — AI provider: Test", () => {
     );
   });
 
+  it("points a proxied Google timeout at the saved proxy without blaming the key", async () => {
+    installApi([], {
+      credentials: [{ ...googleKey, proxyConfigured: true }],
+      test: { ok: false, reason: "timed_out" },
+    });
+    await renderSettings();
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: en.SettingsPage.test }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      en.SettingsPage.aiTestFailTimedOutProxy,
+    );
+  });
+
   it("names the real limit when the workspace has spent its hourly test budget", async () => {
     // The number is not on the wire: both sides import
     // `MAX_TEST_CALLS_PER_HOUR`, exactly as `run_limit_reached` does, so the

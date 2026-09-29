@@ -505,9 +505,17 @@ export default function SettingsPage() {
       );
     }
     if (!result.ok) {
+      const proxyTimedOut =
+        id === "google" &&
+        result.reason === "timed_out" &&
+        credentials?.some(
+          (credential) => credential.provider === "google" && credential.proxyConfigured,
+        );
       return (
         <span role="alert" className="text-danger">
-          {t(TEST_FAILURE_KEYS[result.reason], TEST_FAILURE_VALUES[result.reason])}
+          {proxyTimedOut
+            ? t("aiTestFailTimedOutProxy")
+            : t(TEST_FAILURE_KEYS[result.reason], TEST_FAILURE_VALUES[result.reason])}
         </span>
       );
     }

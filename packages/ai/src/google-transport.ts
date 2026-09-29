@@ -158,7 +158,11 @@ export async function googleProxyFetch(
       agents.set(cacheKey, agent);
     }
     return await fetch(input, { ...init, dispatcher: agent } as RequestInit);
-  } catch {
+  } catch (error) {
+    // A model call's deadline is carried by its signal. Replacing that abort
+    // with a generic proxy error hides the deadline from the classifier and
+    // leaves Test waiting until the browser's rewrite drops the connection.
+    if (init?.signal?.aborted) throw init.signal.reason ?? error;
     // A transport exception can carry the proxy URL and userinfo. It also
     // might follow an upstream charge, so callers keep their existing ledger
     // and ambiguity policies, while jobs may retry a temporary proxy outage.

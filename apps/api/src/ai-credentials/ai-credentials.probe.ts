@@ -36,6 +36,10 @@ const PROBE_PROMPT = "Say ok";
 const PROBE_INSTRUCTIONS =
   'You are a connectivity probe. Reply with the JSON value {"ok": true} and nothing else.';
 
+// A settings Test must return a verdict while the first-party web rewrite is
+// still waiting. Full generation keeps its separate two-minute budget.
+const PROBE_TIMEOUT_MS = 20_000;
+
 /**
  * The live half of the Test action: resolve the org's key into a model and make
  * one structured call with it.
@@ -75,6 +79,7 @@ export function probeCallArgs(credential: AiCredential) {
     instructions: PROBE_INSTRUCTIONS,
     prompt: PROBE_PROMPT,
     maxRetries: 0,
+    timeoutMs: PROBE_TIMEOUT_MS,
     ...(thinking === undefined ? {} : { providerOptions: thinking }),
   };
 }
