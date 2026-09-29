@@ -120,6 +120,7 @@ describe("Google proxy transport", () => {
   it("uses Node's HTTP proxy dispatcher and sends proxy auth only to the proxy", async () => {
     let seenUrl: string | undefined;
     let seenAuth: string | undefined;
+    let seenConnectHost: string | undefined;
     const sockets = new Set<Socket>();
     const server = createServer((request, response) => {
       seenUrl = request.url;
@@ -134,6 +135,7 @@ describe("Google proxy transport", () => {
     server.on("connect", (request, socket) => {
       seenUrl = request.url;
       seenAuth = request.headers["proxy-authorization"];
+      seenConnectHost = request.headers.host;
       socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       socket.once("data", () => {
         socket.end("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nthrough-proxy");
@@ -149,6 +151,9 @@ describe("Google proxy transport", () => {
       expect(await response.text()).toBe("through-proxy");
       expect(seenUrl).toMatch(/upstream\.invalid/);
       expect(seenAuth).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
+      // Undici's proxy Client supplies its own Host after we remove the
+      // target Host. The Atools proxy hangs when CONNECT carries the target.
+      expect(seenConnectHost).toBe(`localhost:${address.port}`);
     } finally {
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();

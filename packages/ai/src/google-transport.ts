@@ -1,7 +1,7 @@
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { PermanentError, TransientError } from "@pubrick/shared";
-import { ProxyAgent } from "undici";
+import { Client, type Dispatcher, ProxyAgent } from "undici";
 import { z } from "zod";
 
 const hostPortPattern = /^(?:[a-z0-9.-]+|\[[0-9a-f:]+\]):[0-9]{1,5}$/i;
@@ -120,6 +120,46 @@ const publicProxyLookup: LookupFunction = (hostname, options, callback) => {
 const MAX_CACHED_AGENTS = 32;
 const agents = new Map<string, ProxyAgent>();
 
+type ProxyConnectOptions = Omit<Dispatcher.ConnectOptions, "origin">;
+
+/**
+ * Some HTTP proxies silently stall CONNECT when Undici sets Host to the
+ * upstream destination. Python's requests client omits that target Host, and
+ * this matters for the workspace proxy used by Atools. Only the proxy handshake
+ * changes; the tunneled HTTPS request still carries its normal Host header
+ * and TLS verification.
+ *
+ * `clientFactory` is Undici's supported ProxyAgent extension point. Keeping a
+ * Client subclass here avoids a separate proxy implementation or dependency.
+ */
+class CompatibleProxyClient extends Client {
+  override connect(options: ProxyConnectOptions): Promise<Dispatcher.ConnectData>;
+  override connect(
+    options: ProxyConnectOptions,
+    callback: (error: Error | null, data: Dispatcher.ConnectData) => void,
+  ): void;
+  override connect(
+    options: ProxyConnectOptions,
+    callback?: (error: Error | null, data: Dispatcher.ConnectData) => void,
+  ): Promise<Dispatcher.ConnectData> | undefined {
+    const headers = options.headers;
+    const next =
+      headers && !Array.isArray(headers)
+        ? {
+            ...options,
+            headers: Object.fromEntries(
+              Object.entries(headers).filter(([name]) => name.toLowerCase() !== "host"),
+            ),
+          }
+        : options;
+    if (callback) {
+      super.connect(next, callback);
+      return;
+    }
+    return super.connect(next);
+  }
+}
+
 /** Keep the proxy URL and its optional credentials entirely in the server process. */
 export async function googleProxyFetch(
   input: RequestInfo | URL,
@@ -141,9 +181,12 @@ export async function googleProxyFetch(
     const cacheKey = `${orgProxyUrl ? "workspace" : "instance"}:${url}`;
     let agent = agents.get(cacheKey);
     if (!agent) {
-      agent = orgProxyUrl
-        ? new ProxyAgent({ uri: url, proxyTls: { lookup: publicProxyLookup } })
-        : new ProxyAgent(url);
+      agent = new ProxyAgent({
+        uri: url,
+        ...(orgProxyUrl ? { proxyTls: { lookup: publicProxyLookup } } : {}),
+        clientFactory: (origin, options) =>
+          new CompatibleProxyClient(origin, options as Client.Options),
+      });
       agents.set(cacheKey, agent);
       if (agents.size > MAX_CACHED_AGENTS) {
         const oldest = agents.entries().next().value;
