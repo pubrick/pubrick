@@ -30,7 +30,6 @@ const url = process.env.TEST_DATABASE_URL;
 
 /** The key every test stores. Nothing in any response body may contain it. */
 const SECRET_KEY = "sk-live-never-leak-this-0123456789";
-const originalProxyAllowlist = process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
 
 describe.skipIf(!url)("ai credentials e2e", () => {
   let app: INestApplication;
@@ -51,7 +50,6 @@ describe.skipIf(!url)("ai credentials e2e", () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
     // Migrations run once for the whole suite in vitest.global-setup.ts — see the
     // comment there. Do NOT add a runMigrations() call here.
     const { AppModule } = await import("../app.module");
@@ -84,8 +82,6 @@ describe.skipIf(!url)("ai credentials e2e", () => {
   afterAll(async () => {
     await app.close();
     await direct.pool.end();
-    if (originalProxyAllowlist === undefined) delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
-    else process.env.GOOGLE_PROXY_ALLOWED_HOSTS = originalProxyAllowlist;
   });
 
   beforeEach(() => {
@@ -266,11 +262,15 @@ describe.skipIf(!url)("ai credentials e2e", () => {
         .expect(400);
       expect(JSON.stringify(rejected.body)).not.toContain(proxyUrl);
       expect(JSON.stringify(rejected.body)).not.toContain("private");
-      const unapproved = await agent
+      const privateTarget = await agent
         .put("/api/ai-credentials/google/proxy")
-        .send({ proxyUrl: "http://alice:private@unapproved.example:8080" })
+        .send({ proxyUrl: "http://alice:private@127.0.0.1:8080" })
         .expect(400);
-      expect(JSON.stringify(unapproved.body)).not.toContain("private");
+      expect(JSON.stringify(privateTarget.body)).not.toContain("private");
+      await agent
+        .put("/api/ai-credentials/google/proxy")
+        .send({ proxyUrl: "http://alice:private@unlisted.example:8080" })
+        .expect(200);
     });
 
     it("omitting defaultModel stores null, so the provider's own default applies", async () => {

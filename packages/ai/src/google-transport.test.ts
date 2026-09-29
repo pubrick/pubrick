@@ -20,45 +20,40 @@ import {
 import { resolveModel } from "./provider.js";
 
 const original = process.env.GOOGLE_API_PROXY;
-const originalAllowlist = process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
 afterEach(() => {
   if (original === undefined) delete process.env.GOOGLE_API_PROXY;
   else process.env.GOOGLE_API_PROXY = original;
-  if (originalAllowlist === undefined) delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
-  else process.env.GOOGLE_PROXY_ALLOWED_HOSTS = originalAllowlist;
   vi.restoreAllMocks();
 });
 
 describe("Google proxy transport", () => {
-  it("rejects unapproved workspace proxy destinations even after saving", async () => {
+  it("accepts any public proxy destination without operator setup and rejects private addresses", async () => {
     delete process.env.GOOGLE_API_PROXY;
-    delete process.env.GOOGLE_PROXY_ALLOWED_HOSTS;
     const workspace = "http://alice:private@proxy.example:8080";
-    expect(isAllowedGoogleProxy(workspace)).toBe(false);
-    const fetcher = vi.spyOn(globalThis, "fetch");
-    await expect(googleProxyFetch("https://example.invalid", undefined, workspace)).rejects.toThrow(
-      "not approved",
-    );
-    expect(fetcher).not.toHaveBeenCalled();
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
     expect(isAllowedGoogleProxy(workspace)).toBe(true);
-    expect(isAllowedGoogleProxy("http://alice:private@other.example:8080")).toBe(false);
-    process.env.GOOGLE_API_PROXY = "http://different:secret@fallback.example:3128";
-    expect(isAllowedGoogleProxy("http://alice:private@fallback.example:3128")).toBe(true);
+    expect(isAllowedGoogleProxy("http://alice:private@other.example:8080")).toBe(true);
+    expect(isAllowedGoogleProxy("http://alice:private@143.20.164.214:6917")).toBe(true);
+    for (const host of ["127.0.0.1", "10.0.0.1", "169.254.169.254", "[::1]"]) {
+      expect(isAllowedGoogleProxy(`http://${host}:8080`)).toBe(false);
+    }
+    const fetcher = vi.spyOn(globalThis, "fetch");
+    await expect(
+      googleProxyFetch("https://example.invalid", undefined, "http://127.0.0.1:8080"),
+    ).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("rejects URL syntax that points somewhere other than the approved host", () => {
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "proxy.example:8080";
+  it("rejects ambiguous URL syntax and URL-encoded local addresses", () => {
     const ambiguous = "http://127.0.0.1:8080\\@proxy.example:8080/..";
     expect(new URL(ambiguous).hostname).toBe("127.0.0.1");
     expect(googleProxyEnvSchema.safeParse(ambiguous).success).toBe(false);
     expect(isAllowedGoogleProxy(ambiguous)).toBe(false);
     expect(isAllowedGoogleProxy("http://proxy.example:08080")).toBe(true);
-    expect(isAllowedGoogleProxy("http://proxy.example:80")).toBe(false);
+    expect(isAllowedGoogleProxy("http://proxy.example:80")).toBe(true);
+    expect(isAllowedGoogleProxy("http://2130706433:8080")).toBe(false);
   });
 
   it("keeps concurrent organizations on their own proxy dispatchers", async () => {
-    process.env.GOOGLE_PROXY_ALLOWED_HOSTS = "one.example:8080,two.example:8080";
     const fetcher = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response("refused", { status: 400 }));
