@@ -64,6 +64,7 @@ const googleKey: AiCredentialPublic = {
 };
 
 function installApi(calls: Call[], handlers: Handlers = {}) {
+  let storedCredentials = handlers.credentials ?? [];
   let proxyConfigured =
     handlers.credentials?.find((c) => c.provider === "google")?.proxyConfigured ?? false;
   mockApi.mockImplementation(async (...args: unknown[]) => {
@@ -77,7 +78,7 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
     });
 
     if (method === "GET" && path === "/api/ai-credentials")
-      return (handlers.credentials ?? []).map((credential) =>
+      return storedCredentials.map((credential) =>
         credential.provider === "google" ? { ...credential, proxyConfigured } : credential,
       );
     if (method === "GET" && path === "/api/paid-replies/organization")
@@ -90,7 +91,15 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
       };
     if (method === "GET" && path === "/api/ai-credentials/spend")
       return handlers.spend ?? ({ kind: "exact", usd: 0 } satisfies CostSummary);
-    if (method === "PUT" && path === "/api/ai-credentials") return googleKey;
+    if (method === "PUT" && path === "/api/ai-credentials") {
+      const requestedProvider = (JSON.parse(String(init?.body)) as { provider: string }).provider;
+      const saved = { ...googleKey, provider: requestedProvider } as AiCredentialPublic;
+      storedCredentials = [
+        ...storedCredentials.filter((credential) => credential.provider !== requestedProvider),
+        saved,
+      ];
+      return saved;
+    }
     if (method === "PUT" && path === "/api/ai-credentials/google/proxy") {
       if (handlers.proxyError) throw handlers.proxyError;
       proxyConfigured =
@@ -337,7 +346,7 @@ describe("Settings — AI provider: saving a key", () => {
   it("teaches the next action when no key is stored yet", async () => {
     await renderSettings();
 
-    expect(screen.getByText(en.SettingsPage.aiEmpty)).toBeInTheDocument();
+    expect(screen.getByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).toBeInTheDocument();
   });
 
   it("does not claim there is no key before the list has come back", async () => {
@@ -347,11 +356,36 @@ describe("Settings — AI provider: saving a key", () => {
     installApi([], { credentials: [googleKey] });
     render(<SettingsPage />);
 
-    expect(screen.queryByText(en.SettingsPage.aiEmpty)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).not.toBeInTheDocument();
 
     // …and the real answer still arrives.
     expect(await screen.findByText("Google")).toBeInTheDocument();
-    expect(screen.queryByText(en.SettingsPage.aiEmpty)).not.toBeInTheDocument();
+    expect(screen.queryByText(en.SettingsPage.aiKeyNotStored.replace("{provider}", "Google"))).not.toBeInTheDocument();
+  });
+
+  it("shows the stored key separately from an empty replacement field and keeps Save with the form", async () => {
+    installApi([], { credentials: [googleKey] });
+    await renderSettings();
+
+    expect(
+      screen.getByText(en.SettingsPage.aiKeyStored.replace("{provider}", "Google")),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(en.SettingsPage.aiKeyLabel)).toHaveValue("");
+    const main = within(screen.getByRole("main"));
+    expect(main.getByRole("button", { name: en.SettingsPage.aiSave })).toBeInTheDocument();
+  });
+
+  it("confirms a saved key independently of the test result", async () => {
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk-live-abcdefgh12345678");
+    expect(screen.getByText(en.SettingsPage.aiKeyPending)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(en.SettingsPage.aiKeySavedNotice);
+    expect(
+      screen.getByText(en.SettingsPage.aiKeyStored.replace("{provider}", "Google")),
+    ).toBeInTheDocument();
   });
 
   it("sends the key as a PUT, with the body pinned twice", async () => {
@@ -429,18 +463,15 @@ describe("Settings — Google proxy", () => {
   it("asks for a saved Google key before proxy setup", async () => {
     await renderSettings();
     const user = userEvent.setup();
-    await user.click(screen.getByText(en.Ui.advanced));
     await user.type(
       screen.getByLabelText(en.SettingsPage.aiProxyLabel),
       "http://proxy.example:8080",
     );
     expect(screen.getByText(en.SettingsPage.aiProxyNeedsKey)).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: en.SettingsPage.aiProxySave }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: en.SettingsPage.aiProxySave })).toBeDisabled();
   });
 
-  it("keeps the proxy secret in Advanced and saves it independently of the key", async () => {
+  it("shows the proxy without expanding Advanced and saves it independently of the key", async () => {
     const calls: Call[] = [];
     installApi(calls, { credentials: [googleKey] });
     await renderSettings();
@@ -448,9 +479,9 @@ describe("Settings — Google proxy", () => {
     const user = userEvent.setup();
     const proxy = screen.getByLabelText(en.SettingsPage.aiProxyLabel);
     expect(proxy).toHaveAttribute("type", "password");
-    expect(proxy).not.toBeVisible();
-    await user.click(screen.getByText(en.Ui.advanced));
+    expect(proxy).toBeVisible();
     await user.type(proxy, "http://user:secret@proxy.example:8080");
+    expect(screen.getByText(en.SettingsPage.aiProxyPending)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxySave }));
 
     await waitFor(() =>
@@ -474,7 +505,6 @@ describe("Settings — Google proxy", () => {
     await renderSettings();
 
     const user = userEvent.setup();
-    await user.click(screen.getByText(en.Ui.advanced));
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyRemove }));
 
     await waitFor(() =>
@@ -497,7 +527,6 @@ describe("Settings — Google proxy", () => {
     await renderSettings();
 
     const user = userEvent.setup();
-    await user.click(screen.getByText(en.Ui.advanced));
     await user.type(
       screen.getByLabelText(en.SettingsPage.aiProxyLabel),
       "http://user:secret@proxy.example:8080",
