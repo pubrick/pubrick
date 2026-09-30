@@ -12,6 +12,7 @@ import {
   autopilotOperationsPageSchema,
   autopilotScanPageSchema,
   LIVE_RUN_STATUSES,
+  MANUAL_AUTOPILOT_QUEUE,
   manualTopicPlanAttemptSchema,
 } from "@pubrick/shared";
 import { type AnyColumn, and, asc, desc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
@@ -529,6 +530,12 @@ export class AutopilotRepository {
             eq(schema.autopilotManualAttempts.brandId, brandId),
             inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
             sql`${schema.autopilotManualAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+            sql`not exists (
+              select 1 from pgboss.job as active_job
+              where active_job.name = ${MANUAL_AUTOPILOT_QUEUE}
+                and active_job.id = ${schema.autopilotManualAttempts.id}
+                and active_job.state in ('created', 'retry', 'active')
+            )`,
           ),
         );
       const [latest] = await tx
