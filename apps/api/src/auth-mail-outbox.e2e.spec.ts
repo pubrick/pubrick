@@ -10,6 +10,7 @@ describe.skipIf(!url)("encrypted durable authentication outbox admission", () =>
   let database: ReturnType<typeof createDb>;
   let boss: PgBoss;
   let enqueue: typeof import("./auth-mail-outbox.repository").enqueueAuthMail;
+  let origin: string;
   const suffix = randomUUID();
   const names = { queue: `auth-mail-test-${suffix}`, deadLetter: `auth-mail-test-dlq-${suffix}` };
   const token = `fixture_${suffix}`;
@@ -30,6 +31,7 @@ describe.skipIf(!url)("encrypted durable authentication outbox admission", () =>
       expiresAt: new Date(Date.now() + 3600000),
     });
     enqueue = (await import("./auth-mail-outbox.repository")).enqueueAuthMail;
+    origin = (await import("./env")).env.WEB_ORIGIN;
   });
   afterAll(async () => {
     await boss?.deleteAllJobs(names.queue);
@@ -47,7 +49,7 @@ describe.skipIf(!url)("encrypted durable authentication outbox admission", () =>
     userId: "fixture_user",
     recipient: "synthetic@example.com",
     locale: "en" as const,
-    link: `http://localhost:3000/api/auth/reset-password/${token}`,
+    link: `${origin}/api/auth/reset-password/${token}`,
   });
   it("serializes competing producers and commits exactly one encrypted job under the cap", async () => {
     const results = await Promise.allSettled([
