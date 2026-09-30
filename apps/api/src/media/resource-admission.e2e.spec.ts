@@ -146,6 +146,7 @@ describe.skipIf(!url)("native API resource writers", () => {
       .insert(schema.brands)
       .values({ orgId, name: "Existing brand" })
       .returning();
+    if (!brand) throw new Error("Missing fixture brand");
     return { orgId, brandId: brand.id, planId };
   }
   async function assertQuota(error: unknown, resource: string) {
@@ -156,11 +157,11 @@ describe.skipIf(!url)("native API resource writers", () => {
       resource,
     });
   }
-  it("admits exactly one simultaneous brand at the final seat and commits no refused row", async () => {
+  it("admits exactly one simultaneous brand at the final available brand slot and commits no refused row", async () => {
     const f = await fixture({ brands: 2 });
     const results = await Promise.allSettled([
-      brands.create(f.orgId, { name: "One" }),
-      brands.create(f.orgId, { name: "Two" }),
+      brands.create(f.orgId, { name: "One", contentLanguage: "en", automaticClaimEvidence: false }),
+      brands.create(f.orgId, { name: "Two", contentLanguage: "en", automaticClaimEvidence: false }),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const refusal = results.find((r) => r.status === "rejected");
@@ -174,7 +175,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     const f = await fixture();
     const results = await Promise.allSettled(
       ["One", "Two"].map((name) =>
-        channels.create(f.orgId, { brandId: f.brandId, platform: "vc", name }),
+        channels.create(f.orgId, { brandId: f.brandId, platform: "vc_ru", name }),
       ),
     );
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
@@ -228,6 +229,29 @@ describe.skipIf(!url)("native API resource writers", () => {
         .where(eq(schema.mediaAssets.orgId, f.orgId)),
     ).toHaveLength(0);
   });
+  it("allows expired workspaces to delete media and removes committed disk bytes", async () => {
+    const f = await fixture();
+    const asset = await media.upload(f.orgId, f.brandId, {
+      buffer: png,
+      originalname: "fixture.png",
+      mimetype: "image/png",
+    });
+    if (!asset) throw new Error("Missing uploaded fixture image");
+    await connection.db
+      .update(schema.organizationBillingState)
+      .set({ access: false })
+      .where(eq(schema.organizationBillingState.orgId, f.orgId));
+    await media.delete(f.orgId, asset.id);
+    await expect(readFile(path.join(mediaDir, `${asset.id}.jpg`))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.id, asset.id)),
+    ).toHaveLength(0);
+  });
   async function cropFixture() {
     const f = await fixture();
     const asset = await media.upload(f.orgId, f.brandId, {
@@ -235,10 +259,12 @@ describe.skipIf(!url)("native API resource writers", () => {
       originalname: "source.png",
       mimetype: "image/png",
     });
+    if (!asset) throw new Error("Missing uploaded fixture image");
     const [item] = await connection.db
       .insert(schema.contentItems)
       .values({ orgId: f.orgId, brandId: f.brandId, body: "Paragraph.", imagesRevision: 1 })
       .returning();
+    if (!item) throw new Error("Missing fixture content");
     const [slot] = await connection.db
       .insert(schema.contentImageSlots)
       .values({
@@ -250,6 +276,7 @@ describe.skipIf(!url)("native API resource writers", () => {
         alt: "Image",
       })
       .returning();
+    if (!slot) throw new Error("Missing fixture slot");
     return {
       ...f,
       asset,
@@ -262,11 +289,14 @@ describe.skipIf(!url)("native API resource writers", () => {
     const f = await cropFixture();
     const result = await images.crop(f.orgId, f.item.id, f.slot.id, f.crop);
     expect(result.revision).toBe(2);
-    expect(result.images[0].needsReview).toBe(true);
+    const image = result.images[0];
+    if (!image) throw new Error("Missing cropped slot");
+    expect(image.needsReview).toBe(true);
     const [asset] = await connection.db
       .select()
       .from(schema.mediaAssets)
-      .where(eq(schema.mediaAssets.id, result.images[0].mediaId));
+      .where(eq(schema.mediaAssets.id, image.mediaId));
+    if (!asset) throw new Error("Missing cropped media");
     const bytes = await readFile(path.join(mediaDir, `${asset.id}.jpg`));
     expect(asset.byteSize).toBe(bytes.length);
     expect(await sharp(bytes).metadata()).toMatchObject({ format: "jpeg", width: 4, height: 3 });
@@ -277,6 +307,7 @@ describe.skipIf(!url)("native API resource writers", () => {
       .select()
       .from(schema.billingPlanVersions)
       .where(eq(schema.billingPlanVersions.id, f.planId));
+    if (!plan) throw new Error("Missing fixture plan");
     await connection.db
       .update(schema.billingPlanVersions)
       .set({ limits: { ...plan.limits, mediaBytes: f.asset.byteSize } })
@@ -289,7 +320,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     expect(await readdir(mediaDir)).toEqual(before);
     const saved = await images.list(f.orgId, f.item.id);
     expect(saved.revision).toBe(1);
-    expect(saved.images[0].mediaId).toBe(f.asset.id);
+    expect(saved.images[0]?.mediaId).toBe(f.asset.id);
   });
   it("allows an editor to commit during crop processing, then rejects and cleans stale output", async () => {
     const f = await cropFixture();
