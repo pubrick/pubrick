@@ -11,15 +11,6 @@ import { CheckoutCore } from "./checkout-core";
 import { CleanupCore } from "./cleanup-core";
 
 const url = process.env.BILLING_TEST_DATABASE_URL;
-if (url) {
-  const parsed = new URL(url);
-  if (
-    process.env.PUBRICK_BILLING_DISPOSABLE !== "1" ||
-    !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) ||
-    !/^\/pubrick_billing_[a-z0-9_]+$/.test(parsed.pathname)
-  )
-    throw new Error("Billing persistence tests require an explicitly disposable local database");
-}
 describe.skipIf(!url)("durable billing persistence on a disposable database", () => {
   afterEach(() => vi.restoreAllMocks());
   const connection = createDb(url ?? "postgres://unused");
@@ -72,7 +63,15 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     return { orgId, userId };
   }
   beforeAll(async () => {
-    await runMigrations(url as string);
+    if (!url) throw new Error("Missing billing test database URL");
+    const parsed = new URL(url);
+    if (
+      process.env.PUBRICK_BILLING_DISPOSABLE !== "1" ||
+      !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) ||
+      !/^\/pubrick_billing_[a-z0-9_]+$/.test(parsed.pathname)
+    )
+      throw new Error("Billing persistence tests require an explicitly disposable local database");
+    await runMigrations(url);
     await catalog.initialize();
     await repository.publishCatalog(catalog.list());
   }, 120000);

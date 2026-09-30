@@ -77,8 +77,19 @@ jobs:
       # TEST_DATABASE_URL, and turbo would otherwise run both packages' test tasks at once —
       # four bootstrap-heavy workers against one database. This matches the local rule.
       # Not `pnpm test -- …`, which would forward the flags to vitest instead of turbo.
+      # Billing persistence owns a separate disposable database; its safety gate
+      # must run in CI rather than silently skipping behind a missing URL.
+      - name: Provision disposable billing database
+        env:
+          BILLING_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: >-
+          docker exec "$BILLING_POSTGRES_CONTAINER_ID"
+          psql -X --set=ON_ERROR_STOP=1 --username test --dbname pubrick_test
+          --command "CREATE DATABASE pubrick_billing_test"
       - run: pnpm exec turbo run test --force --concurrency=1
         env:
           TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
+          BILLING_TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_billing_test
+          PUBRICK_BILLING_DISPOSABLE: "1"
           BETTER_AUTH_SECRET: pubrick-test-secret
           APP_ENCRYPTION_KEY: 6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=

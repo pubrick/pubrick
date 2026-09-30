@@ -98,7 +98,7 @@ import { describe, expect, it } from "vitest";
  * Environment variables this package's suites may be gated on. A new env-gated suite
  * declares its variable here AND in turbo.json's `test.env` — check 5 enforces the pair.
  */
-const GATE_VARIABLES: readonly string[] = ["TEST_DATABASE_URL"];
+const GATE_VARIABLES: readonly string[] = ["TEST_DATABASE_URL", "BILLING_TEST_DATABASE_URL"];
 
 /** Vitest's cwd is the package root under both `pnpm --filter …` and turbo. */
 const SRC = path.resolve(process.cwd(), "src");
