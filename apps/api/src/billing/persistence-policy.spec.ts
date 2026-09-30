@@ -44,3 +44,10 @@ describe("durable billing attempt policy", () => {
     expect(subscriptionAccess("active", 1000, 1000)).toBe(false);
   });
 });
+it("keeps historical subscriptions from overwriting the selected entitlement",async()=>{
+ const { entitlementReplacement }=await import("./persistence-policy");
+ expect(entitlementReplacement("sub_new","sub_old",true,true)).toBe("keep");
+ expect(entitlementReplacement("sub_current","sub_duplicate",false,true)).toBe("cancel_duplicate");
+ expect(entitlementReplacement("sub_current","sub_current",true,true)).toBe("promote");
+ expect(entitlementReplacement("sub_expired","sub_next",false,false)).toBe("promote");
+});
