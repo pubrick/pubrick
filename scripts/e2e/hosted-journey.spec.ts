@@ -128,6 +128,7 @@ test("hosted BYOK: verified onboarding, fixture entitlement, human draft, invita
   await page.getByLabel("Platform", { exact: true }).selectOption("t_j");
   await page.getByLabel("Channel name", { exact: true }).fill("Hosted manual channel");
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
+  await expect(page.getByText("Hosted manual channel", { exact: false }).first()).toBeVisible();
   await page.goto("/en/content/new");
   await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Hosted coffee" });
   await page.getByRole("checkbox", { name: /Hosted manual channel/ }).check();
