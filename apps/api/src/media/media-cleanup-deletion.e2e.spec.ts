@@ -163,7 +163,7 @@ describe.skipIf(!url)("native deletion cleanup boundaries", () => {
     const module = HostedAdmissionModule.forRoot({
       enabled: true,
       driver: "fixture",
-      identity: { provider: "fixture", environment: "test", accountId: "cleanup" },
+      identity: { provider: "fixture", environment: "sandbox", accountId: "cleanup" },
       publicOrigin: "http://localhost:3000",
       plans: [],
       fixturePrices: [],
