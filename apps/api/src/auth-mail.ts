@@ -15,9 +15,11 @@ export function mailLocale(request?: Request): AuthMailRequest["locale"] {
 /** Static auth callbacks bind to Nest's initialized queue; no transport or second pool. */
 export function createAuthMailer() {
   let enqueue: Enqueue | undefined;
+  let closed = false;
   const admitted = new Set<Promise<unknown>>();
   return {
     bind(next: Enqueue) {
+      if (closed) throw new Error("Authentication mail queue is closed.");
       if (enqueue) throw new Error("Authentication mail queue is already bound.");
       enqueue = next;
     },
@@ -43,6 +45,7 @@ export function createAuthMailer() {
       await Promise.allSettled([...admitted]);
     },
     async close() {
+      closed = true;
       enqueue = undefined;
       await Promise.allSettled([...admitted]);
     },

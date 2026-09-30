@@ -59,10 +59,13 @@ describe("durable authentication mail dispatcher", () => {
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/credentials|person@example|token/);
     log.mockRestore();
   });
-  it("permanently closes admission and refuses a late startup binding",async()=>{
-    const mail=createAuthMailer();const enqueue=vi.fn();await mail.close();
-    expect(()=>mail.bind(enqueue)).toThrow();
-    expect(await mail.submit(request)).toEqual({status:"unavailable"});expect(enqueue).not.toHaveBeenCalled();
+  it("permanently closes admission and refuses a late startup binding", async () => {
+    const mail = createAuthMailer();
+    const enqueue = vi.fn();
+    await mail.close();
+    expect(() => mail.bind(enqueue)).toThrow();
+    expect(await mail.submit(request)).toEqual({ status: "unavailable" });
+    expect(enqueue).not.toHaveBeenCalled();
   });
   it("uses only configured origin and bounded locale for invitations", () => {
     expect(
