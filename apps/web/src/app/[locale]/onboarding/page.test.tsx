@@ -7,6 +7,13 @@ import en from "../../../../messages/en.json";
 import ru from "../../../../messages/ru.json";
 import OnboardingPage from "./page";
 
+vi.mock("@/lib/auth-capabilities", async (original) => ({
+  ...(await original<typeof import("@/lib/auth-capabilities")>()),
+  useAuthCapabilities: vi.fn(),
+}));
+
+import { useAuthCapabilities } from "@/lib/auth-capabilities";
+
 vi.mock("@/lib/auth-client", () => ({
   authClient: {
     signIn: { email: vi.fn() },
@@ -56,6 +63,16 @@ function signedIn() {
 }
 
 beforeEach(() => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: false,
+    passwordRecoveryEnabled: false,
+    deploymentMode: "self-hosted",
+    billingEnabled: false,
+    billingTestMode: false,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
   mockAuthClient.organization.create.mockReset();
   mockAuthClient.organization.setActive.mockReset();
   mockAuthClient.organization.acceptInvitation.mockReset();
@@ -404,4 +421,62 @@ describe("Onboarding — the invitation lookup fails", () => {
     expect(alert).not.toHaveTextContent("You don't have access to this.");
     expect(await screen.findByLabelText(ru.Onboarding.orgName)).toBeInTheDocument();
   });
+});
+
+it("keeps growth blocked before deployment capabilities are known", async () => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: false,
+    passwordRecoveryEnabled: false,
+    deploymentMode: null,
+    billingEnabled: false,
+    billingTestMode: false,
+    ready: false,
+    failed: false,
+    retry: vi.fn(),
+  });
+  render(<OnboardingPage />);
+  expect(screen.queryByRole("button", { name: en.Onboarding.create })).not.toBeInTheDocument();
+  expect(mockAuthClient.organization.create).not.toHaveBeenCalled();
+});
+
+it("creates a hosted workspace through admission and directs unpaid setup to subscription settings", async () => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: true,
+    passwordRecoveryEnabled: true,
+    deploymentMode: "hosted",
+    billingEnabled: true,
+    billingTestMode: true,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
+  mockApi.mockImplementation(async (path) =>
+    path === "/api/hosted-admission/create" ? { id: "hosted-org" } : [],
+  );
+  mockAuthClient.organization.setActive.mockResolvedValue({ data: {}, error: null });
+  render(<OnboardingPage />);
+  await userEvent.type(await screen.findByLabelText(en.Onboarding.orgName), "Hosted workspace");
+  await userEvent.click(screen.getByRole("button", { name: en.Onboarding.create }));
+  await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/settings"));
+  expect(mockAuthClient.organization.create).not.toHaveBeenCalled();
+  expect(mockAuthClient.organization.setActive).toHaveBeenCalledWith({
+    organizationId: "hosted-org",
+  });
+});
+
+it("blocks hosted growth when billing admission has not been registered", async () => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: true,
+    passwordRecoveryEnabled: true,
+    deploymentMode: "hosted",
+    billingEnabled: false,
+    billingTestMode: false,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
+  render(<OnboardingPage />);
+  expect(await screen.findByRole("button", { name: en.Onboarding.retry })).toBeInTheDocument();
+  expect(screen.queryByLabelText(en.Onboarding.orgName)).not.toBeInTheDocument();
+  expect(mockAuthClient.organization.create).not.toHaveBeenCalled();
 });

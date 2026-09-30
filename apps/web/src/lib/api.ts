@@ -27,12 +27,26 @@ export const TRANSPORT_ERROR_CODES = ["signed_out", "forbidden"] as const;
 export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 
 /** Everything `errorMessage` can translate: the wire's codes plus the web's own. */
-export type ErrorCode = ApiErrorCode | TransportErrorCode;
+const HOSTED_ERROR_CODES = [
+  "owned_workspace_limit",
+  "creation_rate_limit",
+  "last_owner",
+  "invitation_unavailable",
+  "already_member",
+  "invalid_input",
+  "not_found",
+  "subscription_required",
+  "billing_identity_mismatch",
+  "resource_limit",
+] as const;
+export type ErrorCode = ApiErrorCode | TransportErrorCode | (typeof HOSTED_ERROR_CODES)[number];
 
 function isErrorCode(value: string | null): value is ErrorCode {
   return (
     value !== null &&
-    (isApiErrorCode(value) || (TRANSPORT_ERROR_CODES as readonly string[]).includes(value))
+    (isApiErrorCode(value) ||
+      (TRANSPORT_ERROR_CODES as readonly string[]).includes(value) ||
+      (HOSTED_ERROR_CODES as readonly string[]).includes(value))
   );
 }
 
@@ -80,6 +94,16 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  owned_workspace_limit: "owned_workspace_limit",
+  creation_rate_limit: "creation_rate_limit",
+  last_owner: "last_owner",
+  invitation_unavailable: "invitation_unavailable",
+  already_member: "already_member",
+  invalid_input: "invalid_input",
+  not_found: "not_found",
+  subscription_required: "subscription_required",
+  billing_identity_mismatch: "billing_identity_mismatch",
+  resource_limit: "resource_limit",
   client_review_role_required: "client_review_role_required",
   client_review_required: "client_review_required",
   client_review_link_invalid: "client_review_link_invalid",
@@ -400,6 +424,10 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       throw new ApiError(401, "You're signed out. Log in again to continue.", false, "signed_out");
     }
     if (res.status === 403) {
+      // Hosted admission refusals must retain their localized recovery message.
+      if (code && (HOSTED_ERROR_CODES as readonly string[]).includes(code)) {
+        throw new ApiError(403, detail ?? "Workspace request refused", false, code);
+      }
       // THE CODE, not the sentence. This branch decides whether the reader is
       // sent to onboarding, and it used to decide it by matching
       // /no active organization/i against prose written for a network tab —

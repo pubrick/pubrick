@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type AiProviderDraft, AiProviderFields } from "@/components/ai-provider-fields";
 import { AiTextSettingsForm } from "@/components/ai-text-settings";
 import { AppShell } from "@/components/app-shell";
+import { BillingCard } from "@/components/billing-card";
 import { LanguageCard } from "@/components/language-card";
 import { PaidReplyOrganizationSettings } from "@/components/paid-reply-organization-settings";
 import { Advanced } from "@/components/ui/advanced";
@@ -35,7 +36,9 @@ import { WorkspaceDataCard } from "@/components/workspace-data-card";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { useAuthCapabilities, workspaceMutationsAvailable } from "@/lib/auth-capabilities";
 import { authClient } from "@/lib/auth-client";
+import { hostedWorkspace } from "@/lib/hosted-workspace-client";
 import { applyTheme, readThemePref, type ThemePref } from "@/lib/theme";
 
 /**
@@ -182,11 +185,14 @@ export default function SettingsPage() {
     refetch: refetchOrganization,
   } = authClient.useActiveOrganization();
   const locale = useLocale();
+  const capabilities = useAuthCapabilities();
   const signOut = useSignOut();
   const members = organization?.members ?? [];
   const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
   const canManageApiKeys = isOrganizationManager(currentRole);
-  const canInvite = canManageApiKeys || hasOrganizationRole(currentRole, ["member"]);
+  const canInvite =
+    workspaceMutationsAvailable(capabilities) &&
+    (canManageApiKeys || hasOrganizationRole(currentRole, ["member"]));
 
   const [pref, setPref] = useState<ThemePref>("system");
   // Stored pref is client-only state: reading it during the first render makes
@@ -515,14 +521,23 @@ export default function SettingsPage() {
     // superseded and confusing.
     setInviting(true);
     try {
-      const result = await authClient.organization.inviteMember({
-        email: inviteEmail.trim(),
-        // The browser plugin only infers its built-in roles. The API's
-        // organization plugin validates the additional author/editor roles.
-        role: (canManageApiKeys ? inviteRole : "member") as Parameters<
-          typeof authClient.organization.inviteMember
-        >[0]["role"],
-      });
+      if (!workspaceMutationsAvailable(capabilities) || !organization) return;
+      const role = canManageApiKeys ? inviteRole : "member";
+      const result =
+        capabilities.deploymentMode === "hosted"
+          ? {
+              data: await hostedWorkspace.invite({
+                orgId: organization.id,
+                email: inviteEmail.trim(),
+                role,
+                locale,
+              }),
+              error: null,
+            }
+          : await authClient.organization.inviteMember({
+              email: inviteEmail.trim(),
+              role: role as Parameters<typeof authClient.organization.inviteMember>[0]["role"],
+            });
       if (result.error) {
         const key = result.error.code ? INVITE_FAILURE_KEYS[result.error.code] : undefined;
         setInviteError(key ? t(key) : t("genericError"));
@@ -535,8 +550,8 @@ export default function SettingsPage() {
       });
       // The pending list on this card is part of the organization query.
       void refetchOrganization?.();
-    } catch {
-      setInviteError(t("genericError"));
+    } catch (err) {
+      setInviteError(errorMessage(err, t("genericError"), te));
     } finally {
       setInviting(false);
     }
@@ -559,16 +574,22 @@ export default function SettingsPage() {
     setPendingRevoke(null);
     setInviteError(null);
     try {
-      const result = await authClient.organization.cancelInvitation({
-        invitationId: invitation.id,
-      });
+      if (!workspaceMutationsAvailable(capabilities) || !organization) return;
+      const result =
+        capabilities.deploymentMode === "hosted"
+          ? {
+              error: await hostedWorkspace
+                .cancel({ orgId: organization.id, invitationId: invitation.id })
+                .then(() => null),
+            }
+          : await authClient.organization.cancelInvitation({ invitationId: invitation.id });
       if (result.error) {
         setInviteError(t("genericError"));
         return;
       }
       void refetchOrganization?.();
-    } catch {
-      setInviteError(t("genericError"));
+    } catch (err) {
+      setInviteError(errorMessage(err, t("genericError"), te));
     }
   }
 
@@ -673,18 +694,26 @@ export default function SettingsPage() {
     setRoleSaving(true);
     setRoleError(null);
     try {
-      const result = await authClient.organization.updateMemberRole({
-        memberId: roleChange.id,
-        role: nextRole,
-      });
+      if (!workspaceMutationsAvailable(capabilities) || !organization) return;
+      const result =
+        capabilities.deploymentMode === "hosted"
+          ? {
+              error: await hostedWorkspace
+                .updateRole({ orgId: organization.id, memberId: roleChange.id, role: nextRole })
+                .then(() => null),
+            }
+          : await authClient.organization.updateMemberRole({
+              memberId: roleChange.id,
+              role: nextRole,
+            });
       if (result.error) {
         setRoleError(t("genericError"));
         return;
       }
       await refetchOrganization?.();
       setRoleChange(null);
-    } catch {
-      setRoleError(t("genericError"));
+    } catch (err) {
+      setRoleError(errorMessage(err, t("genericError"), te));
     } finally {
       setRoleSaving(false);
     }
@@ -1191,6 +1220,24 @@ export default function SettingsPage() {
           )}
         </Card>
 
+        {organization &&
+          canManageApiKeys &&
+          capabilities.ready &&
+          capabilities.deploymentMode === "hosted" &&
+          capabilities.billingEnabled && (
+            <BillingCard orgId={organization.id} testMode={capabilities.billingTestMode} />
+          )}
+        {(capabilities.failed ||
+          (capabilities.ready && !workspaceMutationsAvailable(capabilities))) && (
+          <Card>
+            <p role="alert" className="text-sm text-danger">
+              {t("capabilitiesUnavailable")}
+            </p>
+            <Button variant="secondary" onClick={capabilities.retry}>
+              {t("retryCapabilities")}
+            </Button>
+          </Card>
+        )}
         {organization && canManageApiKeys && <WorkspaceDataCard />}
 
         <section aria-labelledby="personal-settings-title" className="flex flex-col gap-4">
@@ -1308,7 +1355,11 @@ export default function SettingsPage() {
             </Button>
             <Button
               onClick={() => void saveRole()}
-              disabled={roleSaving || nextRole === roleChange?.role}
+              disabled={
+                !workspaceMutationsAvailable(capabilities) ||
+                roleSaving ||
+                nextRole === roleChange?.role
+              }
             >
               {t("peopleChangeRole")}
             </Button>

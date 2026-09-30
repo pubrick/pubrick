@@ -42,6 +42,12 @@ beforeEach(() => {
   vi.mocked(useAuthCapabilities).mockReturnValue({
     requiresEmailVerification: false,
     passwordRecoveryEnabled: false,
+    deploymentMode: "self-hosted",
+    billingEnabled: false,
+    billingTestMode: false,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
   });
 });
 
@@ -242,6 +248,12 @@ describe("hosted ownership journey", () => {
     vi.mocked(useAuthCapabilities).mockReturnValue({
       requiresEmailVerification: true,
       passwordRecoveryEnabled: true,
+      deploymentMode: "hosted",
+      billingEnabled: true,
+      billingTestMode: true,
+      ready: true,
+      failed: false,
+      retry: vi.fn(),
     });
     mockAuthClient.signUp.email.mockResolvedValue({ data: { token: null }, error: null });
     vi.mocked(authClient.sendVerificationEmail).mockResolvedValue({

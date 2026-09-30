@@ -44,7 +44,10 @@
     "invitedJoin": "Unirse",
     "invitedCreateInstead": "Crear tu propia organización en su lugar",
     "joinFailed": "Esta invitación ya no funciona: puede que se haya usado, se haya retirado o haya caducado. Pide una nueva a quien te invitó.",
-    "invitationsUnchecked": "Pubrick no pudo comprobar si alguien te ha invitado: {reason}"
+    "invitationsUnchecked": "Pubrick no pudo comprobar si alguien te ha invitado: {reason}",
+    "capabilitiesUnavailable": "No se pudieron cargar los permisos del espacio. Inténtalo de nuevo.",
+    "retry": "Reintentar",
+    "subscriptionSettings": "Ajustes de suscripción"
   },
   "Landing": {
     "title": "Pubrick",
@@ -1375,7 +1378,9 @@
     "aiVertexProxy": "URL del proxy de Vertex",
     "aiVertexProxyReplace": "Deja sin cambios o introduce otro proxy",
     "aiVertexProxyHint": "Opcional. Solo se usa para esta credencial de Vertex, incluido OAuth. Vaciar el campo editado elimina el proxy guardado. La URL se cifra y no vuelve a mostrarse.",
-    "aiTextModelRequired": "El proveedor está guardado. Introduce su modelo abajo para activar la generación de texto."
+    "aiTextModelRequired": "El proveedor está guardado. Introduce su modelo abajo para activar la generación de texto.",
+    "capabilitiesUnavailable": "No se pudieron cargar los permisos del espacio. Inténtalo de nuevo.",
+    "retryCapabilities": "Reintentar"
   },
   "SearchSettings": {
     "title": "API de búsqueda",
@@ -1834,7 +1839,17 @@
     "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla.",
     "media_cover_video_selected": "Quita el video seleccionado antes de regenerar la portada.",
     "ai_settings_changed": "La clave cambió antes de admitir la solicitud. Revisa los ajustes e inténtalo de nuevo.",
-    "ai_default_key_missing": "Guarda tu primera clave API abajo para configurar la generación de texto."
+    "ai_default_key_missing": "Guarda tu primera clave API abajo para configurar la generación de texto.",
+    "owned_workspace_limit": "Tu cuenta ha alcanzado el límite de espacios. Usa un espacio existente.",
+    "creation_rate_limit": "Demasiados intentos de crear espacios. Inténtalo más tarde.",
+    "last_owner": "El espacio debe conservar un propietario. Asigna otro propietario primero.",
+    "invitation_unavailable": "La invitación no está disponible. Solicita una nueva.",
+    "already_member": "Esta persona ya pertenece al espacio.",
+    "invalid_input": "Revisa los campos e inténtalo de nuevo.",
+    "not_found": "No se encontró el elemento del espacio. Actualiza e inténtalo de nuevo.",
+    "subscription_required": "Se requiere una suscripción activa. Abre Ajustes para configurar la suscripción del espacio.",
+    "billing_identity_mismatch": "La cuenta de facturación guardada no corresponde a esta instancia. Contacta con el administrador.",
+    "resource_limit": "Se alcanzó el límite de recursos del espacio. Revisa la suscripción en Ajustes."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -2695,5 +2710,41 @@
       "send_abandoned": "La entrega se detuvo antes de llegar a la plataforma.",
       "outcome_unknown": "Se desconoce el resultado de la entrega."
     }
+  },
+  "BillingCard": {
+    "title": "Suscripción",
+    "sandbox": "Modo de prueba",
+    "byok": "Usa tus propias claves de IA. El proveedor factura el uso por separado; la suscripción no incluye créditos de IA.",
+    "sandboxHelp": "Modo de prueba: no se cobran pagos reales.",
+    "status_unconfigured": "Sin configurar",
+    "status_pending": "Pendiente de confirmación",
+    "status_active": "Activa",
+    "status_trial": "Periodo de prueba",
+    "status_expired": "Caducada",
+    "status_cancelled": "Cancelada",
+    "status_past_due": "Pago vencido",
+    "currentPlan": "Plan {id} · versión {version}",
+    "accessUntil": "Acceso hasta {date}",
+    "cancelScheduled": "La cancelación está programada para el final de este periodo.",
+    "pendingHelp": "Esperando confirmación del servidor. Volver del pago no activa la suscripción.",
+    "expiredHelp": "El acceso ha caducado. Aún puedes exportar los datos del espacio.",
+    "seats": "Miembros",
+    "brands": "Marcas",
+    "channels": "Canales",
+    "mediaBytes": "Almacenamiento multimedia",
+    "concurrentJobs": "Tareas simultáneas",
+    "bytes": "{value} MiB",
+    "plan": "Plan",
+    "version": "Versión {version}",
+    "price": "{price} cada {count} {interval}",
+    "interval_month": "mes(es)",
+    "interval_year": "año(s)",
+    "checkout": "Pago de prueba",
+    "portal": "Portal de pagos de prueba",
+    "noPlans": "No hay planes de prueba disponibles. Contacta con el administrador.",
+    "refresh": "Actualizar",
+    "error": "No se pudo cargar o actualizar la suscripción. Inténtalo de nuevo.",
+    "interval_day": "día(s)",
+    "interval_week": "semana(s)"
   }
 }

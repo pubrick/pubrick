@@ -15,6 +15,13 @@ import { act, render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
 import SettingsPage from "./page";
 
+vi.mock("@/lib/auth-capabilities", async (original) => ({
+  ...(await original<typeof import("@/lib/auth-capabilities")>()),
+  useAuthCapabilities: vi.fn(),
+}));
+
+import { useAuthCapabilities } from "@/lib/auth-capabilities";
+
 vi.mock("@/lib/auth-client", () => ({
   authClient: {
     useSession: vi.fn(),
@@ -169,6 +176,16 @@ async function renderSettings(): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: false,
+    passwordRecoveryEnabled: false,
+    deploymentMode: "self-hosted",
+    billingEnabled: false,
+    billingTestMode: false,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
   mockAuthClient.organization.list.mockResolvedValue({ data: [], error: null });
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
@@ -1698,3 +1715,45 @@ it.each([
     ).toBeInTheDocument();
   },
 );
+
+it("routes hosted invitations through admission with the actual selected workspace and locale", async () => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: true,
+    passwordRecoveryEnabled: true,
+    deploymentMode: "hosted",
+    billingEnabled: true,
+    billingTestMode: true,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
+  const fallback = mockApi.getMockImplementation();
+  mockApi.mockImplementation(async (path, init) => {
+    if (path === "/api/hosted-admission/invite")
+      return {
+        id: "hosted-invite",
+        email: "carol@example.com",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      };
+    return fallback?.(path, init);
+  });
+  await renderSettings();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+  await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: en.SettingsPage.peopleInvite }),
+  );
+  await waitFor(() =>
+    expect(mockApi).toHaveBeenCalledWith("/api/hosted-admission/invite", {
+      method: "POST",
+      body: JSON.stringify({
+        orgId: "org1",
+        email: "carol@example.com",
+        role: "member",
+        locale: "en",
+      }),
+    }),
+  );
+  expect(mockAuthClient.organization.inviteMember).not.toHaveBeenCalled();
+});

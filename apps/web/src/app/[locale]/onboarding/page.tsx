@@ -10,7 +10,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, errorMessage } from "@/lib/api";
+import { useAuthCapabilities, workspaceMutationsAvailable } from "@/lib/auth-capabilities";
 import { authClient } from "@/lib/auth-client";
+import { hostedWorkspace } from "@/lib/hosted-workspace-client";
 import { orgSlug } from "@/lib/slug";
 
 /**
@@ -60,6 +62,7 @@ export default function OnboardingPage() {
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const capabilities = useAuthCapabilities();
   const requestedInvitation = useSearchParams().get("invitation");
   const { data: session, isPending: sessionPending } = authClient.useSession();
   const [name, setName] = useState("");
@@ -115,9 +118,26 @@ export default function OnboardingPage() {
   async function join(invitation: PendingInvitation) {
     setBusy(true);
     setError(null);
-    const accepted = await authClient.organization.acceptInvitation({
-      invitationId: invitation.id,
-    });
+    if (!workspaceMutationsAvailable(capabilities)) {
+      setBusy(false);
+      return;
+    }
+    let accepted: { error?: { message?: string } | null };
+    try {
+      if (capabilities.deploymentMode === "hosted") {
+        await hostedWorkspace.accept({
+          orgId: invitation.organizationId,
+          invitationId: invitation.id,
+        });
+        accepted = {};
+      } else {
+        accepted = await authClient.organization.acceptInvitation({ invitationId: invitation.id });
+      }
+    } catch (err) {
+      setError(errorMessage(err, t("joinFailed"), te));
+      setBusy(false);
+      return;
+    }
     if (accepted.error) {
       // Never the library's own English sentence: an invitation that has been
       // revoked, spent or has expired all arrive here, and all of them mean the
@@ -149,9 +169,23 @@ export default function OnboardingPage() {
     setBusy(true);
     setError(null);
     const slug = orgSlug(name);
-    const created = await authClient.organization.create({ name, slug });
-    if (created.error) {
-      setError(created.error.message ?? t("genericError"));
+    if (!workspaceMutationsAvailable(capabilities)) {
+      setBusy(false);
+      return;
+    }
+    let created: { data?: { id: string } | null; error?: { message?: string } | null };
+    try {
+      created =
+        capabilities.deploymentMode === "hosted"
+          ? { data: await hostedWorkspace.create({ name, slug }) }
+          : await authClient.organization.create({ name, slug });
+    } catch (err) {
+      setError(errorMessage(err, t("genericError"), te));
+      setBusy(false);
+      return;
+    }
+    if (created.error || !created.data) {
+      setError(created.error?.message ?? t("genericError"));
       setBusy(false);
       return;
     }
@@ -168,7 +202,7 @@ export default function OnboardingPage() {
     // Deliberately still busy: the org exists, and the only thing left is a
     // navigation. Re-enabling here would reopen the double-create window for
     // the length of the route transition.
-    router.push(`/${locale}/brands`);
+    router.push(`/${locale}/${capabilities.deploymentMode === "hosted" ? "settings" : "brands"}`);
   }
 
   function body() {
@@ -193,6 +227,18 @@ export default function OnboardingPage() {
         </div>
       );
     }
+
+    if (!workspaceMutationsAvailable(capabilities))
+      return capabilities.failed || capabilities.ready ? (
+        <div className="flex flex-col gap-3">
+          <p role="alert" className="text-sm text-danger">
+            {t("capabilitiesUnavailable")}
+          </p>
+          <Button onClick={capabilities.retry}>{t("retry")}</Button>
+        </div>
+      ) : (
+        <Skeleton lines={3} className="py-2" />
+      );
 
     if (invitations === null) return <Skeleton lines={3} className="py-2" />;
 
@@ -250,6 +296,14 @@ export default function OnboardingPage() {
         {error && (
           <p role="alert" className="text-sm text-danger">
             {error}
+            {capabilities.deploymentMode === "hosted" && (
+              <Link
+                href={`/${locale}/settings#billing-heading`}
+                className="mt-2 block text-accent underline"
+              >
+                {t("subscriptionSettings")}
+              </Link>
+            )}
           </p>
         )}
         <Button type="submit" disabled={busy} className="w-full">

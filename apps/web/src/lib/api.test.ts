@@ -577,3 +577,12 @@ describe("apiPage", () => {
     expect((error as ApiError).code).toBe("invalid_request");
   });
 });
+
+it("retains hosted subscription refusal codes at the 403 transport boundary", async () => {
+  vi.mocked(fetch).mockResolvedValue(
+    jsonResponse(403, { code: "subscription_required", message: "Operator prose" }),
+  );
+  const failure = await api("/api/brands", { method: "POST" }).catch((error) => error);
+  expect(failure).toBeInstanceOf(ApiError);
+  expect(failure.code).toBe("subscription_required");
+});

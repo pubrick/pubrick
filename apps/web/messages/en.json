@@ -44,7 +44,10 @@
     "invitedJoin": "Join",
     "invitedCreateInstead": "Create your own organization instead",
     "joinFailed": "This invitation no longer works — it may already have been used, taken back, or expired. Ask whoever invited you for a new one.",
-    "invitationsUnchecked": "Pubrick could not check whether anyone invited you: {reason}"
+    "invitationsUnchecked": "Pubrick could not check whether anyone invited you: {reason}",
+    "capabilitiesUnavailable": "Workspace permissions could not be loaded. Try again.",
+    "retry": "Retry",
+    "subscriptionSettings": "Subscription settings"
   },
   "Landing": {
     "title": "Pubrick",
@@ -1375,7 +1378,9 @@
     "aiVertexProxy": "Vertex proxy URL",
     "aiVertexProxyReplace": "Leave unchanged, or enter a replacement proxy",
     "aiVertexProxyHint": "Optional. Used only for this Vertex credential, including OAuth. Changing the field to empty removes its saved proxy. The URL is encrypted and never shown after saving.",
-    "aiTextModelRequired": "This provider is saved. Enter its model ID below to enable text generation."
+    "aiTextModelRequired": "This provider is saved. Enter its model ID below to enable text generation.",
+    "capabilitiesUnavailable": "Workspace permissions could not be loaded. Try again.",
+    "retryCapabilities": "Retry"
   },
   "SearchSettings": {
     "title": "Search API",
@@ -1834,7 +1839,17 @@
     "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating.",
     "media_cover_video_selected": "Remove the selected video before regenerating a cover.",
     "ai_settings_changed": "The key changed before this request was admitted. Review Settings and try again.",
-    "ai_default_key_missing": "Save your first API key below to configure text generation."
+    "ai_default_key_missing": "Save your first API key below to configure text generation.",
+    "owned_workspace_limit": "Your account has reached its workspace limit. Use an existing workspace.",
+    "creation_rate_limit": "Too many workspace creation attempts. Try again later.",
+    "last_owner": "This workspace must retain an owner. Assign another owner first.",
+    "invitation_unavailable": "This invitation is unavailable. Ask for a new invitation.",
+    "already_member": "This person is already a workspace member.",
+    "invalid_input": "Check the fields and try again.",
+    "not_found": "The requested workspace item was not found. Refresh and try again.",
+    "subscription_required": "An active subscription is required. Open Settings to configure the workspace subscription.",
+    "billing_identity_mismatch": "The saved billing account does not match this instance. Contact the administrator.",
+    "resource_limit": "The workspace resource limit has been reached. Review your subscription in Settings."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -2695,5 +2710,41 @@
       "send_abandoned": "Delivery stopped before reaching the platform.",
       "outcome_unknown": "The delivery outcome is unknown."
     }
+  },
+  "BillingCard": {
+    "title": "Subscription",
+    "sandbox": "Sandbox",
+    "byok": "Bring your own AI keys. Provider usage is billed separately; this subscription includes no AI credits.",
+    "sandboxHelp": "Test mode: no live payment is collected.",
+    "status_unconfigured": "Not configured",
+    "status_pending": "Awaiting confirmation",
+    "status_active": "Active",
+    "status_trial": "Trial",
+    "status_expired": "Expired",
+    "status_cancelled": "Cancelled",
+    "status_past_due": "Payment overdue",
+    "currentPlan": "Plan {id} · version {version}",
+    "accessUntil": "Access until {date}",
+    "cancelScheduled": "Cancellation is scheduled for the end of this period.",
+    "pendingHelp": "Waiting for server confirmation. Returning from checkout does not activate a subscription.",
+    "expiredHelp": "Access has expired. You can still export your workspace data.",
+    "seats": "Seats",
+    "brands": "Brands",
+    "channels": "Channels",
+    "mediaBytes": "Media storage",
+    "concurrentJobs": "Concurrent jobs",
+    "bytes": "{value} MiB",
+    "plan": "Plan",
+    "version": "Version {version}",
+    "price": "{price} every {count} {interval}",
+    "interval_month": "month(s)",
+    "interval_year": "year(s)",
+    "checkout": "Test checkout",
+    "portal": "Test billing portal",
+    "noPlans": "No test plans are available. Contact the instance operator.",
+    "refresh": "Refresh",
+    "error": "Could not load or update billing. Try again.",
+    "interval_day": "day(s)",
+    "interval_week": "week(s)"
   }
 }
