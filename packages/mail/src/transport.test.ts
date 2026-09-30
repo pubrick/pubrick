@@ -146,10 +146,20 @@ describe("SMTP delivery attempt boundary", () => {
         {
           ...payload,
           identity: createMailIdentity("https://other.example", "hosted", "private-auth-secret"),
+          link: payload.link.replace("pubrick.example", "other.example"),
         },
         resolve,
       ),
     ).toEqual({ status: "skipped", reason: "identity_mismatch" });
+    await expect(
+      mail.deliver(
+        {
+          ...payload,
+          identity: createMailIdentity("https://other.example", "hosted", "private-auth-secret"),
+        },
+        resolve,
+      ),
+    ).rejects.toThrowError("invalid_payload");
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "skipped", reason: "expired" });
     expect(smtp.sendMail).not.toHaveBeenCalled();
   });
