@@ -63,6 +63,8 @@ describe.skipIf(!url)("native deletion cleanup boundaries", () => {
         kind: "image",
         mimeType: "image/jpeg",
         byteSize: 7,
+        width: 1,
+        height: 1,
       })
       .returning({ id: schema.mediaAssets.id });
     if (!asset) throw new Error("Missing asset");
@@ -106,15 +108,13 @@ describe.skipIf(!url)("native deletion cleanup boundaries", () => {
   });
   it("attachment refusal preserves metadata, file and absence of cleanup obligations", async () => {
     const f = await fixture();
-    await connection.db
-      .insert(schema.contentItems)
-      .values({
-        orgId: f.orgId,
-        brandId: f.brandId,
-        title: "Attached",
-        body: "Fixture draft",
-        coverMediaId: f.assetId,
-      });
+    await connection.db.insert(schema.contentItems).values({
+      orgId: f.orgId,
+      brandId: f.brandId,
+      title: "Attached",
+      body: "Fixture draft",
+      coverMediaId: f.assetId,
+    });
     await expect(media.delete(f.orgId, f.assetId)).rejects.toMatchObject({ status: 409 });
     expect(await proofs(f.orgId)).toHaveLength(0);
     expect(await readFile(path.join(mediaDir, `${f.assetId}.jpg`), "utf8")).toBe("fixture");

@@ -98,7 +98,13 @@ describe.skipIf(!url)("native hosted API job admission", () => {
     if (!brand) throw new Error("Missing fixture brand");
     const [channel] = await connection.db
       .insert(schema.channels)
-      .values({ orgId, brandId: brand.id, name: "Fixture", platform: "telegram" })
+      .values({
+        orgId,
+        brandId: brand.id,
+        name: "Fixture",
+        platform: "telegram",
+        credentialsEncrypted: "synthetic fixture never decrypted",
+      })
       .returning({ id: schema.channels.id });
     if (!channel) throw new Error("Missing channel");
     await connection.db.insert(schema.aiCredentials).values({
