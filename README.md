@@ -36,8 +36,9 @@ keeps [editorial notes](docs/editorial-notes.md) on saved versions. Editors can
 request a [metered whole-draft rewrite](docs/editorial-notes.md#whole-draft-ai-revision), compare
 it with the saved text, and explicitly accept or discard it. AI
 generation works too, with
-**your own** Gemini or OpenRouter key (there is no hosted key; see
-[Gemini setup](docs/self-hosting.md#connect-gemini)): start from a
+**your own** Gemini, OpenRouter, OpenAI, Anthropic or DeepSeek API key
+(there is no hosted key; see [provider setup and limits](docs/llm-providers.md)
+and [Gemini setup](docs/self-hosting.md#connect-gemini)): start from a
 brief or schedule a draft in the [brand calendar](docs/calendar.md). Five roles —
 researcher, writer, editor, a fact-checker that lists claims to verify rather
 than checking them, and one adapter per channel — produce a draft with
@@ -89,7 +90,7 @@ your own HTTPS endpoint, with delivery history and explicit unknown outcomes.
   go into every generation's instructions, so drafts sound like you rather than
   like a model. Brand knowledge notes can be selected as material for a draft;
   see [brand knowledge](docs/brand-knowledge.md).
-- **Bring your own keys** — Gemini and OpenRouter (hundreds of models);
+- **Bring your own keys** — Gemini, OpenRouter, OpenAI, Anthropic and DeepSeek;
   self-hosted generation at your own API cost.
 - **Own it** — AGPL-3.0, docker compose, Postgres as the only stateful service.
 

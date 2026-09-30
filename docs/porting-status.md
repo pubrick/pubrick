@@ -7,6 +7,14 @@ The target is this repository. The product scope and phases remain in
 documents when they disagree. The current execution priorities are in
 [the development roadmap](roadmap.md).
 
+Text generation supports Google, OpenRouter and direct OpenAI, Anthropic and
+DeepSeek keys through the maintained AI SDK adapters. See [LLM providers](llm-providers.md)
+for provider/model selection behavior, unknown-cost reporting and Google-only
+features. This does not yet include Vertex authentication or arbitrary compatible
+API endpoints. [Hosted identity](hosted-identity.md) adds explicit email ownership
+and recovery in a separately configured development mode; paid subscriptions and
+hosted resource admission are not implemented by that slice.
+
 | Reference area | Pubrick today | Next meaningful gap |
 |---|---|---|
 | Brands | Guided manual setup with name, source-targeting description, voice, audience and content language; profile editing and next-step links; confirmed owner/admin brand removal with queued work cancellation; optional public-website import with reviewed Gemini suggestions and explicit save | Public social-profile import when a verifiable platform API is available |

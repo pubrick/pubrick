@@ -117,6 +117,11 @@ during its scan, and an interrupted build is retried on the next startup.
 
 ## Connect Gemini
 
+Text generation also supports direct OpenAI, Anthropic, DeepSeek and OpenRouter
+API keys. See [LLM providers](llm-providers.md) for setup, model selection,
+cost reporting and modality limits. Gemini-specific images and knowledge
+embeddings still need a Google key.
+
 Create a Gemini API key on the [Google AI Studio API keys page](https://aistudio.google.com/apikey).
 AI Studio calls it an API key; there is no separate AI Studio credential for
 Pubrick. In **Settings → AI provider**, choose **Google**, paste the key into
