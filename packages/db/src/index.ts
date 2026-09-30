@@ -1,3 +1,4 @@
+export * from "./ai-call-admission.js";
 export * from "./ai-text-selection.js";
 export type { BillingEntitlement, BillingTransaction } from "./billing-entitlement.js";
 export { resolveBillingEntitlement } from "./billing-entitlement.js";
