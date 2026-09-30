@@ -170,3 +170,56 @@ it("preserves subscription retry metadata when a same-minute receipt is already 
   ).sweep();
   expect(repository.finishSubscriptionAttempt).toHaveBeenCalledWith(row, "not_found");
 });
+
+it("checks the tick budget before claiming another durable unit", async () => {
+  const sdk = new FixtureBillingDriver({
+    accountId: identity.accountId,
+    origin: "http://localhost:31300",
+    prices: [
+      {
+        identity,
+        priceId: plan.priceId,
+        productId: "prod_test",
+        active: true,
+        currency: "eur",
+        unitAmount: 1000,
+        interval: "month",
+        intervalCount: 1,
+      },
+    ],
+  });
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  let remaining = true;
+  const claim = vi.fn(async (id: string) => {
+    remaining = false;
+    return {
+      id,
+      lease: "lease",
+      event: { identity, eventId: id, kind: "subscription.changed", resourceId: "sub_missing" },
+    };
+  });
+  const repository = {
+    due: vi.fn().mockResolvedValue({
+      receipts: [{ id: "receipt_one" }, { id: "receipt_two" }],
+      attempts: [{ id: "attempt" }],
+      cleanup: [{ id: "cleanup" }],
+    }),
+    claim,
+    retry: vi.fn(),
+    claimAttempt: vi.fn(),
+    periodicSubscriptionIds: vi.fn(),
+    claimCleanup: vi.fn(),
+  };
+  const result = await new BillingService(
+    sdk,
+    catalog,
+    repository as unknown as BillingRepository,
+    "http://localhost:31300",
+  ).sweep({ shouldContinue: () => remaining });
+  expect(claim).toHaveBeenCalledTimes(1);
+  expect(repository.periodicSubscriptionIds).not.toHaveBeenCalled();
+  expect(repository.claimAttempt).not.toHaveBeenCalled();
+  expect(repository.claimCleanup).not.toHaveBeenCalled();
+  expect(result.failed).toBe(1);
+});

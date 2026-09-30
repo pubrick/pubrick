@@ -471,6 +471,34 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         ),
       );
   }
+  /** Privileged startup guard: an empty simulator cannot restore prior external obligations. */
+  async hasPersistedFixtureInventory(): Promise<boolean> {
+    if (this.identity.provider !== "fixture") return false;
+    for (const table of [
+      schema.billingAccounts,
+      schema.billingCheckoutAttempts,
+      schema.billingSubscriptions,
+      schema.billingReceipts,
+      schema.billingCleanup,
+    ]) {
+      const rows = await this.db
+        .select({ present: sql<number>`1` })
+        .from(table)
+        .where(identityWhere(table, this.identity))
+        .limit(1);
+      if (rows.length) return true;
+    }
+    const rows = await this.db
+      .select({ orgId: schema.organizationBillingState.orgId })
+      .from(schema.organizationBillingState)
+      .innerJoin(
+        schema.billingPlanVersions,
+        eq(schema.organizationBillingState.planVersionId, schema.billingPlanVersions.id),
+      )
+      .where(identityWhere(schema.billingPlanVersions, this.identity))
+      .limit(1);
+    return rows.length > 0;
+  }
   async receive(event: VerifiedEvent) {
     this.assertIdentity(event.identity);
     const [row] = await this.db
@@ -961,7 +989,9 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     });
   }
   /** Commit a fair, bounded page and advance EVERY selected row before external I/O. */
-  async periodicSubscriptionIds() {
+  async periodicSubscriptionIds(limit = 25) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25)
+      throw new BillingCoreError("invalid_attempt");
     return this.db.transaction(async (tx) => {
       const now = this.now(),
         next = new Date(now.getTime() + 300000);
@@ -984,7 +1014,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
           asc(schema.billingSubscriptions.nextReconcileAt),
           asc(schema.billingSubscriptions.id),
         )
-        .limit(25)
+        .limit(limit)
         .for("update", { skipLocked: true });
       for (const row of rows)
         await tx

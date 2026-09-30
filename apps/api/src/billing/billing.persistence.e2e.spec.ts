@@ -366,6 +366,26 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
       failedAgain.every((row) => row.attempts === 2 && row.next.getTime() >= now + 91000),
     ).toBe(true);
   });
+  it("refuses restored fixture inventory only for its exact configured identity", async () => {
+    const restoredIdentity = {
+      ...identity,
+      accountId: `fixture_inventory_${randomUUID().replaceAll("-", "")}`,
+    };
+    const restored = new BillingRepository(db, restoredIdentity);
+    expect(await restored.hasPersistedFixtureInventory()).toBe(false);
+    await restored.receive({
+      identity: restoredIdentity,
+      eventId: "evt_retained",
+      kind: "subscription.changed",
+      resourceId: "sub_retained",
+    });
+    expect(await restored.hasPersistedFixtureInventory()).toBe(true);
+    const unrelated = new BillingRepository(db, {
+      ...restoredIdentity,
+      accountId: `${restoredIdentity.accountId}_other`,
+    });
+    expect(await unrelated.hasPersistedFixtureInventory()).toBe(false);
+  });
   it("rejects unsupported persisted billing identities and subscription states", async () => {
     const tenant = await org();
     const [storedPlan] = await db
