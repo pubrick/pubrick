@@ -74,7 +74,12 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     process.env.PUBRICK_DEPLOYMENT_MODE = "hosted";
     process.env.BILLING_DRIVER = "fixture";
     process.env.BILLING_ACCOUNT_ID = "fixture_authority";
-    return { agent, orgId, userId, brandId: brand.id };
+    const [channel] = await connection.db
+      .insert(schema.channels)
+      .values({ orgId, brandId: brand.id, name: "Authority manual", platform: "vc_ru" })
+      .returning({ id: schema.channels.id });
+    if (!channel) throw new Error("Missing fixture channel");
+    return { agent, orgId, userId, brandId: brand.id, channelId: channel.id };
   }
   async function blocker(orgId: string): Promise<PoolClient> {
     const client = await connection.pool.connect();
@@ -179,7 +184,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
           .select({ id: schema.channels.id })
           .from(schema.channels)
           .where(eq(schema.channels.orgId, f.orgId)),
-      ).toHaveLength(0);
+      ).toEqual([{ id: f.channelId }]);
     } finally {
       await lock.query("ROLLBACK");
       lock.release();
@@ -193,7 +198,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     try {
       response = f.agent
         .post("/api/runs")
-        .send({ brandId: f.brandId, brief: "A bounded fixture article" })
+        .send({ brandId: f.brandId, brief: "A bounded fixture article", channelIds: [f.channelId] })
         .then((value) => value);
       await waitForAdmission(f.orgId);
       await lock.query('delete from "member" where organization_id=$1 and user_id=$2', [
