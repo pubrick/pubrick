@@ -209,6 +209,13 @@ export default function SettingsPage() {
   );
   const [proxyTestedDraft, setProxyTestedDraft] = useState(false);
   const proxyRevision = useRef(0);
+  // Probe verdicts belong to the credential and network route they tested.
+  const credentialRevisions = useRef<Partial<Record<AiProviderId, number>>>({});
+  const aiLoadRevision = useRef(0);
+  function invalidateCredential(id: AiProviderId) {
+    credentialRevisions.current[id] = (credentialRevisions.current[id] ?? 0) + 1;
+    aiLoadRevision.current += 1;
+  }
   const [aiError, setAiError] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [keySaved, setKeySaved] = useState(false);
@@ -233,14 +240,23 @@ export default function SettingsPage() {
   );
 
   const loadAi = useCallback(() => {
-    api<AiCredentialPublic[]>("/api/ai-credentials").then(setCredentials).catch(handleAiError);
+    const revision = ++aiLoadRevision.current;
+    api<AiCredentialPublic[]>("/api/ai-credentials")
+      .then((rows) => {
+        if (revision === aiLoadRevision.current) setCredentials(rows);
+      })
+      .catch((err) => {
+        if (revision === aiLoadRevision.current) handleAiError(err);
+      });
     setSpendError(null);
     api<CostSummary>("/api/ai-credentials/spend")
       .then((summary) => {
+        if (revision !== aiLoadRevision.current) return;
         setSpend(summary);
         setSpendError(null);
       })
       .catch((err) => {
+        if (revision !== aiLoadRevision.current) return;
         if (err instanceof ApiError && err.noActiveOrg) return;
         // Back to "unknown", not to a stale figure: money on screen has to be
         // either current or absent.
@@ -278,6 +294,7 @@ export default function SettingsPage() {
         method: "PUT",
         body: JSON.stringify(body),
       });
+      invalidateCredential(provider);
       setCredentials((previous) => [
         ...(previous ?? []).filter((credential) => credential.provider !== saved.provider),
         saved,
@@ -312,6 +329,7 @@ export default function SettingsPage() {
         ...(previous ?? []).filter((credential) => credential.provider !== "google"),
         saved,
       ]);
+      invalidateCredential("google");
       setProxyUrl("");
       setProxyMessage(nextUrl === null ? "removed" : "saved");
       // A previous Test result described the old network route.
@@ -351,15 +369,18 @@ export default function SettingsPage() {
   }
 
   async function testKey(id: AiProviderId) {
+    const revision = credentialRevisions.current[id] ?? 0;
     setTestResults((prev) => ({ ...prev, [id]: "loading" }));
     try {
       const result = await api<AiCredentialTestResult>(`/api/ai-credentials/${id}/test`, {
         method: "POST",
       });
+      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
       setTestResults((prev) => ({ ...prev, [id]: result }));
       // The test was a real, billed call — the org's spend just moved.
       loadAi();
     } catch (err) {
+      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
       // A REQUEST that failed, not a verdict — see `TestState`. Stored under its
       // own shape so the sentence is rendered as a sentence.
       setTestResults((prev) => ({
@@ -500,6 +521,7 @@ export default function SettingsPage() {
     setPendingRemoval(null);
     try {
       await api(`/api/ai-credentials/${id}`, { method: "DELETE" });
+      invalidateCredential(id);
       setTestResults((prev) => ({ ...prev, [id]: undefined }));
       loadAi();
     } catch (err) {

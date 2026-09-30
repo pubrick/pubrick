@@ -126,6 +126,8 @@ export function usePoll<T>(
 
   useEffect(() => {
     let stopped = false;
+    // A manual refresh supersedes a pending tick, including its terminal verdict.
+    let requestSequence = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     function clear() {
@@ -142,10 +144,11 @@ export function usePoll<T>(
     }
 
     async function poll() {
+      const request = ++requestSequence;
       const startedAt = generation.current;
       try {
         const value = await fetcher();
-        if (stopped) return;
+        if (stopped || request !== requestSequence) return;
         // Older than the last local mutation: this answer describes a world
         // the caller has already changed. Dropped, not merged — and the poll
         // keeps ticking, so the next answer (which left after the mutation)
@@ -162,7 +165,7 @@ export function usePoll<T>(
           return;
         }
       } catch (err) {
-        if (stopped) return;
+        if (stopped || request !== requestSequence) return;
         setError(err);
         if (isPermanent(err)) {
           stopped = true;

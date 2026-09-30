@@ -1,6 +1,6 @@
-import { useState } from "react";
 import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "../../test/render";
 import { Modal } from "./modal";
@@ -261,9 +261,15 @@ describe("Modal focus trap", () => {
 it("keeps input focus when an inline close callback changes", async () => {
   function Editor() {
     const [value, setValue] = useState("");
-    return <Modal open title="Edit" onClose={() => setValue("")}>
-      <input aria-label="Title" value={value} onChange={(event) => setValue(event.target.value)} />
-    </Modal>;
+    return (
+      <Modal open title="Edit" onClose={() => setValue("")}>
+        <input
+          aria-label="Title"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+        />
+      </Modal>
+    );
   }
   render(<Editor />);
   const user = userEvent.setup();
