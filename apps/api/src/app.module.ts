@@ -28,6 +28,7 @@ import { SourceExtractionModule } from "./source-extraction/source-extraction.mo
 import { SourcesModule } from "./sources/sources.module";
 import { TopicsModule } from "./topics/topics.module";
 import { WebhooksModule } from "./webhooks/webhooks.module";
+import { WorkspaceDataModule } from "./workspace-data/workspace-data.module";
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     SourcesModule,
     TopicsModule,
     WebhooksModule,
+    WorkspaceDataModule,
   ],
 })
 export class AppModule implements OnModuleDestroy {

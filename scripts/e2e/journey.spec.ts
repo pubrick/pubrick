@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import { expect, test } from "@playwright/test";
 import type { ManualPlatformId } from "../../packages/shared/src/dto/channels.js";
 
@@ -90,6 +92,20 @@ test("account, workspace, manual draft, persisted edits and UI tenant switching"
   });
   expect(result.original).not.toBe(result.other);
   await page.goto("/en/settings");
+  const downloaded = page.waitForEvent("download");
+  await page
+    .getByRole("link", { name: "Export workspace data (download opens in a new tab)", exact: true })
+    .click();
+  const archive = await downloaded;
+  expect(await archive.failure()).toBeNull();
+  expect(archive.suggestedFilename()).toBe("pubrick-workspace.tar.gz");
+  const archivePath = await archive.path();
+  if (!archivePath) throw new Error("Browser did not retain the workspace download");
+  const records = gunzipSync(await readFile(archivePath)).toString();
+  expect(records).toContain("Reviewed and edited by a human. Never published by this suite.");
+  expect(records).toContain('"format":"pubrick-workspace-export"');
+  expect(records).toContain('"complete":true');
+  expect(records).not.toContain("Disposable-browser-password-123!");
   await page.getByLabel("Workspace", { exact: true }).selectOption(result.other);
   await page.getByRole("button", { name: "Switch", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);

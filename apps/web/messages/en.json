@@ -1219,6 +1219,10 @@
     "startAgain": "Start again"
   },
   "SettingsPage": {
+    "dataTitle": "Workspace data",
+    "dataExport": "Export",
+    "dataExportLabel": "Export workspace data (download opens in a new tab)",
+    "dataExportHint": "Download content, editing history, settings and media files as a compressed archive. API keys, sessions and connection secrets are excluded. Export remains available after subscription expiry.",
     "title": "Settings",
     "appearanceTitle": "Appearance",
     "themeSystem": "System",

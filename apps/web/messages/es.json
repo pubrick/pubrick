@@ -1219,6 +1219,10 @@
     "startAgain": "Empezar de nuevo"
   },
   "SettingsPage": {
+    "dataTitle": "Datos del espacio de trabajo",
+    "dataExport": "Exportar",
+    "dataExportLabel": "Exportar datos del espacio (la descarga se abre en una pestaña nueva)",
+    "dataExportHint": "Descarga contenido, historial de edición, ajustes y archivos originales en un archivo comprimido. No incluye claves API, sesiones ni secretos de conexión. La exportación sigue disponible cuando caduca la suscripción.",
     "title": "Ajustes",
     "appearanceTitle": "Apariencia",
     "themeSystem": "Sistema",

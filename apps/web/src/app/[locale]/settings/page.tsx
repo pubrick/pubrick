@@ -30,6 +30,7 @@ import { Modal } from "@/components/ui/modal";
 import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkspaceDataCard } from "@/components/workspace-data-card";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { ApiError, api, errorMessage } from "@/lib/api";
@@ -1122,6 +1123,8 @@ export default function SettingsPage() {
             </>
           )}
         </Card>
+
+        {organization && canManageApiKeys && <WorkspaceDataCard />}
 
         <section aria-labelledby="personal-settings-title" className="flex flex-col gap-4">
           <h2 id="personal-settings-title" className="text-base font-semibold text-fg">
