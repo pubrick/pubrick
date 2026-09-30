@@ -108,15 +108,15 @@ export function createSmtpMailTransport(
       resolveOwnership: OwnershipResolver,
     ): Promise<AuthMailDeliveryResult> {
       if (closed) throw new AuthMailError("unavailable");
+      const payload = validateAuthMail(value);
       // A restored job for another domain/mode/auth secret never queries account
       // state or sends mail. Decoding callers also validate the encrypted schema.
       if (
-        value.identity.origin !== options.identity.origin ||
-        value.identity.deploymentMode !== options.identity.deploymentMode ||
-        value.identity.authSecretId !== options.identity.authSecretId
+        payload.identity.origin !== options.identity.origin ||
+        payload.identity.deploymentMode !== options.identity.deploymentMode ||
+        payload.identity.authSecretId !== options.identity.authSecretId
       )
         return { status: "skipped", reason: "identity_mismatch" };
-      const payload = validateAuthMail(value);
       const basic = deliveryEligibility(payload, options.identity, now(), {});
       if (basic !== "missing_target")
         return { status: "skipped", reason: basic as Exclude<DeliveryEligibility, "eligible"> };
@@ -128,6 +128,7 @@ export function createSmtpMailTransport(
       }
       const eligibility = deliveryEligibility(payload, options.identity, now(), snapshot);
       if (eligibility !== "eligible") return { status: "skipped", reason: eligibility };
+      if (closed) throw new AuthMailError("unavailable");
       const words = copy[payload.locale];
       try {
         const result = await client.sendMail({
