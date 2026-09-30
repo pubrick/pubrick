@@ -86,6 +86,26 @@ describe("YandexWebSearchClient", () => {
     await expect(search.search("x".repeat(400))).resolves.toEqual([]);
   });
 
+  it("preserves inline search highlights in their original sentence order", () => {
+    expect(
+      parseYandexXml(
+        xml(
+          doc(
+            "Before <hlword>first</hlword> between <hlword>second</hlword> after",
+            "https://example.org/highlights",
+            "The vaccine <hlword>does not</hlword> cause autism. A &amp; B.",
+          ),
+        ),
+      ),
+    ).toEqual([
+      {
+        title: "Before first between second after",
+        url: "https://example.org/highlights",
+        snippet: "The vaccine does not cause autism. A & B.",
+      },
+    ]);
+  });
+
   it("rejects malformed XML, invalid base64 and unexpected JSON", async () => {
     for (const response of [
       searchResponse("<yandexsearch><response>"),
