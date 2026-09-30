@@ -36,12 +36,18 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
         );
       },
       onData(stream, session, callback) {
+        const recipient = session.envelope.rcptTo[0]?.address;
+        if (!recipient) {
+          stream.resume();
+          callback(new Error("Missing fixture recipient"));
+          return;
+        }
         let body = "";
         stream.on("data", (chunk) => {
           body += chunk.toString();
         });
         stream.on("end", () => {
-          messages.push({ to: session.envelope.rcptTo[0].address, body });
+          messages.push({ to: recipient, body });
           callback();
         });
       },

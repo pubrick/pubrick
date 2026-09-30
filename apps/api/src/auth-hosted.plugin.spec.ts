@@ -28,6 +28,6 @@ describe("hosted session read policy", () => {
       session: { token: "verified" },
     });
     expect(await hosted?.handler(request)).toBeUndefined();
-    expect(hostedIdentityPlugin(false, false).hooks?.after?.[0].matcher(request)).toBe(false);
+    expect(hostedIdentityPlugin(false, false).hooks?.after?.[0]?.matcher(request)).toBe(false);
   });
 });
