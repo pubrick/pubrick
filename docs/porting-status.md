@@ -1,8 +1,7 @@
 # Reference module porting status
 
 This is a working inventory, not a release promise. The historical reference was
-`Ozon-tools/backend/app/content_factory` and `frontend/src/app/content`; that
-module has since been removed from the origin repository after the port.
+`Ozon-tools/backend/app/content_factory` and `frontend/src/app/content`.
 The target is this repository. The product scope and phases remain in
 `docs/specs/0001-product-design.md` §4 and §8. Code wins over older design
 documents when they disagree. The current execution priorities are in
