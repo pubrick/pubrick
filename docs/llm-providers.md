@@ -45,8 +45,9 @@ Google-only features retain their separate Google-key requirement: Gemini image
 generation, knowledge embeddings/search, website-to-brand import, and automatic
 paid reply analysis. Choosing a different text provider does not turn these into
 that vendor's image or embedding API. A saved Google key can coexist with another
-text provider. The generic text pipeline selects the most recently added
-provider credential (`created_at`); replacing an existing key does not reorder providers. An explicit
+text provider. The generic text pipeline selects the first-added
+provider credential (`created_at` ascending, with provider-name tie breaking);
+replacing an existing key does not reorder providers. An explicit
 per-run/provider choice is not introduced here.
 
 ## Retention, proxy and costs
