@@ -88,11 +88,13 @@ export type CancellationRequest = Readonly<{
   idempotencyKey: string;
   timing: "immediately" | "period_end";
 }>;
+export type ExpirationRequest = Readonly<{ checkoutId: string; idempotencyKey: string }>;
 export interface BillingDriver {
   readonly identity: BillingIdentity;
   validateAccount(): Promise<BillingIdentity>;
   retrievePrice(id: string): Promise<PriceSnapshot>;
   cancelSubscription(input: CancellationRequest): Promise<SubscriptionSnapshot>;
+  expireCheckout(input: ExpirationRequest): Promise<CheckoutSnapshot>;
   createCustomer(input: CustomerRequest): Promise<CustomerSnapshot>;
   createCheckout(input: CheckoutRequest): Promise<SessionResult>;
   createPortal(input: PortalRequest): Promise<SessionResult>;
@@ -168,6 +170,10 @@ export function validateCancellation(input: CancellationRequest): void {
   validateAttempt(input.idempotencyKey);
   if (!["immediately", "period_end"].includes(input.timing))
     throw new BillingError("invalid_request");
+}
+export function validateExpiration(input: ExpirationRequest): void {
+  requireId(input.checkoutId, "cs_");
+  validateAttempt(input.idempotencyKey);
 }
 export function validateCheckoutSnapshot(snapshot: CheckoutSnapshot, code: BillingErrorCode): void {
   requireId(snapshot.checkoutId, "cs_", code);

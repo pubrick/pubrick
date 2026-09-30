@@ -6,6 +6,7 @@ import type {
   CheckoutSnapshot,
   CustomerRequest,
   CustomerSnapshot,
+  ExpirationRequest,
   InvoiceSnapshot,
   PortalRequest,
   PriceSnapshot,
@@ -21,6 +22,7 @@ import {
   validateCheckout,
   validateCheckoutSnapshot,
   validateCustomer,
+  validateExpiration,
   validateInvoiceSnapshot,
   validatePortal,
   validatePriceSnapshot,
@@ -43,6 +45,7 @@ export class FixtureBillingDriver implements BillingDriver {
   private readonly subscriptions: SubscriptionSnapshot[];
   private readonly prices: readonly PriceSnapshot[];
   private readonly cancellationAttempts = new Map<string, string>();
+  private readonly expirationAttempts = new Map<string, string>();
   private readonly checkouts: CheckoutSnapshot[];
   private readonly invoices: readonly InvoiceSnapshot[];
   private readonly customerAttempts = new Map<
@@ -161,6 +164,17 @@ export class FixtureBillingDriver implements BillingDriver {
     const result = { identity: this.identity, customerId: `cus_fixture_${sequence}` };
     this.customerAttempts.set(input.idempotencyKey, { request, result });
     return { ...result };
+  }
+  async expireCheckout(input: ExpirationRequest): Promise<CheckoutSnapshot> {
+    validateExpiration(input);
+    const prior = this.expirationAttempts.get(input.idempotencyKey);
+    if (prior && prior !== input.checkoutId) throw new BillingError("idempotency_conflict");
+    const index = this.checkouts.findIndex((entry) => entry.checkoutId === input.checkoutId);
+    const current = this.checkouts[index];
+    if (!current) throw new BillingError("not_found");
+    this.expirationAttempts.set(input.idempotencyKey, input.checkoutId);
+    if (current.status === "open") this.checkouts[index] = { ...current, status: "expired" };
+    return this.retrieveCheckout(input.checkoutId);
   }
   async createCheckout(input: CheckoutRequest): Promise<SessionResult> {
     validateCheckout(input);

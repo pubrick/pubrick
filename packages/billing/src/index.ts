@@ -11,6 +11,7 @@ export type {
   CheckoutSnapshot,
   CustomerRequest,
   CustomerSnapshot,
+  ExpirationRequest,
   InvoiceSnapshot,
   PortalRequest,
   PriceSnapshot,

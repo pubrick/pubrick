@@ -60,6 +60,15 @@ naturally reconciled by current status rather than relying on POST-style
 idempotency guarantees. Durable intent, authorization, deletion outbox and
 commercial cancellation policy remain application responsibilities.
 
+`expireCheckout({ checkoutId, idempotencyKey })` first retrieves authoritative
+relationships. Only an `open` checkout is expired through the SDK, followed by
+fresh retrieval. Already `expired` or `complete` checkouts return their current
+facts without mutation. A complete checkout may carry a late subscription that
+still needs cancellation/reconciliation; expiration never promises that no
+payment obligation exists. Ambiguous provider failures remain retryable using
+the same durable key. The fixture adapter preserves seeded identities/customer
+relationships and implements the same transitions.
+
 `createCustomer({ orgReference, idempotencyKey, email? })` enables the first
 subscription without requiring an existing vendor customer ID. The organization
 reference and optional contact email must come from the server. The reference is

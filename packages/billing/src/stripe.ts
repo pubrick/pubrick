@@ -7,6 +7,7 @@ import type {
   CheckoutSnapshot,
   CustomerRequest,
   CustomerSnapshot,
+  ExpirationRequest,
   InvoiceSnapshot,
   PortalRequest,
   PriceSnapshot,
@@ -23,6 +24,7 @@ import {
   validateCheckout,
   validateCheckoutSnapshot,
   validateCustomer,
+  validateExpiration,
   validateInvoiceSnapshot,
   validatePortal,
   validatePriceSnapshot,
@@ -157,6 +159,19 @@ export class StripeSandboxDriver implements BillingDriver {
       requireId(customer.id, "cus_", "invalid_response");
       return { identity: this.identity, customerId: customer.id };
     });
+  }
+  async expireCheckout(input: ExpirationRequest): Promise<CheckoutSnapshot> {
+    validateExpiration(input);
+    const current = await this.retrieveCheckout(input.checkoutId);
+    if (current.status !== "open") return current;
+    await this.call(async () => {
+      await this.stripe.checkout.sessions.expire(
+        input.checkoutId,
+        {},
+        { idempotencyKey: input.idempotencyKey },
+      );
+    });
+    return this.retrieveCheckout(input.checkoutId);
   }
   async createCheckout(input: CheckoutRequest): Promise<SessionResult> {
     validateCheckout(input);
