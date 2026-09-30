@@ -29,7 +29,7 @@ printf '%s|%s|%s|%s|%s\\n' "$*" "$DATABASE_URL" "$BETTER_AUTH_URL" "$WEB_ORIGIN"
     );
     writeFileSync(
       path.join(directory, ".env"),
-      [
+      `${[
         "BETTER_AUTH_SECRET=local-test-bootstrap-secret",
         "APP_ENCRYPTION_KEY=local-test-bootstrap-key",
         "POSTGRES_PORT=55449",
@@ -39,7 +39,7 @@ printf '%s|%s|%s|%s|%s\\n' "$*" "$DATABASE_URL" "$BETTER_AUTH_URL" "$WEB_ORIGIN"
         "WEB_PORT=3080",
         "API_PORT=3012",
         "PUBLIC_ORIGIN=http://localhost:3080",
-      ].join("\n") + "\n",
+      ].join("\n")}\n`,
     );
     const log = path.join(directory, "commands.log");
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, INIT_TEST_LOG: log };

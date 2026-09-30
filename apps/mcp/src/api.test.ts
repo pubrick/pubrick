@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  contentStatusSchema,
   createPublicContentClient,
   createPublicPublicationClient,
-  contentStatusSchema,
   loadConfig,
   PublicApiError,
   validateBaseUrl,
