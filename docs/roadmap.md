@@ -53,8 +53,8 @@ means a recorded source revision and deployable digest; byte-identical rebuilds
 require additional base-image and toolchain pinning.
 
 Implementation progress: release image tooling, consistent Compose recovery,
-security reporting and the production browser runner are implemented on the
-release-foundation feature branch. The built browser journey and native recovery
+security reporting and the production browser runner are implemented and
+integrated in `main` at `474e28a4`. The built browser journey and native recovery
 round trip passed locally. See the [verification record](reviews/2026-09-30-release-foundation.md)
 for test scope and follow-up fixes. No versioned images or release have been
 published yet, so the release acceptance remains pending.
@@ -96,11 +96,14 @@ Use a replaceable billing driver rather than coupling domain code to one payment
 vendor. `packages/billing` now provides official-SDK sandbox and offline fixture
 drivers. Application subscription storage, custom hosted organization routes,
 resource quotas and physical model-call concurrency admission are implemented
-on the integration branch. Encrypted durable authentication mail and manager-only
+in `main` at `474e28a4`. Encrypted durable authentication mail and manager-only
 workspace data exports are implemented. The integrated hosted browser journey
 passed against a disposable built stack with a fixture entitlement; this is not
 checkout settlement. Real payment sandbox verification and deployment operations
-remain required before a hosted beta is declared.
+remain required before a hosted beta is declared. The read-only
+[operator status command](hosted-operations.md) is implemented in the follow-up
+feature branch; it reports bounded aggregate queue, subscription, cleanup and
+physical-call facts and does not certify provider readiness.
 
 Delivery slices:
 
