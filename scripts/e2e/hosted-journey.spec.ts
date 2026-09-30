@@ -9,6 +9,7 @@ const controlOrigin = process.env.PUBRICK_E2E_CONTROL_ORIGIN;
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: synthetic fixture control credentials never enter the application.
 const controlSecret = process.env.PUBRICK_E2E_CONTROL_SECRET;
 test.skip(!hosted, "Run node scripts/e2e/hosted.run.mjs with its disposable fixture stack.");
+test.use({ actionTimeout: 10_000 });
 
 async function control(page: Page, action: string, orgId: string) {
   if (!controlOrigin || !controlSecret) throw new Error("Hosted fixture control missing");
@@ -163,7 +164,7 @@ test("hosted BYOK: verified onboarding, fixture entitlement, human draft, invita
   await page.getByRole("button", { name: "Invite", exact: true }).click();
   const invite = page.getByRole("dialog");
   await invite.getByLabel("Email", { exact: true }).fill("editor@hosted.browser.example");
-  await invite.getByLabel("Role", { exact: true }).selectOption("admin");
+  await invite.getByLabel("Workspace role", { exact: true }).selectOption("admin");
   await invite.getByRole("button", { name: "Invite", exact: true }).click();
   const invitationLink = await mailLink(page, "editor@hosted.browser.example", "onboarding");
   const second = await browser.newContext({ baseURL: new URL(page.url()).origin });
