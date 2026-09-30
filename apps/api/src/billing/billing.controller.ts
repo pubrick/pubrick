@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import { BillingError } from "@pubrick/billing";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
+import { HostedBrowserGuard } from "../hosted-admission/hosted-browser.guard";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
@@ -48,6 +49,7 @@ export class BillingController {
     return result(() => this.billing.status(orgId, userId));
   }
   @Post("checkout")
+  @UseGuards(HostedBrowserGuard)
   @HttpCode(200)
   checkout(
     @OrgId() orgId: string,
@@ -57,6 +59,7 @@ export class BillingController {
     return result(() => this.billing.start(orgId, userId, body.planId, body.locale));
   }
   @Post("portal")
+  @UseGuards(HostedBrowserGuard)
   @HttpCode(200)
   portal(
     @OrgId() orgId: string,

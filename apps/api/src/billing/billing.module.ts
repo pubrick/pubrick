@@ -1,5 +1,9 @@
 import { type DynamicModule, Logger, Module } from "@nestjs/common";
 import type { createDb } from "@pubrick/db";
+import {
+  HOSTED_BROWSER_ORIGIN,
+  HostedBrowserGuard,
+} from "../hosted-admission/hosted-browser.guard";
 import type { BillingConfig } from "./billing.config";
 import { BillingController, PublicBillingController } from "./billing.controller";
 import { BillingRepository } from "./billing.repository";
@@ -17,6 +21,8 @@ export class BillingModule {
       module: BillingModule,
       controllers: [BillingController, PublicBillingController],
       providers: [
+        { provide: HOSTED_BROWSER_ORIGIN, useValue: config.publicOrigin },
+        HostedBrowserGuard,
         {
           provide: BILLING_DATABASE,
           useFactory: async () => database ?? (await import("../db")).db,
