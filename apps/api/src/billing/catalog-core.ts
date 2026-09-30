@@ -112,12 +112,20 @@ export class BillingCatalog {
         plan.price.unitAmount < 0 ||
         !Number.isSafeInteger(plan.price.intervalCount) ||
         plan.price.intervalCount < 1 ||
-        !/[a-z]{3}/.test(plan.price.currency) ||
+        !/^[a-z]{3}$/.test(plan.price.currency) ||
         !["day", "week", "month", "year"].includes(plan.price.interval)
       )
         throw new BillingCoreError("configuration");
     }
-    this.history = structuredClone(plans);
+    this.history = Object.freeze(
+      structuredClone(plans).map((plan) =>
+        Object.freeze({
+          ...plan,
+          limits: Object.freeze(plan.limits),
+          price: Object.freeze({ ...plan.price, identity: Object.freeze(plan.price.identity) }),
+        }),
+      ),
+    );
   }
   private assertReady(): readonly CatalogPlan[] {
     if (!this.plans) throw new BillingCoreError("not_ready");

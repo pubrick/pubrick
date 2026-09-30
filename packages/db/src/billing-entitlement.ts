@@ -10,6 +10,7 @@ export type BillingTransaction = Parameters<
   Parameters<ReturnType<typeof createDb>["db"]["transaction"]>[0]
 >[0];
 export type BillingEntitlement = {
+  identity: { provider: string; environment: string; accountId: string } | null;
   decision: "active" | "trial" | "expired" | "unconfigured";
   revision: number;
   planVersionId: string | null;
@@ -30,6 +31,7 @@ export async function resolveBillingEntitlement(
     .where(eq(organizationBillingState.orgId, orgId))
     .for("update");
   const empty: BillingEntitlement = {
+    identity: null,
     decision: "unconfigured",
     revision: state?.revision ?? 0,
     planVersionId: null,
@@ -43,7 +45,15 @@ export async function resolveBillingEntitlement(
     .select()
     .from(billingPlanVersions)
     .where(eq(billingPlanVersions.id, state.planVersionId));
-  if (!plan) return { ...empty, decision: "expired" };
+  if (
+    !plan ||
+    Object.values(plan.limits).some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    !["seats", "brands", "channels", "mediaBytes", "concurrentJobs"].every(
+      (key) => typeof plan.limits[key as keyof BillingLimits] === "number",
+    ) ||
+    plan.limits.seats < 1
+  )
+    return { ...empty, decision: "expired" };
   const [subscription] = state.subscriptionId
     ? await tx
         .select()
@@ -64,8 +74,11 @@ export async function resolveBillingEntitlement(
     state.accessUntil > now &&
     subscription &&
     !subscription.deleted &&
+    subscription.planVersionId === plan.id &&
+    subscription.priceId === plan.priceId &&
     ["active", "trialing"].includes(subscription.status);
   return {
+    identity: { provider: plan.provider, environment: plan.environment, accountId: plan.accountId },
     decision: live ? (subscription.status === "trialing" ? "trial" : "active") : "expired",
     revision: state.revision,
     planVersionId: plan.id,

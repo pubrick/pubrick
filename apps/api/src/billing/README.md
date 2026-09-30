@@ -1,91 +1,134 @@
-# Billing core, before application wiring
+# Hosted billing storage and orchestration
 
-These are pure Pubrick domain orchestrators with injected storage/driver ports.
-They are not registered in Nest, expose no HTTP routes, and do not activate
-hosted subscriptions or quotas. No billing tables/migrations exist in this slice.
+Pubrick owns the catalog, entitlement revisions, tenant ownership, attempts and
+receipts. `@pubrick/billing` owns only maintained SDK transport and normalized
+provider facts. This slice includes migration 0119 and constrained controllers,
+but **does not enable SaaS** until application registration, actual raw-byte
+middleware verification, all growth admissions and transactional hosted deletion
+are integrated by the application owner.
 
-## Catalog and checkout
+## Catalog and entitlement
 
-`BillingCatalog.initialize()` validates the driver's current account and every
-configured recurring price before publishing an immutable catalog. An unfinished
-or failed initialization leaves catalog access closed. Configured internal plan
-IDs/versions and capacity limits are server policy; currency, amount and recurring
-interval come from authoritative price retrieval. Initial current versions are
-supported; persistent historical/deprecated versions require the subsequent
-catalog repository before real plan changes are exposed.
-Overlapping initialization calls share one in-flight result; subsequent failed
-initialization closes the catalog instead of racing an earlier successful load.
+`BillingCatalog.initialize()` coalesces overlapping loads and verifies the
+configured provider account plus actual recurring prices before exposing plans.
+`publishCatalog()` persists immutable plan ID/version, scoped price and finite
+limits; changing an existing version refuses startup. Currency, minor-unit amount
+and recurring interval come from authoritative vendor retrieval. Historical
+persisted versions remain resolvable for existing subscriptions and retries but
+are not exposed as new purchase choices. A new version requires a new price.
 
-`CheckoutCore.start(orgId, userId, planId, locale)` selects that catalog and asks
-`CheckoutStore.begin` to atomically authorize the authenticated owner/admin and
-commit/reuse an attempt. Contact email comes only from the store. Driver customer
-and checkout calls use persisted attempt keys, never newly generated retry keys.
-The customer mapping must commit before checkout. Revision conflicts return
-`pending`; SDK ambiguity keeps the durable attempt for reconciliation. Successful
-checkout URLs are saved before returning `ready` and never grant subscription
-access. Store authorization must run even when returning a saved ready result.
-The store persists the preferred return URLs only when creating an attempt and
-keeps them immutable across retries, including locale changes. Stored URLs must
-match the configured public origin and a supported locale's Settings path.
-Restoring an unresolved attempt under a different origin requires reconciliation;
-it cannot reuse the idempotency key with a changed return URL.
+Limits are `seats`, `brands`, `channels`, `mediaBytes`, `concurrentJobs` (safe,
+nonnegative integers; seats at least one). Per-account owned-workspace capacity
+and lifetime onboarding trial policy belong to separate application admissions.
+`resolveBillingEntitlement(orgId, tx, now)` follows an already locked organization
+with billing-state `FOR UPDATE`; it returns decision, immutable plan/version,
+limits, revision, expiry and provider/environment/account identity. Hosted callers
+must compare that identity with their validated configured account, including
+after restore. Self-hosted bypass is explicit application policy. Export, deletion
+and billing management remain available after expiry.
 
-## Durable receipt and reconciliation
+## Checkout mutation lease
 
-`ReconciliationCore.receive` checks readiness, verifies exact webhook bytes and
-passes closed verified facts to the inbox. Its promise resolves only after the
-store's committed receipt operation. HTTP status/body parsing and raw-byte
-preservation remain future integration work: test the actual Nest auth middleware
-with `bodyParser: false`; do not assume a bootstrap-only parser applies to tests.
+`CheckoutStore.begin` reauthorizes owner/admin membership transactionally and
+commits a single unresolved attempt before provider I/O. Customer and checkout
+keys, original return URLs, plan/version, provider/account/environment and
+issued-at/recovery deadlines are persisted. Return URLs match the configured
+public origin and a supported locale Settings path. Locale changes retain the
+original payload; a different restored public origin refuses automatic reuse.
+No contact email or credential secret is stored in retained operational rows.
 
-`process` claims a committed processing lease, retrieves current checkout/invoice
-relationships, and resolves ownership through persisted provider/environment/
-account/customer/subscription mapping. Unknown mappings and deletion tombstones
-produce ignored receipts, never access grants. Pending checkout relationships
-also grant nothing; the eventual pending-attempt reconciliation must revisit them.
+A bounded lease covers the unresolved mutation. Revision/token/expiry fencing
+prevents stale completion from returning ready or granting access. Known late
+external IDs are retained for retrieval or cleanup. SDK ambiguity does not permit
+a fresh key: recovery stops after 23 hours, conservatively below Stripe's minimum
+24-hour key retention, leaving an `operator_action` obligation. A known external
+checkout ID is always retrieved, never recreated after the retention window.
 
-For owned relationships it re-fetches subscription status, checks customer and
-identity consistency, and selects the known plan price. `ReceiptStore.apply`
-must atomically recheck revision, lease, deletion and subscription ownership;
-write authoritative facts and finish the receipt. A revision conflict re-reads
-mapping and provider facts, with three bounded passes before recording a retry.
-Only closed sanitized error codes reach retry storage. Completed/already-leased
-receipts cause no provider I/O. All port operations finish before driver I/O;
-implementations must not return open transactions or held row/advisory locks.
+Stripe may prune keys after at least 24 hours; reusing a pruned key can execute a
+new operation: [official idempotency reference](https://docs.stripe.com/api/idempotent_requests).
 
-## Required next work
+## Receipt and periodic reconciliation
 
-- After migration 0118: schema/migration 0119, durable attempts/inbox/catalog,
-  operational mapping, retry leases and real concurrency/deletion tests.
-- Explicit self-hosted bypass; hosted startup config/account/catalog refusal;
-  production refusal of fixture driver. This module makes none of those mode
-  selections itself.
-- Transactional owner/admin authorization; account workspace/trial admission;
-  role/invitation, brand, media reservation and worker concurrency enforcement.
-- Organization-before-billing-before-existing-resource lock graph, no lock
-  upgrades and no SDK calls under locks. Operational inbox/tombstone rows must
-  survive tenant deletion without introducing inverse FK/cascade lock paths.
-- Atomic deletion tombstone/outbox, cancellation and pending checkout expiration.
-  Late SDK results or checkout completion after deletion cannot recreate access.
-  Do not expose hosted deletion before pending attempts can be cleaned up.
-- Periodic reconciliation, restored provider/environment/account separation,
-  preserved export/delete access after expiry, public billing UI and complete
-  test subscription journey. SDK facts/statuses themselves are not entitlements.
-- API workspace dependency now includes billing; Docker manifest closure copies
-  must include its package manifest when the parent integrates this dependency.
+Webhooks require the exact original bytes and a single bounded signature header.
+Signature verification precedes durable unique provider/account/environment/event
+receipt insertion and acknowledgement. Only closed event ID/kind/resource facts
+are stored; raw provider JSON, headers, secrets and emails are not retained.
+Unsupported signed event kinds are acknowledged without grants.
 
-The port contracts and mocked unit tests describe storage obligations; they do
-**not** prove real database atomicity or SaaS completion.
+Processing claims a short committed lease; network calls happen after locks are
+released. Authoritative relationships and subscription facts are re-fetched.
+Tenant ownership uses immutable customer/account mappings; metadata/email never
+establish authorization. Unknown customers grant nothing. Mapping revision and
+receipt lease are checked again before an entitlement changes. Historical
+subscriptions cannot replace a newer selected subscription; conflicting new
+subscriptions while current access is live create cancellation obligations.
+Pending relationships retry, and independent bounded periodic scans reconcile
+pending checkouts and existing subscriptions even when a webhook never arrives.
 
-## Focused offline verification
+## Deletion and cleanup
 
-After installing the billing package's dependencies:
+Operational account mappings, attempts, receipts, subscriptions and cleanup rows
+have no tenant cascade FK. They retain opaque org IDs exclusively for privileged
+scoped scans; the public API does not expose these rows. Only entitlement state
+cascades with the organization. Deletion takes run-admission advisory, organization
+`FOR UPDATE` directly, then billing state/account/resources in that order.
+
+The application MUST invoke `BillingRepository.tombstoneInTx(orgId, tx)` inside
+**the same transaction** that deletes the organization. A before-delete callback
+is insufficient. Hosted raw Better Auth deletion stays disabled until this
+transactional path exists. Tombstones and cancellation/expiration outbox rows
+commit before removal; SDK calls occur afterwards under bounded cleanup leases.
+Late SDK results append retained obligations instead of recreating tenant access.
+Open checkouts expire; complete checkouts yield late subscription cancellation.
+Complete checkout with a delayed relationship stays retriable. Unknown creation
+past the recovery deadline or a changed configured account requires operator
+attention; it must not silently become a fresh charge or use ambient credentials.
+
+## Application integration
+
+Construct `BillingRepository(db, driver.identity)`, `BillingCatalog(driver,
+serverPlans)` and `BillingService(driver, catalog, repository, publicOrigin)` in
+explicit hosted mode. Await `service.initialize()` before enabling processing.
+Register `BillingController` and `PublicBillingController`; own scheduling and
+shutdown of bounded `service.sweep()` ticks in the application lifecycle.
+
+Routes: public `GET /api/billing/plans`, signed `POST /api/billing/webhook`;
+owner/admin `GET /api/billing`, `POST /api/billing/checkout` (`planId`, `locale`)
+and `POST /api/billing/portal` (`locale`). Clients cannot supply vendor price,
+customer, account, return URL or entitlement limits. The actual Nest stack uses
+`bodyParser: false`: application wiring must prove middleware preserves
+`request.rawBody` before exposing the webhook route, including whitespace and
+signature-tampering tests. Unit byte extraction does not prove middleware behavior.
+
+Fixture mode is for explicitly disposable offline stacks and is refused in
+production. Restarting an empty in-memory fixture driver under an existing
+persisted fixture identity can collide with retained generated IDs. Hydrate an
+explicit validated fixture inventory or refuse startup for nonempty fixture
+identity; never synthesize paid responses from checkout success. Stripe sandbox
+restart instead retrieves authoritative external facts through its maintained SDK.
+
+## Local verification
+
+Pure contracts, no API boot/database/SMTP:
 
 ```sh
 pnpm --filter @pubrick/billing exec vitest run \
   --config ../../apps/api/vitest.billing.config.mts --reporter=dot
 ```
 
-The isolated config aliases billing source, runs only these pure contracts and
-does not boot API/auth/SMTP or require PostgreSQL. The normal API test/build tier
-uses the explicit workspace dependency and its built declarations.
+The persistence tier ignores ordinary `DATABASE_URL`. It requires an explicitly
+owned disposable loopback database named `pubrick_billing_*`, and migrates only
+that database. Build shared/database/billing declarations first, then:
+
+```sh
+PUBRICK_BILLING_DISPOSABLE=1 \
+BILLING_TEST_DATABASE_URL=postgres://postgres:fixture@127.0.0.1:31432/pubrick_billing_test \
+pnpm --filter @pubrick/api exec vitest run \
+  --config vitest.billing-persistence.config.mts --reporter=dot
+```
+
+Contracts test lease races, immutable retry payload, late completion after
+transactional deletion, durable receipt uniqueness/reclaim, closed expiry policy,
+no-webhook checkout recovery and historical subscription isolation. Application
+admissions, full hosted browser payment journey and actual raw parser integration
+remain separate required acceptance gates.
