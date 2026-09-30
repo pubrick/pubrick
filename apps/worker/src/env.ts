@@ -1,3 +1,4 @@
+import path from "node:path";
 import { googleProxyEnvSchema } from "@pubrick/ai";
 import { mailEnvironmentSchema, resolveSmtpConfig } from "@pubrick/mail";
 import {
@@ -18,6 +19,8 @@ export const env = parseEnv({
     z.string().min(16).optional(),
   ),
   DATABASE_URL: z.string().min(1),
+  // Same configured mount/default as API uploads and worker generation/publishing.
+  MEDIA_STORAGE_DIR: z.string().min(1).default(path.resolve(process.cwd(), ".data/media")),
   /**
    * The credential key ring, active key first — the api's variable, validated
    * the same way here because the worker decrypts the same rows. Fail at boot,
