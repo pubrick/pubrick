@@ -1,4 +1,4 @@
-import type { BillingDriver, BillingIdentity, SubscriptionSnapshot } from "@pubrick/billing";
+import type { BillingIdentity, SubscriptionSnapshot } from "@pubrick/billing";
 import { FixtureBillingDriver } from "@pubrick/billing";
 import { expect, it, vi } from "vitest";
 import { BillingCatalog } from "./catalog-core";
@@ -80,13 +80,11 @@ const attempt: CheckoutAttempt = {
 function checkoutStore(): CheckoutStore {
   return {
     begin: vi.fn().mockResolvedValue({ kind: "attempt", attempt }),
-    attachCustomer: vi
-      .fn()
-      .mockImplementation(async (_org, current, customerId) => ({
-        ...current,
-        customerId,
-        revision: current.revision + 1,
-      })),
+    attachCustomer: vi.fn().mockImplementation(async (_org, current, customerId) => ({
+      ...current,
+      customerId,
+      revision: current.revision + 1,
+    })),
     complete: vi.fn().mockResolvedValue(true),
   };
 }
@@ -181,21 +179,18 @@ it("does not proceed to checkout after a concurrent customer attachment changed 
 function receiptStore(): ReceiptStore {
   return {
     receive: vi.fn().mockResolvedValue("receipt_1"),
-    claim: vi
-      .fn()
-      .mockResolvedValue({
-        id: "receipt_1",
-        lease: "lease_1",
-        event: { identity, eventId: "evt_test", kind: "checkout.completed", resourceId: "cs_test" },
-      }),
-    mapping: vi
-      .fn()
-      .mockResolvedValue({
-        orgId: "org_server",
-        revision: 1,
-        customerId: "cus_test",
-        deleted: false,
-      }),
+    claim: vi.fn().mockResolvedValue({
+      id: "receipt_1",
+      lease: "lease_1",
+      event: { identity, eventId: "evt_test", kind: "checkout.completed", resourceId: "cs_test" },
+    }),
+    mapping: vi.fn().mockResolvedValue({
+      identity,
+      orgId: "org_server",
+      revision: 1,
+      customerId: "cus_test",
+      deleted: false,
+    }),
     apply: vi.fn().mockResolvedValue("applied"),
     ignored: vi.fn().mockResolvedValue(undefined),
     retry: vi.fn().mockResolvedValue(undefined),
@@ -221,21 +216,21 @@ it("durably receives verified bytes without granting access or invoking subscrip
     "invalid_signature",
   );
 });
-it.each([null, { orgId: "org_deleted", revision: 1, customerId: "cus_test", deleted: true }])(
-  "ignores valid nonowned/deleted relationships without an access grant",
-  async (mapping) => {
-    const sdk = driver();
-    const catalog = new BillingCatalog(sdk, [plan]);
-    await catalog.initialize();
-    const store = receiptStore();
-    vi.mocked(store.mapping).mockResolvedValue(mapping);
-    const retrieve = vi.spyOn(sdk, "retrieveSubscription");
-    await new ReconciliationCore(sdk, catalog, store).process("receipt_1");
-    expect(store.ignored).toHaveBeenCalled();
-    expect(store.apply).not.toHaveBeenCalled();
-    expect(retrieve).not.toHaveBeenCalled();
-  },
-);
+it.each([
+  null,
+  { identity, orgId: "org_deleted", revision: 1, customerId: "cus_test", deleted: true },
+])("ignores valid nonowned/deleted relationships without an access grant", async (mapping) => {
+  const sdk = driver();
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  const store = receiptStore();
+  vi.mocked(store.mapping).mockResolvedValue(mapping);
+  const retrieve = vi.spyOn(sdk, "retrieveSubscription");
+  await new ReconciliationCore(sdk, catalog, store).process("receipt_1");
+  expect(store.ignored).toHaveBeenCalled();
+  expect(store.apply).not.toHaveBeenCalled();
+  expect(retrieve).not.toHaveBeenCalled();
+});
 it("re-fetches authoritative status after revision conflict instead of applying an older snapshot", async () => {
   const sdk = driver();
   const catalog = new BillingCatalog(sdk, [plan]);
@@ -247,31 +242,73 @@ it("re-fetches authoritative status after revision conflict instead of applying 
   expect(retrieve).toHaveBeenCalledTimes(2);
   expect(store.apply).toHaveBeenCalledTimes(2);
   expect(store.apply).toHaveBeenLastCalledWith(
+    "org_server",
     { id: "receipt_1", lease: "lease_1", event: expect.anything() },
-    { orgId: "org_server", revision: 1, customerId: "cus_test", deleted: false },
+    { identity, orgId: "org_server", revision: 1, customerId: "cus_test", deleted: false },
     expect.objectContaining({ status: "active" }),
     catalog.select(plan.id),
   );
 });
-it("fails closed on mismatched customer or unknown price and records only sanitized retry codes", async () => {
+it.each([
+  [{ customerId: "cus_other" }, "identity_mismatch"],
+  [{ priceId: "price_unknown" }, "invalid_plan"],
+] as const)(
+  "fails closed on incompatible authoritative facts and records only sanitized retry codes",
+  async (changes, code) => {
+    const sdk = driver();
+    const catalog = new BillingCatalog(sdk, [plan]);
+    await catalog.initialize();
+    const store = receiptStore();
+    const snapshot: SubscriptionSnapshot = {
+      identity,
+      subscriptionId: "sub_test",
+      customerId: "cus_test",
+      priceId: "price_test",
+      status: "active",
+      cancelAtPeriodEnd: false,
+      periodStart: 100,
+      periodEnd: 200,
+      ...changes,
+    };
+    vi.spyOn(sdk, "retrieveSubscription").mockResolvedValue(snapshot);
+    await expect(
+      new ReconciliationCore(sdk, catalog, store).process("receipt_1"),
+    ).rejects.toThrowError(code);
+    expect(store.apply).not.toHaveBeenCalled();
+    expect(store.retry).toHaveBeenCalledWith(expect.anything(), code);
+  },
+);
+it("does not acknowledge a receipt before the inbox transaction succeeds", async () => {
   const sdk = driver();
   const catalog = new BillingCatalog(sdk, [plan]);
   await catalog.initialize();
   const store = receiptStore();
-  const snapshot: SubscriptionSnapshot = {
-    identity,
-    subscriptionId: "sub_test",
-    customerId: "cus_other",
-    priceId: "price_test",
-    status: "active",
-    cancelAtPeriodEnd: false,
-    periodStart: 100,
-    periodEnd: 200,
-  };
-  vi.spyOn(sdk, "retrieveSubscription").mockResolvedValue(snapshot);
+  vi.mocked(store.receive).mockRejectedValue(new Error("inbox unavailable"));
+  await expect(
+    new ReconciliationCore(sdk, catalog, store).receive(Buffer.from("registered"), "fixture"),
+  ).rejects.toThrowError("inbox unavailable");
+  expect(store.apply).not.toHaveBeenCalled();
+});
+it("bounds repeated revision conflicts and leaves a retryable receipt without stale writes", async () => {
+  const sdk = driver();
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  const store = receiptStore();
+  vi.mocked(store.apply).mockResolvedValue("conflict");
   await expect(
     new ReconciliationCore(sdk, catalog, store).process("receipt_1"),
-  ).rejects.toThrowError("identity_mismatch");
+  ).rejects.toThrowError("retry_required");
+  expect(store.apply).toHaveBeenCalledTimes(3);
+  expect(store.retry).toHaveBeenCalledWith(expect.anything(), "retry_required");
+});
+it("does no provider work for a receipt already processed or leased elsewhere", async () => {
+  const sdk = driver();
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  const store = receiptStore();
+  vi.mocked(store.claim).mockResolvedValue(null);
+  const retrieve = vi.spyOn(sdk, "retrieveCheckout");
+  await new ReconciliationCore(sdk, catalog, store).process("receipt_1");
+  expect(retrieve).not.toHaveBeenCalled();
   expect(store.apply).not.toHaveBeenCalled();
-  expect(store.retry).toHaveBeenCalledWith(expect.anything(), "identity_mismatch");
 });
