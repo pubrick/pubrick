@@ -118,3 +118,9 @@ export const mailConfig = resolveSmtpConfig(env, {
 });
 if (mailConfig && !env.BETTER_AUTH_SECRET)
   throw new Error("Authentication mail requires BETTER_AUTH_SECRET on the worker.");
+if (
+  env.PUBRICK_DEPLOYMENT_MODE === "hosted" &&
+  process.env.NODE_ENV === "production" &&
+  new URL(env.WEB_ORIGIN).protocol !== "https:"
+)
+  throw new Error("Hosted authentication mail requires HTTPS in production.");

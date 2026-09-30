@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthMailModule } from "./auth-mail/auth-mail.module";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
@@ -29,6 +30,7 @@ import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
+  imports: [AuthMailModule],
   providers: [
     AutopilotService,
     QueueService,
