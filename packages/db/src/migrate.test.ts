@@ -560,6 +560,11 @@ const NON_ENUM_CHECKS = [
   "publications_partial_followup_outcome_check",
   "publications_partial_primary_kind_check",
   "publications_partial_telegram_check",
+  // 0118: explicit text selection and monotonic encrypted-credential revisions.
+  "organization_ai_text_settings_provider_check",
+  "organization_ai_text_settings_revision_check",
+  "organization_ai_text_settings_model_check",
+  "ai_credentials_revision_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -699,6 +704,10 @@ function expectNoRowRewritten(
           // 0094 adds a metadata-only constant default for optimistic body edits.
           if (table === "content_items" && key === "body_revision") {
             return afterRow[key] !== 0;
+          }
+          // 0118 assigns the initial revision without changing encrypted bytes.
+          if (table === "ai_credentials" && key === "revision") {
+            return afterRow[key] !== 1;
           }
           // 0077 keeps existing channel text byte-for-byte while giving old
           // adaptations and their versions an explicitly empty tag list.
