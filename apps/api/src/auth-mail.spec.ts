@@ -57,7 +57,7 @@ describe("authentication mail through maintained SMTP transport", () => {
       ).toBe(true);
       expect(capture.messages).toHaveLength(1);
       expect(capture.messages[0]).toContain("Subject: Confirm your Pubrick email address");
-      const parsed = await simpleParser(capture.messages[0]);
+      const parsed = await simpleParser(capture.messages[0] ?? "");
       expect(parsed.text).toContain("token=opaque");
     } finally {
       await mail.close();

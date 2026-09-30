@@ -33,7 +33,8 @@ export function hostedIdentityPlugin(hosted: boolean, recoveryEnabled: boolean):
       before: [
         {
           matcher: (ctx) =>
-            hosted && !publicPaths.has(ctx.path) && !ctx.path.startsWith("/reset-password/"),
+            hosted &&
+            (!ctx.path || (!publicPaths.has(ctx.path) && !ctx.path.startsWith("/reset-password/"))),
           handler: createAuthMiddleware(async (ctx) => {
             const session = await getSessionFromCtx(ctx, { disableCookieCache: true });
             if (session && !session.user.emailVerified)

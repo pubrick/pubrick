@@ -2,9 +2,8 @@ import type { BetterAuthPlugin } from "better-auth";
 import { describe, expect, it, vi } from "vitest";
 import { hostedIdentityPlugin } from "./auth-hosted.plugin";
 
-type HookContext = Parameters<
-  NonNullable<NonNullable<BetterAuthPlugin["hooks"]>["after"]>[number]["handler"]
->[0];
+type Hook = NonNullable<NonNullable<BetterAuthPlugin["hooks"]>["after"]>[number];
+type HookContext = Parameters<Hook["handler"]>[0] & Parameters<Hook["matcher"]>[0];
 function context(path: string, returned: unknown) {
   const json = vi.fn((value: unknown) => value);
   return { path, context: { returned }, json } as unknown as HookContext;

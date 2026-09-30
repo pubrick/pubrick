@@ -186,7 +186,9 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
     const resetRedirect = await request(app.getHttpServer())
       .get(reset.pathname + reset.search)
       .expect(302);
-    const recoveryPage = new URL(resetRedirect.headers.location);
+    const location = resetRedirect.headers.location;
+    if (!location) throw new Error("Missing recovery redirect");
+    const recoveryPage = new URL(location);
     expect(recoveryPage.origin).toBe(origin);
     expect(recoveryPage.pathname).toBe("/en/reset-password");
     const token = recoveryPage.searchParams.get("token");
