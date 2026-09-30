@@ -142,6 +142,41 @@ describe.skipIf(!url)("ai credentials e2e", () => {
     };
   }
 
+  it.each(["openai", "anthropic", "deepseek"] as const)(
+    "%s credentials are scoped, encrypted and metered through the existing endpoint",
+    async (provider) => {
+      const a = await orgAgent();
+      const b = await orgAgent();
+      const modelId = `fixture-${provider}`;
+      const saved = await save(a.agent, { provider, defaultModel: modelId }).expect(200);
+      expect(saved.body).toMatchObject({ provider, defaultModel: modelId, proxyConfigured: false });
+      expect(JSON.stringify(saved.body)).not.toContain(SECRET_KEY);
+      expect((await a.agent.get("/api/ai-credentials/availability").expect(200)).body).toEqual({
+        configured: true,
+        googleConfigured: false,
+      });
+      await b.agent.post(`/api/ai-credentials/${provider}/test`).expect(404);
+      expect(probeCalls).toHaveLength(0);
+      probeOutcome = {
+        ok: true,
+        modelId,
+        records: [usage({ provider, modelId, costSource: "unknown", costUsd: null })],
+      };
+      const checked = await a.agent.post(`/api/ai-credentials/${provider}/test`).expect(200);
+      expect(checked.body).toMatchObject({ ok: true, modelId });
+      expect(JSON.stringify(checked.body)).not.toContain(SECRET_KEY);
+      expect(probeCalls).toEqual([{ provider, apiKey: SECRET_KEY, defaultModel: modelId }]);
+      const [ledger] = await direct.db
+        .select()
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.orgId, a.orgId));
+      expect(ledger).toMatchObject({ provider, modelId, costSource: "unknown", costUsd: null });
+      expect((await b.agent.get("/api/ai-credentials").expect(200)).body).toEqual([]);
+      await b.agent.delete(`/api/ai-credentials/${provider}`).expect(404);
+      await a.agent.delete(`/api/ai-credentials/${provider}`).expect(200);
+    },
+  );
+
   /**
    * Waits until some backend is parked on a row lock held by `pid`.
    *
