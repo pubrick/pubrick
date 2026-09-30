@@ -319,3 +319,29 @@ checked **993 files** without changes. The export environment follow-up above
 passed its **9 affected web contracts**. No remote rerun or manual Actions
 dispatch was performed. The operator runbook links existing identity, billing,
 media and backup/recovery procedures without inventing support or retention policy.
+
+
+### Complete environment and native billing follow-up
+
+Before requesting integration of the follow-up, the analogous API environment
+guard found four additional omissions: `BILLING_DRIVER`, `BILLING_ACCOUNT_ID`,
+`BILLING_TEST_DATABASE_URL` and `PUBRICK_BILLING_DISPOSABLE`. All four are now
+declared in the Turbo test task. The unchanged API declaration guard passed
+**5 tests** after its locally reproduced failure. The earlier `eb608969`
+candidate therefore remains superseded, rather than an approved release.
+
+The database-tier guard then exposed an unregistered dedicated billing gate
+and top-level safety validation. Commit `4e9020fc` registers the billing URL
+in all three byte-identical guard regions and moves the unchanged disposable
+validation into `beforeAll`, before migration or SQL. CI provisions a separate
+`pubrick_billing_test` database and forwards its URL and explicit disposable
+flag; it does not silently skip the persistence tier.
+
+Local execution with `CI=1` and separate primary/billing databases passed
+**37 tests**: API guard **9**, native billing persistence **11**, worker guard
+**9**, DB guard **8**. A separate negative invocation with disposable flag `0`
+failed before migrations; its billing database contained **zero public or
+drizzle tables** afterwards. The exact owned PostgreSQL container and volumes
+were removed. Full Biome checked **993 files** without changes. No remote CI
+rerun or manual dispatch was performed, and these focused results do not claim
+a passing full remote CI run.
