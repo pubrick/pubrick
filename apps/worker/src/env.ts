@@ -1,4 +1,5 @@
 import { googleProxyEnvSchema } from "@pubrick/ai";
+import { mailEnvironmentSchema, resolveSmtpConfig } from "@pubrick/mail";
 import {
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
@@ -10,6 +11,12 @@ import {
 import { z } from "zod";
 
 export const env = parseEnv({
+  PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
+  ...mailEnvironmentSchema.shape,
+  BETTER_AUTH_SECRET: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(16).optional(),
+  ),
   DATABASE_URL: z.string().min(1),
   /**
    * The credential key ring, active key first — the api's variable, validated
@@ -103,3 +110,11 @@ export const env = parseEnv({
     })
     .default(PUBLISH_MAX_LATENESS_HOURS_DEFAULT),
 });
+
+// Mail is optional for self-hosting. An enabled transport must use the same
+// auth secret as the API so restored or rotated tokens cannot send stale links.
+export const mailConfig = resolveSmtpConfig(env, {
+  required: env.PUBRICK_DEPLOYMENT_MODE === "hosted",
+});
+if (mailConfig && !env.BETTER_AUTH_SECRET)
+  throw new Error("Authentication mail requires BETTER_AUTH_SECRET on the worker.");

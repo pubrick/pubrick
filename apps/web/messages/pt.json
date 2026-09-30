@@ -25,7 +25,7 @@
     "requestNewLink": "Solicitar novo link",
     "verificationContinue": "Entre após abrir o link de confirmação. Se ele expirou, solicite outro ao entrar.",
     "passwordResetComplete": "Sua senha foi redefinida. Entre com a nova senha.",
-    "passwordResetSent": "Se existir uma conta para este endereço, confira seu email para o link de recuperação.",
+    "passwordResetSent": "Se existir uma conta para este endereço, confira seu email para o link de recuperação. Se o email não chegar, solicite outro.",
     "savePassword": "Salvar senha",
     "sendRecoveryLink": "Enviar link de recuperação",
     "recoveryUnavailable": "A recuperação de senha não está configurada. Fale com o administrador."

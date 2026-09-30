@@ -83,6 +83,15 @@ services:
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     environment:
       WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
+      PUBRICK_DEPLOYMENT_MODE: ${PUBRICK_DEPLOYMENT_MODE:-self-hosted}
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set it in .env}"
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-true}
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
       # Same value as the api's; the Telegram connect command encrypts this worker's session.
       # No fallback on purpose, same reasoning as the api's: see that service above.

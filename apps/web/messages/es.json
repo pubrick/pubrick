@@ -25,7 +25,7 @@
     "requestNewLink": "Solicitar otro enlace",
     "verificationContinue": "Inicia sesión después de abrir el enlace de confirmación. Si caducó, solicita otro al iniciar sesión.",
     "passwordResetComplete": "Tu contraseña se ha restablecido. Inicia sesión con la nueva contraseña.",
-    "passwordResetSent": "Si existe una cuenta con esta dirección, recibirás un enlace de recuperación.",
+    "passwordResetSent": "Si existe una cuenta con esta dirección, revisa tu correo para encontrar el enlace de recuperación. Si no llega, vuelve a solicitarlo.",
     "savePassword": "Guardar contraseña",
     "sendRecoveryLink": "Enviar enlace de recuperación",
     "recoveryUnavailable": "La recuperación de contraseña no está configurada. Contacta con el administrador."

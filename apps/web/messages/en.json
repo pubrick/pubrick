@@ -25,7 +25,7 @@
     "requestNewLink": "Request a new link",
     "verificationContinue": "Sign in after following the confirmation link. If it expired, sign in to request another one.",
     "passwordResetComplete": "Your password has been reset. Sign in with the new password.",
-    "passwordResetSent": "If an account exists for this address, check your email for a recovery link.",
+    "passwordResetSent": "If an account exists for this address, check your email for a recovery link. If no email arrives, request another.",
     "savePassword": "Save password",
     "sendRecoveryLink": "Send recovery link",
     "recoveryUnavailable": "Password recovery is not configured on this installation. Contact its operator."
