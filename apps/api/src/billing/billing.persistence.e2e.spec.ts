@@ -3,7 +3,7 @@ import { FixtureBillingDriver } from "@pubrick/billing";
 import { createDb, resolveBillingEntitlement, runMigrations, schema } from "@pubrick/db";
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { BillingRepository } from "./billing.repository";
 import { BillingService } from "./billing.service";
 import { BillingCatalog } from "./catalog-core";
@@ -21,6 +21,7 @@ if (url) {
     throw new Error("Billing persistence tests require an explicitly disposable local database");
 }
 describe.skipIf(!url)("durable billing persistence on a disposable database", () => {
+  afterEach(() => vi.restoreAllMocks());
   const connection = createDb(url ?? "postgres://unused");
   const db = connection.db;
   const identity = {
@@ -287,6 +288,7 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
       .where(eq(schema.billingPlanVersions.accountId, identity.accountId));
     if (!storedPlan) throw new Error("fixture");
     const now = clock.getTime();
+    vi.spyOn(Date, "now").mockReturnValue(now);
     const suffix = randomUUID().replaceAll("-", "");
     const healthy = `sub_healthy_${suffix}`;
     await db.insert(schema.billingSubscriptions).values(
@@ -354,6 +356,9 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
       .from(schema.billingSubscriptions)
       .where(eq(schema.billingSubscriptions.orgId, tenant.orgId));
     const failedAgain = retried.filter((row) => row.error === "not_found");
+    expect(
+      retrieve.mock.calls.filter(([id]) => id.startsWith(`sub_failed_${suffix}_`)),
+    ).toHaveLength(25);
     expect(failedAgain).toHaveLength(25);
     expect(
       failedAgain.every((row) => row.attempts === 2 && row.next.getTime() >= now + 91000),
