@@ -15,7 +15,7 @@ platform handoff should be described as automatic delivery.
 | P1 — generation | Five-role generation, source repurposing, reviewed revisions/history, calendar, media/video, roles, Bluesky/Mastodon | Private inbox sources and transcription are extensions of the current bounded source import |
 | P2 — inbound | Feeds, public/private Telegram monitoring, relevance, topic suggestions, hybrid knowledge retrieval, images, reviewed website-to-brand import | X integration and verified social-profile import; richer retrieval evaluation |
 | P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, webhooks, UTM | Write API/MCP, controlled prompt experiments, stock media, evergreen recycling, Telegram decision bot, recurring plans/channel scheduling signals, additional platform metrics |
-| P4 — hosted SaaS | Tenant isolation and usage ledger provide a foundation; subscription billing and platform-key routing are not implemented | Hosted onboarding, plans, billing, quotas, platform-paid AI, operations and support |
+| P4 — hosted SaaS | Tenant isolation, usage ledger, public site, hosted email ownership/recovery and sandbox billing drivers | Durable mail, subscription storage/routes, plans, quotas, platform-paid AI, operations and support |
 | P5 — platform breadth | Several platforms have explicit manual publication workflows | Verified native integrations and broader media formats |
 
 The working reference functionality has been ported across the areas described
@@ -75,6 +75,12 @@ one pipeline; secrets never return to clients; unsupported embeddings/images or
 structured output are stated explicitly. Provider support is not equivalent to
 supporting every model and modality.
 
+Direct OpenAI, Anthropic and DeepSeek adapters are implemented alongside Google
+and OpenRouter. See [provider setup](llm-providers.md) and the
+[foundation verification record](reviews/2026-09-30-hosted-foundation.md). Explicit
+workspace selection/pinned run credentials, Vertex and compatible endpoints
+remain in progress.
+
 ## Iteration 3 — hosted SaaS beta (P4)
 
 The owner confirmed the hosted paid service as a product direction on 2026-09-30.
@@ -84,7 +90,8 @@ Keep one open-source product and shared services. Cloud features should be
 explicitly configured: an installation without billing configuration keeps its
 self-hosted behavior and must not depend on a billing service to generate drafts.
 Use a replaceable billing driver rather than coupling domain code to one payment
-vendor. There is no implemented billing package today.
+vendor. `packages/billing` now provides official-SDK sandbox and offline fixture
+drivers; application subscription storage, routes and quotas remain unwired.
 
 Delivery slices:
 
