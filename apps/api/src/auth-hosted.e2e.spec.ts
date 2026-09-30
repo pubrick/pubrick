@@ -1,15 +1,24 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { createDb } from "@pubrick/db";
+import { AUTH_MAIL_QUEUE } from "@pubrick/shared";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { simpleParser } from "mailparser";
+import { PgBoss } from "pg-boss";
 import { SMTPServer } from "smtp-server";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+// Test-only integration crosses application source; deployable apps remain independent.
+import type { AuthMailService } from "../../worker/src/auth-mail/auth-mail.service";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and local SMTP", () => {
   let app: INestApplication;
+  let boss: PgBoss;
+  let consumer: AuthMailService;
+  let external: ReturnType<typeof createDb>;
+  const committedKinds = new Set<string>();
   let smtp: SMTPServer;
   let smtpClosed = false;
   const messages: Array<{ to: string; body: string }> = [];
@@ -73,19 +82,45 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
     });
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    // Separate pool proves SDK reset/invitation writes are committed before callbacks.
+    external = createDb(databaseUrl as string);
+    const outbox = await import("./auth-mail-outbox.repository");
+    const enqueue = outbox.enqueueAuthMail;
+    vi.spyOn(outbox, "enqueueAuthMail").mockImplementation(async (queue, data) => {
+      await enqueue(queue, data, external.db);
+      committedKinds.add(data.kind);
+    });
     const { AppModule } = await import("./app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
     app.setGlobalPrefix("api");
     await app.init();
     await app.listen(0);
+    const { AuthMailService } = await import("../../worker/src/auth-mail/auth-mail.service");
+    const { AuthMailRepository } = await import("../../worker/src/auth-mail/auth-mail.repository");
+    consumer = new AuthMailService(new AuthMailRepository());
+    boss = new PgBoss(databaseUrl as string);
+    await boss.start();
+    await consumer.register(boss);
   });
   afterAll(async () => {
+    await boss?.stop({ graceful: true });
+    consumer?.onModuleDestroy();
     await app?.close();
+    await external?.pool.end();
+    await (await import("../../worker/src/db")).pool.end();
+    vi.restoreAllMocks();
     if (smtp && !smtpClosed) await new Promise<void>((resolve) => smtp.close(resolve));
   });
   async function emailLink(email: string, part: string) {
     await (await import("./auth")).authMailer?.drain();
+    await vi.waitFor(
+      () =>
+        expect(messages.some((entry) => entry.to === email && entry.body.includes(part))).toBe(
+          true,
+        ),
+      { timeout: 10000, interval: 25 },
+    );
     const message = [...messages]
       .reverse()
       .find((entry) => entry.to === email && entry.body.includes(part));
@@ -143,6 +178,13 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .send({ email: memberEmail, role: "member", organizationId: organization.body.id })
       .expect(200);
     await (await import("./auth")).authMailer?.drain();
+    await vi.waitFor(
+      () =>
+        expect(
+          messages.some((entry) => entry.to === memberEmail && entry.body.includes("onboarding")),
+        ).toBe(true),
+      { timeout: 10000, interval: 25 },
+    );
     expect(
       messages.some(
         (message) => message.to === memberEmail && message.body.includes("/en/onboarding"),
@@ -183,6 +225,12 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .expect(200);
     expect(unknown.body).toEqual(known.body);
     const reset = await emailLink(ownerEmail, "reset-password");
+    expect([...committedKinds].sort()).toEqual(["invite", "reset", "verify"]);
+    const jobs = await external.pool.query("select data from pgboss.job where name=$1", [
+      AUTH_MAIL_QUEUE,
+    ]);
+    expect(JSON.stringify(jobs.rows)).not.toContain(ownerEmail);
+    expect(JSON.stringify(jobs.rows)).not.toContain("token=");
     const resetRedirect = await request(app.getHttpServer())
       .get(reset.pathname + reset.search)
       .expect(302);
@@ -262,6 +310,32 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
     await verify(email);
     const authorized = await client.get("/api/auth/get-session").set(legacyHeaders).expect(200);
     expect(authorized.body.user.emailVerified).toBe(true);
+  });
+  it("survives consumer restart with encrypted storage and stable message identity", async () => {
+    await boss.stop({ graceful: true });
+    consumer.onModuleDestroy();
+    const email = fresh("durable-restart");
+    await request(app.getHttpServer())
+      .post("/api/auth/sign-up/email")
+      .set(headers("192.0.2.24"))
+      .send({ email, password, name: "Durable" })
+      .expect(200);
+    expect(messages.some((message) => message.to === email)).toBe(false);
+    const queued = await external.pool.query(
+      "select data from pgboss.job where name=$1 and state='created'",
+      [AUTH_MAIL_QUEUE],
+    );
+    expect(queued.rows.length).toBeGreaterThan(0);
+    expect(JSON.stringify(queued.rows)).not.toContain(email);
+    const { AuthMailService } = await import("../../worker/src/auth-mail/auth-mail.service");
+    const { AuthMailRepository } = await import("../../worker/src/auth-mail/auth-mail.repository");
+    consumer = new AuthMailService(new AuthMailRepository());
+    boss = new PgBoss(databaseUrl as string);
+    await boss.start();
+    await consumer.register(boss);
+    await emailLink(email, "verify-email");
+    const parsed = await simpleParser(messages.find((message) => message.to === email)?.body ?? "");
+    expect(parsed.messageId).toMatch(/^<pubrick-auth\.[0-9a-f-]+@localhost>$/);
   });
   it("keeps SMTP failures non-enumerating and exposes only safe capability booleans", async () => {
     const logger = vi.spyOn(console, "warn").mockImplementation(() => {});
