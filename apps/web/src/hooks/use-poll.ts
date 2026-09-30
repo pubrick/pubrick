@@ -166,6 +166,11 @@ export function usePoll<T>(
         }
       } catch (err) {
         if (stopped || request !== requestSequence) return;
+        // A refusal for the pre-mutation state must not stop its newer state.
+        if (generation.current !== startedAt) {
+          schedule();
+          return;
+        }
         setError(err);
         if (isPermanent(err)) {
           stopped = true;

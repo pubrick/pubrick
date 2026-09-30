@@ -127,8 +127,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   );
   const canManageAccess = isOrganizationManager(activeMember?.role);
-  // Existing members retain their channel and brand settings access. Editorial
-  // roles can inspect granted brands, while only managers control team access.
+  // Legacy members retain channel access; brand writes require a manager.
   const canEditBrandSettings =
     canManageAccess || hasOrganizationRole(activeMember?.role, ["member"]);
   const [brand, setBrand] = useState<Brand | null>(null);
@@ -489,7 +488,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   }
 
   async function toggleAutomaticClaimEvidence() {
-    if (!brand || claimEvidenceBusy || !canEditBrandSettings) return;
+    if (!brand || claimEvidenceBusy || !canManageAccess) return;
     setClaimEvidenceBusy(true);
     setClaimEvidenceError(null);
     try {
@@ -593,7 +592,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("profileTitle")}</h2>
-          {canEditBrandSettings && (
+          {canManageAccess && (
             <>
               <Button
                 size="sm"
@@ -640,7 +639,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("voiceTitle")}</h2>
-          {canEditBrandSettings && (
+          {canManageAccess && (
             <Button
               size="sm"
               variant="secondary"
@@ -684,7 +683,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       <Card className="mb-6">
         <div className="mb-2 flex items-start justify-between gap-3">
           <h2 className="text-lg font-semibold text-fg">{tb("linksTitle")}</h2>
-          {canEditBrandSettings && (
+          {canManageAccess && (
             <Button
               size="sm"
               variant="secondary"
@@ -721,7 +720,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         dirty={brand?.automaticClaimEvidence ?? false}
       >
         <div className="flex items-start justify-end gap-3">
-          {canEditBrandSettings && (
+          {canManageAccess && (
             <Button
               size="sm"
               variant="secondary"
@@ -1086,7 +1085,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={canEditBrandSettings && profileOpen}
+        open={canManageAccess && profileOpen}
         onClose={closeProfileEditor}
         title={tb("profileTitle")}
         footer={
@@ -1124,7 +1123,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={canEditBrandSettings && voiceOpen}
+        open={canManageAccess && voiceOpen}
         onClose={closeVoiceEditor}
         title={tb("voiceTitle")}
         footer={
@@ -1182,7 +1181,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       </Modal>
 
       <Modal
-        open={canEditBrandSettings && linksOpen}
+        open={canManageAccess && linksOpen}
         onClose={closeLinksEditor}
         title={tb("linksTitle")}
         footer={

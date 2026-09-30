@@ -190,14 +190,7 @@ export function MemorableDates({
             {t("hint", { zone: data?.timezone ?? "UTC" })}
           </p>
         </div>
-        <Button
-          variant="secondary"
-          onClick={() => {
-            setEditing(null);
-            setFormError(null);
-            setOpen(true);
-          }}
-        >
+        <Button variant="secondary" onClick={startNew}>
           {t("manage")}
         </Button>
       </div>

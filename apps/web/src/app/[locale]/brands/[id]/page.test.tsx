@@ -211,9 +211,13 @@ describe("brand settings for editorial roles", () => {
       expect(
         screen.getByRole("button", { name: en.Channels.autoMetricsEnable }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.profileEdit })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.voiceEdit })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.linksEdit })).toBeInTheDocument();
+      for (const name of [en.Brands.profileEdit, en.Brands.voiceEdit, en.Brands.linksEdit]) {
+        if (role === "member") {
+          expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+        } else {
+          expect(screen.getByRole("button", { name })).toBeInTheDocument();
+        }
+      }
       expect(screen.getByText(en.Feed.title)).toBeInTheDocument();
     },
   );
