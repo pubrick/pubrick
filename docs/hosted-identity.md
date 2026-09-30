@@ -49,8 +49,8 @@ The SMTP host is trusted operator configuration; users cannot choose it.
 
 Better Auth owns verification and recovery tokens. Existing auth tables already
 store verification state and reset tokens; no parallel token store is introduced.
-Nodemailer sends SMTP requests; maintained p-limit controls four concurrent
-deliveries with at most twelve admitted submissions per API process. Verification, recovery and invitation
+Nodemailer sends SMTP requests from the worker; pg-boss bounds durable admission
+and delivery concurrency as described below. Verification, recovery and invitation
 messages support the four UI locales; destination links are limited to the
 configured canonical origin and the supported auth/onboarding routes.
 

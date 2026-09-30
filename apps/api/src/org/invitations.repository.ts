@@ -19,10 +19,10 @@ export type PendingInvitation = {
  *
  * **Why this exists at all**, given the organization plugin has
  * `/organization/list-user-invitations`: that endpoint refuses outright unless
- * `session.user.emailVerified` is true, and this product does not verify email
- * addresses — there is no mailer to verify them with (docs/self-hosting.md).
- * So on every Pubrick install that endpoint answers 403 to everybody, and the
- * invited person has no way to discover the invitation that let them register.
+ * `session.user.emailVerified` is true. Self-hosted installations without SMTP
+ * deliberately permit unverified accounts (docs/self-hosting.md). This reader
+ * therefore also supports their pending invitations; hosted ownership policy
+ * is enforced independently before access.
  *
  * **Why it is not org-scoped**, against the convention every other repository
  * here follows: the caller is by definition not yet a member of the
