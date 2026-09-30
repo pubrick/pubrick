@@ -54,28 +54,16 @@ export async function stageMediaCleanup(
     )
     .limit(1);
   if (collision) throw new MediaCleanupOwnershipError();
-  await tx
-    .insert(mediaCleanupWork)
-    .select(
-      tx
-        .select({ assetId: mediaAssets.id, orgId: mediaAssets.orgId, kind: mediaAssets.kind })
-        .from(mediaAssets)
-        .where(filter),
-    )
-    .onConflictDoUpdate({
-      target: mediaCleanupWork.assetId,
-      set: {
-        state: "pending",
-        attempts: 0,
-        nextAttemptAt: sql`now()`,
-        leaseUntil: null,
-        leaseToken: null,
-        lastError: null,
-        completedAt: null,
-      },
-      setWhere: and(
-        eq(mediaCleanupWork.orgId, sql`excluded.org_id`),
-        eq(mediaCleanupWork.kind, sql`excluded.kind`),
-      ),
-    });
+  // Drizzle's insert-select builder requires every table column at runtime, including
+  // defaults. Explicit SQL keeps defaults database-owned and metadata entirely server-side.
+  await tx.execute(sql`
+    INSERT INTO ${mediaCleanupWork} (asset_id, org_id, kind)
+    SELECT ${mediaAssets.id}, ${mediaAssets.orgId}, ${mediaAssets.kind}
+    FROM ${mediaAssets} WHERE ${filter}
+    ON CONFLICT (asset_id) DO UPDATE SET
+      state = 'pending', attempts = 0, next_attempt_at = now(),
+      lease_until = NULL, lease_token = NULL, last_error = NULL, completed_at = NULL
+    WHERE ${mediaCleanupWork.orgId} = excluded.org_id
+      AND ${mediaCleanupWork.kind} = excluded.kind
+  `);
 }
