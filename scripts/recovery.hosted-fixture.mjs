@@ -45,6 +45,7 @@ export async function seedHostedRecovery(url, { oldKey, authSecret, liveBytes, r
     liveAssetId: randomUUID(),
     retainedAssetId: randomUUID(),
     leaseId: randomUUID(),
+    receiptId: randomUUID(),
     identity: { provider: "fixture", environment: "sandbox", accountId: "fixture_recovery" },
     limits: { seats: 2, brands: 2, channels: 2, mediaBytes: 4096, concurrentJobs: 1 },
     liveBytes,
@@ -177,6 +178,16 @@ export async function seedHostedRecovery(url, { oldKey, authSecret, liveBytes, r
       status: "operator_action",
       attempts: 12,
     });
+    fixture.receipt = {
+      ...fixture.identity,
+      eventId: "evt_recovery",
+      kind: "invoice.changed",
+      resourceId: "inv_recovery",
+      status: "complete",
+      attempts: 2,
+      nextAttemptAt: new Date(now + 600000),
+    };
+    await db.insert(schema.billingReceipts).values({ id: fixture.receiptId, ...fixture.receipt });
     await db.insert(schema.hostedAiCallLeases).values({
       id: fixture.leaseId,
       orgId: fixture.orgId,
@@ -319,6 +330,35 @@ export async function assertHostedRecovery(url, fixture, keyRing, oldKey, authSe
       .where(eq(schema.billingCleanup.orgId, "deleted_recovery_org"));
     assert.equal(cleanup.status, "operator_action");
     assert.equal(cleanup.attempts, 12);
+    const [receipt] = await db
+      .select({
+        provider: schema.billingReceipts.provider,
+        environment: schema.billingReceipts.environment,
+        accountId: schema.billingReceipts.accountId,
+        eventId: schema.billingReceipts.eventId,
+        kind: schema.billingReceipts.kind,
+        resourceId: schema.billingReceipts.resourceId,
+        status: schema.billingReceipts.status,
+        attempts: schema.billingReceipts.attempts,
+        nextAttemptAt: schema.billingReceipts.nextAttemptAt,
+      })
+      .from(schema.billingReceipts)
+      .where(eq(schema.billingReceipts.id, fixture.receiptId));
+    assert.deepEqual(receipt, fixture.receipt);
+    // A new primary key must still be refused for the same durable event identity.
+    // Another operator account may legitimately have the same external event ID.
+    const duplicate = await db
+      .insert(schema.billingReceipts)
+      .values({ id: randomUUID(), ...fixture.receipt })
+      .onConflictDoNothing()
+      .returning({ id: schema.billingReceipts.id });
+    assert.deepEqual(duplicate, []);
+    const otherAccount = await db
+      .insert(schema.billingReceipts)
+      .values({ id: randomUUID(), ...fixture.receipt, accountId: "fixture_recovery_other" })
+      .onConflictDoNothing()
+      .returning({ id: schema.billingReceipts.id });
+    assert.equal(otherAccount.length, 1);
     const [lease] = await db
       .select({ leaseExpiresAt: schema.hostedAiCallLeases.leaseExpiresAt })
       .from(schema.hostedAiCallLeases)
