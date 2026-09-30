@@ -139,15 +139,25 @@ An interrupted restore is not resumable; the emptiness checks reject partial dat
 ## Test the recovery tooling
 
 The normal script suite runs orchestration tests without Docker. The explicit
-integration test uses uniquely named disposable Compose projects, exercises native
-Postgres (including a queued job), media and secret-file recovery, and removes only
-its own containers and volumes:
+integration test uses uniquely named disposable Compose projects and the current
+application migrations. It restores real pg-boss sealed authentication mail, a
+rotated credential-encryption key ring, sandbox subscription state, completed
+billing receipts with scoped event deduplication, retained media
+cleanup accounting (including unknown proof sizes), cleanup work and expired
+physical-call fences. It checks incomplete snapshot and mismatched key-ring
+refusal before target mutation and removes only its own containers and volumes.
+Install workspace
+dependencies and build the fixture packages first:
 
 ```sh
+pnpm install --frozen-lockfile
+pnpm --filter @pubrick/db... --filter @pubrick/mail... build
 node --test scripts/recovery.test.mjs
 PUBRICK_RECOVERY_DOCKER_TEST=1 node --test scripts/recovery.integration.test.mjs
 ```
 
 The integration tier is opt-in; it does not inspect or stop the developer's running
-Pubrick installation. A real installation rehearsal should additionally verify
-login/decryption, application migrations and external delivery reconciliation.
+Pubrick installation. The fixture uses controlled writer sentinels; it does not
+boot the application, send SMTP, settle a payment or resume real jobs. A real
+installation rehearsal should additionally verify login, application startup and
+external delivery reconciliation before resuming workers.

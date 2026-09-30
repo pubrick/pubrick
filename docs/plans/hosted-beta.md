@@ -1,6 +1,8 @@
 # Hosted beta design
 
-Status: implementation in integration; not a launched SaaS offering.
+Status: the hosted foundation is integrated in `main` at `474e28a4`; real
+payment sandbox and launch acceptance remain pending. This is not a launched
+SaaS offering.
 See the [verification record](../reviews/2026-09-30-hosted-platform.md) for
 completed gates and remaining acceptance.
 Updated: 2026-09-30.

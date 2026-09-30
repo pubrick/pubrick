@@ -56,8 +56,10 @@ Implementation progress: release image tooling, consistent Compose recovery,
 security reporting and the production browser runner are implemented and
 integrated in `main` at `474e28a4`. The built browser journey and native recovery
 round trip passed locally. See the [verification record](reviews/2026-09-30-release-foundation.md)
-for test scope and follow-up fixes. No versioned images or release have been
-published yet, so the release acceptance remains pending.
+for test scope and follow-up fixes. The current-schema hosted recovery extension also passed locally, including
+rotated encryption keys, retained storage and billing receipts; see the
+[recovery acceptance record](reviews/2026-09-30-hosted-recovery.md). No versioned
+images or release have been published yet, so release acceptance remains pending.
 
 ## Iteration 2 — common LLM providers
 
