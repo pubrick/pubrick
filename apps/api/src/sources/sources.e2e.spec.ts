@@ -9,7 +9,7 @@ import {
   privateTelegramSourceCreateSchema,
 } from "@pubrick/shared";
 import { resolveJoinedPrivateChannel } from "@pubrick/telegram";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1421,6 +1421,20 @@ describe.skipIf(!url)("watched sources e2e", () => {
     expect(second.body).toEqual({ processed: 3, changed: 0, nextCursor: null });
     const repeat = await owner.post(route).send({ days: 30 }).expect(201);
     expect(repeat.body).toMatchObject({ processed: 50, changed: 0 });
+    await db.execute(sql`UPDATE news_items
+      SET created_at = date_trunc('second', clock_timestamp()) + interval '0.000123 seconds'
+      WHERE id IN (${sql.join(
+        rows.map((row) => sql`${row.id}::uuid`),
+        sql`, `,
+      )})`);
+    const preciseFirst = await owner.post(route).send({ days: 30 }).expect(201);
+    expect(preciseFirst.body.processed).toBe(50);
+    const preciseSecond = await owner
+      .post(route)
+      .send({ days: 30, cursor: preciseFirst.body.nextCursor })
+      .expect(201);
+    expect(preciseSecond.body.processed).toBe(3);
+    expect(preciseSecond.body.nextCursor).toBeNull();
 
     const saved = await db
       .select({

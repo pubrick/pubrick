@@ -594,6 +594,16 @@ describe.skipIf(!url)("topic bank e2e", () => {
     expect(second.rows[0]).toMatchObject({ origin: "automatic", suggestionCount: 2 });
     expect(second.rows[1]).toMatchObject({ errorCode: "model_failed" });
     expect(second.nextCursor).toBeNull();
+    // PostgreSQL-generated timestamps retain microseconds beyond a JS Date.
+    await db.execute(sql`UPDATE topic_suggestion_requests
+      SET created_at = '2026-09-23T12:00:00.000123Z'::timestamptz
+      WHERE id IN (${ids[1]}::uuid, ${ids[2]}::uuid)`);
+    const preciseFirst = (await owner.agent.get(endpoint).expect(200)).body;
+    const preciseSecond = (
+      await owner.agent.get(`${endpoint}&cursor=${preciseFirst.nextCursor}`).expect(200)
+    ).body;
+    expect(preciseFirst.rows.map((row: { id: string }) => row.id)).toEqual([ids[3], ids[2]]);
+    expect(preciseSecond.rows.map((row: { id: string }) => row.id)).toEqual([ids[1], ids[0]]);
   });
 
   it("lists only the brand's recent skipped daily scans, excluding queued requests", async () => {
