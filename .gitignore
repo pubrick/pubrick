@@ -17,3 +17,6 @@ coverage/
 apps/web/AGENTS.md
 apps/web/CLAUDE.md
 .DS_Store
+
+# Local maintenance locks contain no snapshot; recovery snapshots live outside the checkout.
+.recovery-*.lock/
