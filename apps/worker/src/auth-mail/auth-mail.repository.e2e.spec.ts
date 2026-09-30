@@ -48,34 +48,28 @@ describe.skipIf(!url)("authoritative mail ownership from durable auth records", 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
     database = createDb(url as string);
-    await database.db
-      .insert(schema.user)
-      .values({
-        id: userId,
-        email: "synthetic@example.com",
-        name: "Synthetic",
-        emailVerified: false,
-      });
+    await database.db.insert(schema.user).values({
+      id: userId,
+      email: "synthetic@example.com",
+      name: "Synthetic",
+      emailVerified: false,
+    });
     await database.db
       .insert(schema.organization)
       .values({ id: orgId, name: "Synthetic", slug: `synthetic-${orgId}` });
-    await database.db
-      .insert(schema.invitation)
-      .values({
-        id: invitationId,
-        organizationId: orgId,
-        email: "synthetic@example.com",
-        inviterId: userId,
-        expiresAt: new Date(now + 3600000),
-      });
-    await database.db
-      .insert(schema.verification)
-      .values({
-        id: verificationId,
-        identifier: "reset-password:fixture_token",
-        value: userId,
-        expiresAt: new Date(now + 3600000),
-      });
+    await database.db.insert(schema.invitation).values({
+      id: invitationId,
+      organizationId: orgId,
+      email: "synthetic@example.com",
+      inviterId: userId,
+      expiresAt: new Date(now + 3600000),
+    });
+    await database.db.insert(schema.verification).values({
+      id: verificationId,
+      identifier: "reset-password:fixture_token",
+      value: userId,
+      expiresAt: new Date(now + 3600000),
+    });
     const { AuthMailRepository } = await import("./auth-mail.repository");
     repository = new AuthMailRepository();
   });

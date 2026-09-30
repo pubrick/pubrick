@@ -23,14 +23,12 @@ describe.skipIf(!url)("encrypted durable authentication outbox admission", () =>
     await boss.start();
     await boss.createQueue(names.deadLetter);
     await boss.createQueue(names.queue);
-    await database.db
-      .insert(schema.verification)
-      .values({
-        id: suffix,
-        identifier,
-        value: "fixture_user",
-        expiresAt: new Date(Date.now() + 3600000),
-      });
+    await database.db.insert(schema.verification).values({
+      id: suffix,
+      identifier,
+      value: "fixture_user",
+      expiresAt: new Date(Date.now() + 3600000),
+    });
     enqueue = (await import("./auth-mail-outbox.repository")).enqueueAuthMail;
   });
   afterAll(async () => {
