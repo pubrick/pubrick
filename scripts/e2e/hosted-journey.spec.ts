@@ -21,21 +21,31 @@ async function control(page: Page, action: string, orgId: string) {
 async function mailLink(page: Page, email: string, part: string) {
   if (!controlOrigin || !controlSecret) throw new Error("Hosted fixture control missing");
   let link: string | undefined;
-  await expect
-    .poll(
-      async () => {
-        const response = await page.request.get(
-          `${controlOrigin}/mail?to=${encodeURIComponent(email)}&part=${encodeURIComponent(part)}`,
-          { headers: { Authorization: `Bearer ${controlSecret}` } },
-        );
-        expect(response.ok()).toBeTruthy();
-        const body = (await response.json()) as { links: string[] };
-        link = body.links.at(-1);
-        return Boolean(link);
-      },
-      { timeout: 20_000 },
-    )
-    .toBe(true);
+  let diagnostics: unknown;
+  try {
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get(
+            `${controlOrigin}/mail?to=${encodeURIComponent(email)}&part=${encodeURIComponent(part)}`,
+            { headers: { Authorization: `Bearer ${controlSecret}` } },
+          );
+          expect(response.ok()).toBeTruthy();
+          const body = (await response.json()) as {
+            links: string[];
+            captured: number;
+            jobs: unknown[];
+          };
+          diagnostics = { captured: body.captured, jobs: body.jobs };
+          link = body.links.at(-1);
+          return Boolean(link);
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+  } catch {
+    throw new Error(`Fixture authentication mail missing: ${JSON.stringify(diagnostics)}`);
+  }
   if (!link) throw new Error("Fixture mail link missing");
   return link;
 }

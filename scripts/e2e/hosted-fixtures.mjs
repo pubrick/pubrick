@@ -77,7 +77,10 @@ export async function startHostedFixtures({ databaseUrl, origin, smtpPort, contr
             if (link.origin === origin) links.push(link.href);
           }
         }
-        response.end(JSON.stringify({ links }));
+        const jobs = await pool.query(
+          "SELECT state, output->>'code' AS code, output->>'reason' AS reason FROM pgboss.job WHERE name IN ('auth-mail','auth-mail-dlq') ORDER BY created_on LIMIT 10",
+        );
+        response.end(JSON.stringify({ links, captured: messages.length, jobs: jobs.rows }));
         return;
       }
       if (request.method !== "POST" || !["/entitlement", "/expire"].includes(url.pathname)) {
