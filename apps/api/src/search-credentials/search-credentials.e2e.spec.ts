@@ -8,7 +8,9 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
-const ENCRYPTION_KEY = "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+// Use the same configured key as the app instead of assuming the fallback was used.
+const ENCRYPTION_KEY =
+  process.env.APP_ENCRYPTION_KEY ?? "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
 const SECRET = "search-key-never-send-back-123456";
 
 describe.skipIf(!url)("search credentials e2e", () => {

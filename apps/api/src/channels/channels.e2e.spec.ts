@@ -19,8 +19,9 @@ const url = process.env.TEST_DATABASE_URL;
 const APP_NAME = "channels-e2e";
 const appUrl = url ? `${url}${url.includes("?") ? "&" : "?"}application_name=${APP_NAME}` : url;
 
-/** The key every spec in this suite encrypts and decrypts with. */
-const ENCRYPTION_KEY = "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+/** Match the app's configured test key, including isolated runs with random keys. */
+const ENCRYPTION_KEY =
+  process.env.APP_ENCRYPTION_KEY ?? "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
 
 describe.skipIf(!url)("channels e2e", () => {
   let app: INestApplication;
@@ -31,7 +32,7 @@ describe.skipIf(!url)("channels e2e", () => {
     // trusting statement text — see the comment there.
     process.env.DATABASE_URL = appUrl;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
-    process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    process.env.APP_ENCRYPTION_KEY ??= ENCRYPTION_KEY;
     // Migrations run once for the whole suite in vitest.global-setup.ts (a single
     // barrier, instead of six e2e files each racing runMigrations() against the
     // same DB — that redundant per-file migration dance is what caused the
