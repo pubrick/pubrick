@@ -1,4 +1,4 @@
-import { aiCredentialUpsertSchema } from "@pubrick/shared";
+import { aiCredentialUpsertSchema, PermanentError } from "@pubrick/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { runFailureOf } from "./classify.js";
@@ -176,6 +176,32 @@ describe("direct BYOK providers", () => {
     expect(body.store).toBe(false);
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ status: "ok", provider: "openai", costUsd: null });
+  });
+
+  it("admits each physical schema repair independently and refuses rotation before HTTP", async () => {
+    let calls = 0;
+    const admitCall = vi.fn(async () => {
+      if (++calls > 1) throw new PermanentError("Credential changed; retry with current settings");
+    });
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify(reply("openai", '{"headline":7}')), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      generateStructured({
+        model: resolveModel({ provider: "openai", apiKey: "sk-fixture", admitCall }),
+        provider: "openai",
+        schema: z.object({ headline: z.string() }),
+        instructions: "Return JSON",
+        prompt: "Hi",
+        maxRetries: 0,
+      }),
+    ).rejects.toThrow("Credential changed");
+    expect(admitCall).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it.each(fixtures)("$provider meters schema repair separately", async ({ provider }) => {
