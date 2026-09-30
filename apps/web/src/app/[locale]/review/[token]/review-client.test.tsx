@@ -89,3 +89,16 @@ describe("guest client review", () => {
     expect(screen.queryByRole("button", { name: "Approve draft" })).not.toBeInTheDocument();
   });
 });
+
+it("renders saved inline images and captions after their article paragraphs", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+    ...preview,
+    preview: { ...preview.preview, body: "First paragraph.\n\nSecond paragraph.", images: [{ id: "slot-id", afterParagraph: 0, alt: "Illustration description", caption: "Client-visible caption", alignment: "center" }] },
+  })));
+  render(<ClientReviewPage token="capability-token" />);
+  const image = await screen.findByRole("img", { name: "Illustration description" });
+  expect(image).toHaveAttribute("src", "/api/client-review/capability-token/images/slot-id");
+  expect(screen.getByText("Client-visible caption")).toBeInTheDocument();
+  expect(screen.getByText("First paragraph.").compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(image.compareDocumentPosition(screen.getByText("Second paragraph.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});

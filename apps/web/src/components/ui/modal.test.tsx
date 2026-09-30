@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -255,4 +256,20 @@ describe("Modal focus trap", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
+});
+
+it("keeps input focus when an inline close callback changes", async () => {
+  function Editor() {
+    const [value, setValue] = useState("");
+    return <Modal open title="Edit" onClose={() => setValue("")}>
+      <input aria-label="Title" value={value} onChange={(event) => setValue(event.target.value)} />
+    </Modal>;
+  }
+  render(<Editor />);
+  const user = userEvent.setup();
+  const input = screen.getByRole("textbox", { name: "Title" });
+  await user.click(input);
+  await user.type(input, "New title");
+  expect(input).toHaveValue("New title");
+  expect(input).toHaveFocus();
 });

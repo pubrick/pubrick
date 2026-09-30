@@ -305,3 +305,21 @@ describe("usePoll", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });
+
+it("lets refresh supersede an older terminal response", async () => {
+  let oldResolve!: (value: Value) => void;
+  let newResolve!: (value: Value) => void;
+  const fetcher = vi.fn<() => Promise<Value>>()
+    .mockImplementationOnce(() => new Promise((resolve) => { oldResolve = resolve; }))
+    .mockImplementationOnce(() => new Promise((resolve) => { newResolve = resolve; }))
+    .mockResolvedValue({ status: "running" });
+  let refresh!: () => Promise<void>;
+  await renderProbe(<Probe fetcher={fetcher} onReady={(fn) => { refresh = fn; }} />);
+  let refreshed!: Promise<void>;
+  await act(async () => { refreshed = refresh(); });
+  await act(async () => { oldResolve({ status: "succeeded" }); });
+  await act(async () => { newResolve({ status: "running" }); await refreshed; });
+  expect(screen.getByTestId("status")).toHaveTextContent("running");
+  await advance(POLL_INTERVAL_MS);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});
