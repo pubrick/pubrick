@@ -181,6 +181,20 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
     return { orgId, brandId, runId: run?.id as string, channelIds, channelNames };
   }
 
+  /** Retained work needs genuine credential provenance before checkpoints exist. */
+  async function pinTextSelection(seeded: Seeded): Promise<void> {
+    const { lockAiTextSelection, snapshotAiTextSelection } = await import("@pubrick/db");
+    await db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(seeded.orgId, tx);
+      const snapshot = state && snapshotAiTextSelection(state);
+      if (!snapshot) throw new Error("Expected configured fixture text selection");
+      await tx
+        .update(schema.pipelineRuns)
+        .set({ textSelection: snapshot })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+    });
+  }
+
   /** The service, wired to a real repository and the given mock model. */
   function serviceFor(
     model: ReturnType<typeof scriptedModel>,
@@ -1292,6 +1306,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
 
     it("reuses frozen news after its source has gone, without another retrieval call", async () => {
       const seeded = await seed({ channels: 1 });
+      await pinTextSelection(seeded);
       const newsId = randomUUID();
       await db
         .update(schema.pipelineRuns)
@@ -1652,8 +1667,10 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       expect(script.adaptedChannels()).toEqual(["Chan 0"]);
     }, 25_000);
 
-    it("pins a pre-upgrade partial run to built-in roles despite an active head", async () => {
+    it("pins a pre-template-upgrade partial run with retained text selection to built-in roles despite an active head", async () => {
       const seeded = await seed({ channels: 1 });
+      // Isolate role-template upgrade behavior from missing text provenance.
+      await pinTextSelection(seeded);
       const source = "A newer writer direction";
       const [revision] = await db
         .insert(schema.roleTemplateRevisions)
@@ -1861,8 +1878,39 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
   });
 
   describe("checkpoints", () => {
+    it("refuses legacy checkpoints without identifiable text provenance before any model call", async () => {
+      const seeded = await seed({ channels: 1 });
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          textSelection: null,
+          steps: {
+            writer: {
+              status: "succeeded",
+              output: { body: "Legacy checkpoint without retained identity" },
+            },
+          },
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      const script = scriptedModel();
+      await expect(
+        serviceFor(script).handle({
+          id: "job-unsafe-legacy",
+          data: { runId: seeded.runId, orgId: seeded.orgId },
+        }),
+      ).resolves.toBeUndefined();
+      expect(await runRow(seeded.runId)).toMatchObject({
+        status: "failed",
+        error: "configuration_changed",
+      });
+      expect(script.calls).toHaveLength(0);
+      expect(await ledgerOf(seeded.orgId)).toHaveLength(0);
+      expect(await itemsOf(seeded.orgId)).toHaveLength(0);
+    }, 25_000);
+
     it("skips a checkpointed step without invoking its model again", async () => {
       const seeded = await seed({ channels: 1 });
+      await pinTextSelection(seeded);
       const CHECKPOINTED = "CHECKPOINT_MARKER a draft written on the first attempt.";
       await db
         .update(schema.pipelineRuns)
@@ -1897,6 +1945,7 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       // A cache that cannot be read is a cache miss. Failing the run instead
       // would brick every in-flight run on the deploy that changed a schema.
       const seeded = await seed({ channels: 1 });
+      await pinTextSelection(seeded);
       await db
         .update(schema.pipelineRuns)
         .set({ steps: { writer: { status: "succeeded", output: { headline: "wrong shape" } } } })
