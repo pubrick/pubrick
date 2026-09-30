@@ -4,7 +4,6 @@ import { Test } from "@nestjs/testing";
 import { createDb, schema } from "@pubrick/db";
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
-import type { PoolClient } from "pg";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -81,7 +80,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     if (!channel) throw new Error("Missing fixture channel");
     return { agent, orgId, userId, brandId: brand.id, channelId: channel.id };
   }
-  async function blocker(orgId: string): Promise<PoolClient> {
+  async function blocker(orgId: string) {
     const client = await connection.pool.connect();
     await client.query("BEGIN");
     await client.query("select pg_advisory_xact_lock($1,hashtext($2))", [
@@ -280,5 +279,86 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     const error = await hostedAiCallScope(f.orgId, "probe")?.(dispatch).catch((value) => value);
     expect(hostedAiRefusal(error)?.code).toBe("authority_revoked");
     expect(dispatch).not.toHaveBeenCalled();
+  });
+  it("allows an already admitted response to finish, then refuses the next physical attempt after removal", async () => {
+    const f = await fixture();
+    const [session] = await connection.db
+      .select({ id: schema.session.id })
+      .from(schema.session)
+      .where(
+        and(eq(schema.session.userId, f.userId), eq(schema.session.activeOrganizationId, f.orgId)),
+      );
+    if (!session) throw new Error("Missing fixture session");
+    const { runWithRequestAuthority } = await import("./request-authority");
+    const { hostedAiCallScope, hostedAiRefusal } = await import("./hosted-ai-call");
+    const actor = Object.freeze({
+      kind: "session" as const,
+      orgId: f.orgId,
+      userId: f.userId,
+      sessionId: session.id,
+      scope: Object.freeze({ kind: "org" as const, roles: "manager" as const }),
+      capability: undefined,
+      mutation: true,
+      brandId: undefined,
+      resourceId: undefined,
+    });
+    let enter: (() => void) | undefined;
+    let finish: (() => void) | undefined;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const unfinished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const dispatch = vi.fn(async () => {
+      enter?.();
+      await unfinished;
+      return "admitted local response";
+    });
+    const response = runWithRequestAuthority(actor, async () =>
+      hostedAiCallScope(f.orgId, "probe")?.(dispatch),
+    );
+    try {
+      await Promise.race([
+        entered,
+        response.then(() => {
+          throw new Error("Response settled before dispatch entered");
+        }),
+      ]);
+      expect(
+        await connection.db
+          .select({ id: schema.hostedAiCallLeases.id })
+          .from(schema.hostedAiCallLeases)
+          .where(eq(schema.hostedAiCallLeases.orgId, f.orgId)),
+      ).toHaveLength(1);
+      const lock = await blocker(f.orgId);
+      try {
+        await lock.query('delete from "member" where organization_id=$1 and user_id=$2', [
+          f.orgId,
+          f.userId,
+        ]);
+        await lock.query("COMMIT");
+      } finally {
+        await lock.query("ROLLBACK");
+        lock.release();
+      }
+      finish?.();
+      expect(await response).toBe("admitted local response");
+      const nextDispatch = vi.fn(async () => "must not run");
+      const refusal = await runWithRequestAuthority(actor, async () =>
+        hostedAiCallScope(f.orgId, "probe")?.(nextDispatch).catch((error) => error),
+      );
+      expect(hostedAiRefusal(refusal)?.code).toBe("authority_revoked");
+      expect(nextDispatch).not.toHaveBeenCalled();
+      expect(
+        await connection.db
+          .select({ id: schema.hostedAiCallLeases.id })
+          .from(schema.hostedAiCallLeases)
+          .where(eq(schema.hostedAiCallLeases.orgId, f.orgId)),
+      ).toHaveLength(0);
+    } finally {
+      finish?.();
+      await response;
+    }
   });
 });

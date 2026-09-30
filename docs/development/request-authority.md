@@ -1,4 +1,4 @@
-Trusted hosted API authority admission
+## Trusted hosted API authority admission
 
 Successful guards attach an immutable server-only symbol snapshot. Global interceptor establishes AsyncLocalStorage at the lazy RxJS subscription boundary, including undefined for public requests. No transaction surrounds HTTP handlers.
 
