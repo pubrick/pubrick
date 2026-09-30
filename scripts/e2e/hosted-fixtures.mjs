@@ -145,7 +145,14 @@ export async function startHostedFixtures({ databaseUrl, origin, smtpPort, contr
         client.release();
       }
       response.end('{"ok":true}');
-    } catch {
+    } catch (error) {
+      console.error("Hosted fixture operation failed", {
+        path: url.pathname,
+        code:
+          typeof error?.code === "string" && /^[A-Z0-9_]+$/.test(error.code)
+            ? error.code
+            : "fixture_failure",
+      });
       response.writeHead(400).end('{"code":"fixture_failed"}');
     }
   });

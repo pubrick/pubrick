@@ -30,6 +30,7 @@ async function mailLink(page: Page, email: string, part: string) {
             `${controlOrigin}/mail?to=${encodeURIComponent(email)}&part=${encodeURIComponent(part)}`,
             { headers: { Authorization: `Bearer ${controlSecret}` } },
           );
+          diagnostics = { status: response.status() };
           expect(response.ok()).toBeTruthy();
           const body = (await response.json()) as {
             links: string[];
