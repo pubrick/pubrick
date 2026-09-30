@@ -117,10 +117,13 @@ test("hosted BYOK: verified onboarding, fixture entitlement, human draft, invita
   await page.goto("/en/brands");
   await page.getByLabel("New brand name").fill("Hosted coffee");
   await page.getByRole("button", { name: "Create brand", exact: true }).click();
-  await expect(page).toHaveURL(/\/en\/brands\/[a-f0-9-]+$/);
-  const brandId = new URL(page.url()).pathname.split("/").at(-1);
-  if (!brandId || brandId === "brands") throw new Error("Brand creation did not navigate");
+  await expect(
+    page.getByRole("heading", { name: "Hosted coffee is ready", exact: true }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Add a channel", exact: true }).click();
+  await expect(page).toHaveURL(/\/en\/brands\/[a-f0-9-]+#channels$/);
+  const brandId = new URL(page.url()).pathname.split("/").at(-1);
+  if (!brandId || brandId === "brands") throw new Error("Brand setup link did not navigate");
   await page.getByLabel("Platform", { exact: true }).selectOption("t_j");
   await page.getByLabel("Channel name", { exact: true }).fill("Hosted manual channel");
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
