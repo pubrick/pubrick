@@ -150,10 +150,15 @@ export class FixtureBillingDriver implements BillingDriver {
       if (prior.request !== request) throw new BillingError("idempotency_conflict");
       return { ...prior.result };
     }
-    const result = {
-      identity: this.identity,
-      customerId: `cus_fixture_${this.customerAttempts.size + 1}`,
-    };
+    const occupied = new Set([
+      ...this.subscriptions.map((entry) => entry.customerId),
+      ...this.checkouts.map((entry) => entry.customerId),
+      ...this.invoices.map((entry) => entry.customerId),
+      ...[...this.customerAttempts.values()].map((entry) => entry.result.customerId),
+    ]);
+    let sequence = this.customerAttempts.size + 1;
+    while (occupied.has(`cus_fixture_${sequence}`)) sequence += 1;
+    const result = { identity: this.identity, customerId: `cus_fixture_${sequence}` };
     this.customerAttempts.set(input.idempotencyKey, { request, result });
     return { ...result };
   }
