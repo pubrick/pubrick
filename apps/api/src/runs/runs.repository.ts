@@ -26,7 +26,7 @@ import {
   type SettledRunStatus,
 } from "@pubrick/shared";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { badRequest, conflict, notFound } from "../api-error";
+import { badRequest, conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
@@ -381,7 +381,8 @@ export class RunsRepository {
         .from(schema.organization)
         .where(eq(schema.organization.id, orgId))
         .for("share");
-      if (!org) throw notFound("not_found", "Organization not found");
+      if (!org)
+        throw forbidden("no_active_organization", "The active workspace is no longer available");
     }
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })
