@@ -50,7 +50,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
             ? await authClient.signUp.email({ email, password, name, callbackURL }, options)
             : await authClient.signUp.email({ email, password, name })
           : capabilities.requiresEmailVerification
-            ? await authClient.signIn.email({ email, password, callbackURL }, options)
+            ? await authClient.signIn.email({ email, password }, options)
             : await authClient.signIn.email({ email, password });
       if (result.error) {
         if (result.error.code === "EMAIL_NOT_VERIFIED") setVerificationPending(true);

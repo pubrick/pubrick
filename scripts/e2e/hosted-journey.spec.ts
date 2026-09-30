@@ -84,6 +84,8 @@ async function registerAndVerify(page: Page, email: string) {
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
+  await expect(page).toHaveURL(/\/en$/);
+  await page.getByRole("link", { name: "Go to brands", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/onboarding/);
 }
 
