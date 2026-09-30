@@ -2,6 +2,7 @@ import { NotFoundException } from "@nestjs/common";
 import {
   buildPaidReplyRequest,
   countPaidReplyTokens,
+  googleProxyFetch,
   pricePaidReplyReservation,
 } from "@pubrick/ai";
 import { admitPaidReplyAttempt, type PaidReplyAdmissionInput } from "@pubrick/db";
@@ -9,6 +10,7 @@ import { encryptJson } from "@pubrick/shared";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { db } from "../db";
 import { env } from "../env";
+import { hostedAiCallScope, throwHostedAiRefusal } from "../hosted-ai-call";
 import { QueueService } from "../queue/queue.service";
 
 /** One manual entry point for both target kinds; automatic handoffs use the same DB claim. */
@@ -43,8 +45,30 @@ export async function requestManualPaidReplyAnalysis(args: {
     const request = buildPaidReplyRequest({ title: args.title, comments: args.comments });
     let counted: Awaited<ReturnType<typeof countPaidReplyTokens>>;
     try {
-      counted = await countPaidReplyTokens(request, apiKey, undefined, proxyUrl);
+      const scope = hostedAiCallScope(args.orgId, "probe");
+      counted = scope
+        ? await scope((signal) =>
+            countPaidReplyTokens(
+              request,
+              apiKey,
+              (input, init) => {
+                const incoming =
+                  init?.signal ?? (input instanceof Request ? input.signal : undefined);
+                return googleProxyFetch(
+                  input,
+                  {
+                    ...init,
+                    signal: incoming ? AbortSignal.any([incoming, signal]) : signal,
+                  },
+                  proxyUrl,
+                );
+              },
+              proxyUrl,
+            ),
+          )
+        : await countPaidReplyTokens(request, apiKey, undefined, proxyUrl);
     } catch (error) {
+      throwHostedAiRefusal(error);
       return {
         status: "blocked",
         reason:
