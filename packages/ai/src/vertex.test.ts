@@ -131,6 +131,60 @@ describe("workspace Vertex BYOK", () => {
     expect(records[0]?.costSource).toBe("unknown");
   });
 
+  it("reports model permission refusal after successful OAuth without blaming the service-account key", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input) === serviceAccount.token_uri
+        ? new Response(
+            JSON.stringify({
+              access_token: "fixture-access-token",
+              expires_in: 3600,
+              token_type: "Bearer",
+            }),
+            { headers: { "content-type": "application/json" } },
+          )
+        : new Response(
+            JSON.stringify({
+              error: {
+                code: 403,
+                status: "PERMISSION_DENIED",
+                message: "Permission aiplatform.endpoints.predict denied",
+              },
+            }),
+            { status: 403, headers: { "content-type": "application/json" } },
+          ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const model = resolveModel({
+      provider: "vertex",
+      authMode: "service_account",
+      project: "fixture-project",
+      location: "global",
+      serviceAccount,
+    });
+    const records: UsageRecord[] = [];
+    const error = await generateStructured({
+      model,
+      provider: "vertex",
+      schema: z.object({ headline: z.string() }),
+      instructions: "JSON",
+      prompt: "Hello",
+      maxRetries: 0,
+      onUsage: (record) => {
+        records.push(record);
+      },
+    }).catch((value) => value);
+    expect(runFailureOf(error)).toBe("provider_refused");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(serviceAccount.token_uri);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      provider: "vertex",
+      outcome: "errored",
+      costUsd: null,
+      costSource: "unknown",
+    });
+  });
+
   it("binds only the explicit Vertex proxy to both OAuth and model endpoints", async () => {
     vi.stubEnv("GOOGLE_API_PROXY", "http://other-provider-proxy.invalid:8080");
     const vertexProxy = "http://vertex-user:vertex-password@8.8.8.8:8080";
@@ -173,39 +227,46 @@ describe("workspace Vertex BYOK", () => {
     proxy.mockRestore();
   });
 
-  it("records no model call when OAuth rejects the service account, without leaking its body", async () => {
-    const fetch = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response(JSON.stringify({ error: "invalid_grant", error_description: privateKey }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    const records: UsageRecord[] = [];
-    const model = resolveModel({
-      provider: "vertex",
-      authMode: "service_account",
-      project: "fixture-project",
-      location: "global",
-      serviceAccount,
-    });
-    const error = await generateStructured({
-      model,
-      provider: "vertex",
-      schema: z.object({ headline: z.string() }),
-      instructions: "JSON",
-      prompt: "Hello",
-      maxRetries: 0,
-      onUsage: (row) => {
-        records.push(row);
-      },
-    }).catch((error) => error);
-    expect(runFailureOf(error)).toBe("invalid_key");
-    expect(String(error)).not.toContain("BEGIN PRIVATE KEY");
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(records).toEqual([]);
-  });
+  it.each([
+    [400, "invalid_key"],
+    [401, "invalid_key"],
+    [403, "provider_refused"],
+  ] as const)(
+    "records no model call for OAuth %i without leaking its body: %s",
+    async (status, reason) => {
+      const fetch = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(JSON.stringify({ error: "invalid_grant", error_description: privateKey }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const records: UsageRecord[] = [];
+      const model = resolveModel({
+        provider: "vertex",
+        authMode: "service_account",
+        project: "fixture-project",
+        location: "global",
+        serviceAccount,
+      });
+      const error = await generateStructured({
+        model,
+        provider: "vertex",
+        schema: z.object({ headline: z.string() }),
+        instructions: "JSON",
+        prompt: "Hello",
+        maxRetries: 0,
+        onUsage: (row) => {
+          records.push(row);
+        },
+      }).catch((error) => error);
+      expect(runFailureOf(error)).toBe(reason);
+      expect(String(error)).not.toContain("BEGIN PRIVATE KEY");
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(records).toEqual([]);
+    },
+  );
 
   it("retains the real failed HTTP receipt but refuses a new attempt after rotation", async () => {
     const fetch = vi.fn(

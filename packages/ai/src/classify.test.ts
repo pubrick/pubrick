@@ -311,8 +311,8 @@ describe("classifyAiError", () => {
       expect(runFailureOf(classifyAiError(apiError(401)))).toBe("invalid_key");
     });
 
-    it("calls a 403 an invalid key too", () => {
-      expect(runFailureOf(classifyAiError(apiError(403)))).toBe("invalid_key");
+    it("reports 403 as a refusal without claiming the credential is invalid", () => {
+      expect(runFailureOf(classifyAiError(apiError(403)))).toBe("provider_refused");
     });
 
     it("calls a 404 an unknown model", () => {

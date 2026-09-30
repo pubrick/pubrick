@@ -363,9 +363,16 @@ describe("AiCredentialProbe — the verdict is read from the classifier's tag", 
       });
   });
 
+  it("does not claim an untagged permanent403 proves either rejected or accepted credentials", async () => {
+    const outcome = await probeThatThrows(new PermanentError("Project permission denied", 403)).run(
+      credential,
+    );
+    expect(outcome).toEqual({ ok: false, reason: "refused", records: [] });
+  });
+
   it.each([
     [401, "invalid_key"],
-    [403, "invalid_key"],
+    [403, "refused"],
     [404, "model_not_found"],
     [400, "refused"],
     [429, "rate_limited"],
