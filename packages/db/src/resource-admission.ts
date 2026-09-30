@@ -115,7 +115,7 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
   const result = await insert(tx);
   const actual = await resourceUsage(orgId, tx, input.resource);
   if (actual !== occupied + input.additional)
-    throw new ResourceAdmissionError("growth_mismatch" | "authority_revoked", input.resource);
+    throw new ResourceAdmissionError("growth_mismatch", input.resource);
   return result;
 }
 
