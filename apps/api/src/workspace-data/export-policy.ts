@@ -755,6 +755,13 @@ export const WORKSPACE_EXPORT_TABLES = [
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  billingAccounts: "Operator-scoped customer ownership and recovery keys",
+  billingCheckoutAttempts: "Operator-scoped payment attempts and idempotency keys",
+  billingCleanup: "Durable external payment cleanup obligations",
+  billingPlanVersions: "Operator-managed subscription catalog",
+  billingReceipts: "Verified payment webhook inbox",
+  billingSubscriptions: "Operator-scoped payment subscription inventory",
+  organizationBillingState: "Server-authoritative subscription entitlement state",
   analysisAdmissions: "Operational admission leases",
   autopilotManualAttempts: "Operational dispatch attempts",
   autopilotScanEvents: "Operational scanner attempts",
