@@ -174,7 +174,16 @@ export class FixtureBillingDriver implements BillingDriver {
       if (prior.request !== request) throw new BillingError("idempotency_conflict");
       return { ...prior.result };
     }
-    const id = `${kind === "checkout" ? "cs" : "bps"}_fixture_${this.attempts.size + 1}`;
+    const prefix = kind === "checkout" ? "cs" : "bps";
+    let sequence = this.attempts.size + 1;
+    let id = `${prefix}_fixture_${sequence}`;
+    while (
+      this.checkouts.some((checkout) => checkout.checkoutId === id) ||
+      [...this.attempts.values()].some((attempt) => attempt.result.id === id)
+    ) {
+      sequence += 1;
+      id = `${prefix}_fixture_${sequence}`;
+    }
     const result = { id, url: `${this.origin}/__billing-fixture/${kind}/${id}` };
     this.attempts.set(input.idempotencyKey, { request, result });
     return { ...result };
