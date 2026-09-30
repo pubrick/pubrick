@@ -1,4 +1,5 @@
 import { schema } from "@pubrick/db";
+import { AUTH_MAIL_MAX_AGE_SECONDS } from "@pubrick/mail";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
@@ -8,7 +9,10 @@ import { adminAc, defaultStatements, ownerAc } from "better-auth/plugins/organiz
 import { eq } from "drizzle-orm";
 import { hostedIdentityPlugin } from "./auth-hosted.plugin";
 import { invitationRoleGate } from "./auth-invitation-role-gate";
-import { createAuthMailer, invitationMailUrl } from "./auth-mail";
+import { authMailer, invitationMailUrl, mailLocale } from "./auth-mail";
+
+export { authMailer } from "./auth-mail";
+
 import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";
 import { signupGate } from "./auth-signup-gate";
@@ -66,9 +70,8 @@ const editorAc = ac.newRole({
 });
 
 /** 48 hours, the plugin's own default — stated so `docs/self-hosting.md` cites code. */
-export const INVITATION_EXPIRES_IN_SECONDS = 48 * 60 * 60;
+export const INVITATION_EXPIRES_IN_SECONDS = AUTH_MAIL_MAX_AGE_SECONDS.invite;
 
-export const authMailer = identity.mail ? createAuthMailer(env.WEB_ORIGIN, identity.mail) : null;
 const mailer = authMailer;
 
 const ORGANIZATION_OPTIONS = {
@@ -86,13 +89,18 @@ const ORGANIZATION_OPTIONS = {
   requireEmailVerificationOnInvitation: identity.hosted,
   ...(mailer
     ? {
-        sendInvitationEmail: async (data: { email: string; id: string }, request?: Request) => {
-          mailer.submit(
-            "invite",
-            data.email,
-            invitationMailUrl(env.WEB_ORIGIN, data.id, request),
-            request,
-          );
+        sendInvitationEmail: async (
+          data: { email: string; id: string; organization: { id: string } },
+          request?: Request,
+        ) => {
+          await mailer.submit({
+            kind: "invite",
+            recipient: data.email,
+            invitationId: data.id,
+            organizationId: data.organization.id,
+            link: invitationMailUrl(env.WEB_ORIGIN, data.id, request),
+            locale: mailLocale(request),
+          });
         },
       }
     : {}),
@@ -115,26 +123,40 @@ export const auth = betterAuth({
     ...(mailer
       ? {
           sendResetPassword: async (
-            { user, url }: { user: { email: string }; url: string },
+            { user, url }: { user: { id: string; email: string }; url: string },
             request?: Request,
           ) => {
-            mailer.submit("reset", user.email, url, request);
+            await mailer.submit({
+              kind: "reset",
+              userId: user.id,
+              recipient: user.email,
+              link: url,
+              locale: mailLocale(request),
+            });
           },
           revokeSessionsOnPasswordReset: true,
+          resetPasswordTokenExpiresIn: AUTH_MAIL_MAX_AGE_SECONDS.reset,
         }
       : {}),
   },
   ...(mailer
     ? {
         emailVerification: {
+          expiresIn: AUTH_MAIL_MAX_AGE_SECONDS.verify,
           sendOnSignUp: identity.hosted,
           sendOnSignIn: false,
           autoSignInAfterVerification: false,
           sendVerificationEmail: async (
-            { user, url }: { user: { email: string }; url: string },
+            { user, url }: { user: { id: string; email: string }; url: string },
             request?: Request,
           ) => {
-            mailer.submit("verify", user.email, url, request);
+            await mailer.submit({
+              kind: "verify",
+              userId: user.id,
+              recipient: user.email,
+              link: url,
+              locale: mailLocale(request),
+            });
           },
         },
       }

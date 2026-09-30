@@ -1,3 +1,4 @@
+import { resolveSmtpConfig } from "@pubrick/mail";
 /** Instance policy is operator configuration, never workspace or request input. */
 export type IdentityEnvironment = {
   PUBRICK_DEPLOYMENT_MODE: string;
@@ -38,27 +39,7 @@ export function identityConfig(env: IdentityEnvironment, nodeEnvironment?: strin
     if (nodeEnvironment === "production" && origin.protocol !== "https:")
       throw new Error("Hosted identity requires HTTPS in production.");
   }
-  const configured = !!(env.SMTP_HOST || env.SMTP_USER || env.SMTP_PASSWORD || env.SMTP_FROM);
-  if (!configured && !hosted) return { hosted, mail: null };
-  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASSWORD || !env.SMTP_FROM)
-    throw new Error("Mail requires SMTP_HOST, SMTP_USER, SMTP_PASSWORD and SMTP_FROM.");
-  const plaintextLocalTest =
-    nodeEnvironment !== "production" && ["localhost", "127.0.0.1", "::1"].includes(env.SMTP_HOST);
-  if (!env.SMTP_SECURE && !env.SMTP_REQUIRE_TLS && !plaintextLocalTest)
-    throw new Error(
-      "SMTP requires TLS; plaintext is allowed only for a local non-production test server.",
-    );
-  return {
-    hosted,
-    mail: {
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      requireTLS: env.SMTP_REQUIRE_TLS,
-      auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
-      from: env.SMTP_FROM,
-    },
-  };
+  return { hosted, mail: resolveSmtpConfig(env, { required: hosted, nodeEnvironment }) };
 }
 /** Better Auth owns signed tokens; this only narrows destination links to our app. */
 export function canonicalMailUrl(raw: string, origin: string): string {

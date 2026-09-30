@@ -768,3 +768,13 @@ commits before HTTP starts: key rotation cannot retract an already admitted call
 but subsequent retries and schema repairs must admit the retained revision again.
 A default-provider/model edit does not invalidate a run's retained snapshot.
 Credential replacement/deletion or Google transport changes do invalidate it.
+
+### Authentication mail admission
+
+Authentication mail takes the instance-wide advisory transaction lock
+`746352991` before counting retained `pgboss.job` rows and inserting the
+encrypted queue job in that transaction. It takes no domain row locks and
+never waits for SMTP. Better Auth owns account/token/invitation commits;
+mail callbacks read them before entering this queue-only lock. Other queue
+producers do not take this lock. Consumers use authoritative read-only
+ownership transactions with a five-second statement timeout.

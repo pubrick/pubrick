@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@pubrick/shared": "workspace:*",
+    "jose": "^6.2.10",
     "nodemailer": "^10.0.13",
     "zod": "^4.4.3"
   },

@@ -17,6 +17,7 @@
     "@pubrick/ai": "workspace:*",
     "@pubrick/db": "workspace:*",
     "@pubrick/integrations": "workspace:*",
+    "@pubrick/mail": "workspace:*",
     "@pubrick/search": "workspace:*",
     "@pubrick/shared": "workspace:*",
     "@pubrick/telegram": "workspace:*",

@@ -460,3 +460,29 @@ export const GENERATE_QUEUE_OPTIONS = {
  * (`MAX_CONCURRENT_RUNS`), and neither substitutes for the other.
  */
 export const GENERATE_WORK_OPTIONS = { batchSize: 1, groupConcurrency: 1 } as const;
+
+/** Authentication mail contains no plaintext recipient, signed link or tenant data. */
+export const AUTH_MAIL_QUEUE = "auth-mail";
+export const AUTH_MAIL_DLQ = "auth-mail-dlq";
+export type AuthMailJob = Readonly<{ ciphertext: string }>;
+export const AUTH_MAIL_ADMISSION_CAP = 1000;
+export const AUTH_MAIL_DLQ_OPTIONS = {
+  retryLimit: 0,
+  retentionSeconds: 3600,
+  deleteAfterSeconds: 3600,
+} as const;
+export const AUTH_MAIL_QUEUE_OPTIONS = {
+  retryLimit: 3,
+  retryDelay: 30,
+  retryBackoff: true,
+  expireInSeconds: 60,
+  retentionSeconds: 48 * 3600,
+  deleteAfterSeconds: 3600,
+  deadLetter: AUTH_MAIL_DLQ,
+} as const;
+export const AUTH_MAIL_WORK_OPTIONS = {
+  batchSize: 1,
+  localConcurrency: 4,
+  groupConcurrency: 4,
+  perJobResults: true,
+} as const;

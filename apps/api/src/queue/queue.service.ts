@@ -5,6 +5,10 @@ import {
   type OnModuleInit,
 } from "@nestjs/common";
 import {
+  AUTH_MAIL_DLQ,
+  AUTH_MAIL_DLQ_OPTIONS,
+  AUTH_MAIL_QUEUE,
+  AUTH_MAIL_QUEUE_OPTIONS,
   CLAIM_REVIEW_DLQ,
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,
@@ -56,6 +60,8 @@ import {
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 import { v5 as uuidv5 } from "uuid";
+import { authMailer } from "../auth-mail";
+import { enqueueAuthMail } from "../auth-mail-outbox.repository";
 import { env } from "../env";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";
@@ -162,10 +168,18 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(GENERATE_DLQ);
     await boss.createQueue(GENERATE_QUEUE, { ...GENERATE_QUEUE_OPTIONS });
     await boss.updateQueue(GENERATE_QUEUE, { ...GENERATE_QUEUE_OPTIONS });
+    if (authMailer) {
+      await boss.createQueue(AUTH_MAIL_DLQ, { ...AUTH_MAIL_DLQ_OPTIONS });
+      await boss.updateQueue(AUTH_MAIL_DLQ, { ...AUTH_MAIL_DLQ_OPTIONS });
+      await boss.createQueue(AUTH_MAIL_QUEUE, { ...AUTH_MAIL_QUEUE_OPTIONS });
+      await boss.updateQueue(AUTH_MAIL_QUEUE, { ...AUTH_MAIL_QUEUE_OPTIONS });
+    }
     this.boss = boss;
+    authMailer?.bind((request) => enqueueAuthMail(boss, request));
   }
 
   async onModuleDestroy(): Promise<void> {
+    await authMailer?.close();
     await this.boss?.stop({ graceful: true });
   }
 

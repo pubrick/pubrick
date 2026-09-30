@@ -4,6 +4,16 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    env: {
+      PUBRICK_DEPLOYMENT_MODE: "self-hosted",
+      SMTP_HOST: "",
+      SMTP_USER: "",
+      SMTP_PASSWORD: "",
+      SMTP_FROM: "",
+      SMTP_PORT: "587",
+      SMTP_SECURE: "false",
+      SMTP_REQUIRE_TLS: "true",
+    },
     setupFiles: ["./vitest.setup.ts"],
     globalSetup: ["./vitest.global-setup.ts"],
     // Keeps worker's own bootstrap-heavy publish.e2e.spec.ts from piling onto apps/api's

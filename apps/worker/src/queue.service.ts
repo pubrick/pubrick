@@ -55,6 +55,7 @@ import {
   type VkMetricsJob,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
+import { AuthMailService } from "./auth-mail/auth-mail.service";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
@@ -172,6 +173,7 @@ export class QueueService {
     @Optional() private readonly claimReview?: ClaimReviewService,
     @Optional() private readonly paidReplies?: PaidReplyService,
     @Optional() private readonly channelHealth?: ChannelHealthService,
+    @Optional() private readonly authMail?: AuthMailService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -188,6 +190,7 @@ export class QueueService {
    * generate, their DLQs, and the abandoned-run sweep.
    */
   async registerAll(boss: PgBoss, names: QueueNames = DEFAULT_QUEUE_NAMES): Promise<void> {
+    await this.authMail?.register(boss);
     await this.registerHeartbeat(boss);
 
     // Only the production queue set runs this bounded maintenance check.

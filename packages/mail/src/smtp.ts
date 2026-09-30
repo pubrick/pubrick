@@ -85,7 +85,8 @@ export function createSmtpMailTransport(
   try {
     config = smtpSchema.parse(input);
     const localTest =
-      options.runtime === "test" && ["localhost", "127.0.0.1", "::1"].includes(config.host);
+      (options.runtime === "test" || options.runtime === "development") &&
+      ["localhost", "127.0.0.1", "::1"].includes(config.host);
     if (!config.secure && !config.requireTLS && !localTest) throw new Error("TLS");
   } catch {
     throw new AuthMailError("configuration");
