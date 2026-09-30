@@ -3,28 +3,30 @@ import { z } from "zod";
 import type { PlanDefinition } from "./catalog-core";
 
 /** Operator configuration only. These fields never accept request payloads. */
+const optionalEnvironment = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => (typeof value === "string" && !value.trim() ? undefined : value), schema);
 export const billingEnvironmentSchema = z.object({
-  BILLING_DRIVER: z.enum(["stripe-sandbox", "fixture"]).optional(),
-  BILLING_ACCOUNT_ID: z.string().optional(),
-  BILLING_CATALOG_JSON: z.string().optional(),
-  BILLING_STRIPE_SECRET_KEY: z.string().optional(),
-  BILLING_STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  BILLING_FIXTURE_PRICES_JSON: z.string().optional(),
-  BILLING_MAX_OWNED_WORKSPACES: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(Number.MAX_SAFE_INTEGER)
-    .optional(),
-  BILLING_MAX_CREATES_PER_DAY: z.coerce
-    .number()
-    .int()
-    .min(1)
-    .max(Number.MAX_SAFE_INTEGER)
-    .optional(),
-  BILLING_SDK_TIMEOUT_MS: z.coerce.number().int().min(100).max(5000).default(2000),
-  BILLING_TICK_BUDGET_MS: z.coerce.number().int().min(100).max(30000).default(10000),
-  BILLING_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).max(3600000).default(60000),
+  BILLING_DRIVER: optionalEnvironment(z.enum(["stripe-sandbox", "fixture"]).optional()),
+  BILLING_ACCOUNT_ID: optionalEnvironment(z.string().optional()),
+  BILLING_CATALOG_JSON: optionalEnvironment(z.string().optional()),
+  BILLING_STRIPE_SECRET_KEY: optionalEnvironment(z.string().optional()),
+  BILLING_STRIPE_WEBHOOK_SECRET: optionalEnvironment(z.string().optional()),
+  BILLING_FIXTURE_PRICES_JSON: optionalEnvironment(z.string().optional()),
+  BILLING_MAX_OWNED_WORKSPACES: optionalEnvironment(
+    z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  ),
+  BILLING_MAX_CREATES_PER_DAY: optionalEnvironment(
+    z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  ),
+  BILLING_SDK_TIMEOUT_MS: optionalEnvironment(
+    z.coerce.number().int().min(100).max(5000).default(2000),
+  ),
+  BILLING_TICK_BUDGET_MS: optionalEnvironment(
+    z.coerce.number().int().min(100).max(30000).default(10000),
+  ),
+  BILLING_SWEEP_INTERVAL_MS: optionalEnvironment(
+    z.coerce.number().int().min(1000).max(3600000).default(60000),
+  ),
 });
 const finiteLimit = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const name = z.string().trim().min(1).max(100);

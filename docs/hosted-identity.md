@@ -153,3 +153,27 @@ and use custom workspace routes. Invitations require a seeded or independently
 verified active entitlement; no trial is automatically granted. Fixture payments
 are restricted to loopback nonproduction operation, and sandbox capability flags
 explicitly avoid a live-payment claim.
+
+## Operator billing environment
+
+Compose passes the complete billing configuration to the API and only
+`BILLING_DRIVER`/`BILLING_ACCOUNT_ID` to the worker for the same authoritative
+quota identity. Payment secrets never reach the worker or web. Self-hosted mode
+requires none of these fields; blank optional values are treated as absent.
+
+Hosted mode requires `BILLING_DRIVER=stripe-sandbox`, the operator's
+`BILLING_ACCOUNT_ID`, test secret/webhook keys, `BILLING_CATALOG_JSON`, and positive
+`BILLING_MAX_OWNED_WORKSPACES`/`BILLING_MAX_CREATES_PER_DAY`. The catalog is an array
+of `{id, version, priceId, limits}`; `limits` contains finite integer `seats`,
+`brands`, `channels`, `mediaBytes`, and `concurrentJobs`. Seats must be positive;
+other limits may be zero. Price IDs must belong to that configured account's
+active recurring test prices. No price, plan or domain is supplied by default.
+Optional SDK, tick and sweep budgets use validated defaults when blank.
+
+Initial trials are explicitly disabled. This iteration is BYOK sandbox
+infrastructure: users supply AI credentials and no generation credit is included.
+A local integration fixture can choose `BILLING_DRIVER=fixture` with an explicit
+`BILLING_FIXTURE_PRICES_JSON` and matching catalog. It must use a loopback origin
+and nonproduction API process. Production containers reject the fixture driver.
+Native ownership tests seed an active sandbox entitlement after creating an
+empty workspace; this is test setup, not payment settlement evidence.

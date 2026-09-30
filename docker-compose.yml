@@ -41,6 +41,18 @@ services:
       # account exists, invite-only from then on — see .env.example.
       SIGNUP_MODE: ${SIGNUP_MODE:-}
       PUBRICK_DEPLOYMENT_MODE: ${PUBRICK_DEPLOYMENT_MODE:-self-hosted}
+      # Operator-owned hosted sandbox billing; empty is disabled only in self-hosted mode.
+      BILLING_DRIVER: "${BILLING_DRIVER:-}"
+      BILLING_ACCOUNT_ID: "${BILLING_ACCOUNT_ID:-}"
+      BILLING_CATALOG_JSON: "${BILLING_CATALOG_JSON:-}"
+      BILLING_STRIPE_SECRET_KEY: "${BILLING_STRIPE_SECRET_KEY:-}"
+      BILLING_STRIPE_WEBHOOK_SECRET: "${BILLING_STRIPE_WEBHOOK_SECRET:-}"
+      BILLING_FIXTURE_PRICES_JSON: "${BILLING_FIXTURE_PRICES_JSON:-}"
+      BILLING_MAX_OWNED_WORKSPACES: "${BILLING_MAX_OWNED_WORKSPACES:-}"
+      BILLING_MAX_CREATES_PER_DAY: "${BILLING_MAX_CREATES_PER_DAY:-}"
+      BILLING_SDK_TIMEOUT_MS: "${BILLING_SDK_TIMEOUT_MS:-}"
+      BILLING_TICK_BUDGET_MS: "${BILLING_TICK_BUDGET_MS:-}"
+      BILLING_SWEEP_INTERVAL_MS: "${BILLING_SWEEP_INTERVAL_MS:-}"
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
@@ -84,6 +96,9 @@ services:
     environment:
       WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
       PUBRICK_DEPLOYMENT_MODE: ${PUBRICK_DEPLOYMENT_MODE:-self-hosted}
+      # Same authoritative operator identity as API quota admission; no payment secrets.
+      BILLING_DRIVER: "${BILLING_DRIVER:-}"
+      BILLING_ACCOUNT_ID: "${BILLING_ACCOUNT_ID:-}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set it in .env}"
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}

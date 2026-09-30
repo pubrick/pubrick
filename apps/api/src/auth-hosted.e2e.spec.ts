@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb } from "@pubrick/db";
@@ -79,6 +80,30 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
     if (!address || typeof address === "string") throw new Error("Missing local SMTP port");
     Object.assign(process.env, {
       DATABASE_URL: databaseUrl,
+      NODE_ENV: "test",
+      BILLING_DRIVER: "fixture",
+      BILLING_ACCOUNT_ID: "fixture_hosted_http",
+      BILLING_MAX_OWNED_WORKSPACES: "2",
+      BILLING_MAX_CREATES_PER_DAY: "3",
+      BILLING_CATALOG_JSON: JSON.stringify([
+        {
+          id: "operator_fixture",
+          version: "v1",
+          priceId: "price_fixture_hosted",
+          limits: { seats: 4, brands: 2, channels: 2, mediaBytes: 1048576, concurrentJobs: 2 },
+        },
+      ]),
+      BILLING_FIXTURE_PRICES_JSON: JSON.stringify([
+        {
+          priceId: "price_fixture_hosted",
+          productId: "prod_fixture_hosted",
+          active: true,
+          currency: "usd",
+          unitAmount: 1,
+          interval: "month",
+          intervalCount: 1,
+        },
+      ]),
       PUBRICK_DEPLOYMENT_MODE: "hosted",
       SIGNUP_MODE: "open",
       AUTH_RATE_LIMIT_ENABLED: "true",
@@ -150,6 +175,48 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .get(link.pathname + link.search)
       .expect(302);
   }
+  async function seedEntitlement(orgId: string) {
+    // Native test settlement only: no trial, no fixture checkout URL, no production payment claim.
+    const { schema } = await import("@pubrick/db");
+    const identity = {
+      provider: "fixture",
+      environment: "sandbox",
+      accountId: "fixture_hosted_http",
+    } as const;
+    const { and, eq } = await import("drizzle-orm");
+    const [plan] = await external.db
+      .select({ id: schema.billingPlanVersions.id })
+      .from(schema.billingPlanVersions)
+      .where(
+        and(
+          eq(schema.billingPlanVersions.provider, identity.provider),
+          eq(schema.billingPlanVersions.environment, identity.environment),
+          eq(schema.billingPlanVersions.accountId, identity.accountId),
+          eq(schema.billingPlanVersions.priceId, "price_fixture_hosted"),
+        ),
+      );
+    expect(plan).toBeDefined();
+    if (!plan) throw new Error("Runtime did not initialize operator test plan");
+    const planVersionId = plan.id;
+    const priceId = "price_fixture_hosted";
+    const subscriptionId = `sub_${randomUUID()}`;
+    const accessUntil = new Date(Date.now() + 86400000);
+    await external.db.insert(schema.billingSubscriptions).values({
+      orgId,
+      ...identity,
+      customerId: `cus_${randomUUID()}`,
+      subscriptionId,
+      status: "active",
+      priceId,
+      planVersionId,
+      periodStart: new Date(Date.now() - 1000),
+      periodEnd: accessUntil,
+      cancelAtPeriodEnd: false,
+    });
+    await external.db
+      .insert(schema.organizationBillingState)
+      .values({ orgId, subscriptionId, planVersionId, access: true, accessUntil });
+  }
   it("does not issue a session before email ownership, then supports verified invitations and one-use password recovery", async () => {
     const owner = request.agent(app.getHttpServer());
     const ownerEmail = fresh("owner");
@@ -180,15 +247,87 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .send({ email: ownerEmail, password })
       .expect(200);
     const organization = await owner
-      .post("/api/auth/organization/create")
+      .post("/api/hosted-admission/create")
       .set(sourceHeaders)
       .send({ name: "Hosted identity", slug: `hosted-${Date.now()}` })
       .expect(200);
-    const memberEmail = fresh("member");
-    const invitation = await owner
-      .post("/api/auth/organization/invite-member")
+    const orgId = organization.body.id;
+    const { schema } = await import("@pubrick/db");
+    const { eq } = await import("drizzle-orm");
+    expect(
+      await external.db
+        .select()
+        .from(schema.organizationBillingState)
+        .where(eq(schema.organizationBillingState.orgId, orgId)),
+    ).toHaveLength(0);
+    // All actual SDK writers stay closed, even for the verified workspace owner.
+    for (const path of [
+      "create",
+      "invite-member",
+      "accept-invitation",
+      "reject-invitation",
+      "cancel-invitation",
+      "remove-member",
+      "update-member-role",
+      "leave",
+      "delete",
+    ]) {
+      const blocked = await owner
+        .post(`/api/auth/organization/${path}`)
+        .set(sourceHeaders)
+        .send({
+          name: "Bypass",
+          slug: `bypass-${randomUUID()}`,
+          organizationId: orgId,
+          email: fresh("bypass"),
+          role: "member",
+          invitationId: "missing",
+          memberId: "missing",
+          teamId: "missing",
+        })
+        .expect(403);
+      expect(blocked.body.code).toBe("HOSTED_ORGANIZATION_MUTATION_REQUIRED");
+    }
+    // Better Auth exposes addMember only server-side; no public add-member endpoint exists.
+    await owner
+      .post("/api/auth/organization/add-member")
       .set(sourceHeaders)
-      .send({ email: memberEmail, role: "member", organizationId: organization.body.id })
+      .send({ organizationId: orgId })
+      .expect(404);
+    const session = await owner.get("/api/auth/get-session").set(sourceHeaders).expect(200);
+    const { auth } = await import("./auth");
+    await expect(
+      auth.api.addMember({
+        body: { organizationId: orgId, userId: session.body.user.id, role: "member" },
+      }),
+    ).rejects.toMatchObject({ body: { code: "HOSTED_ORGANIZATION_MUTATION_REQUIRED" } });
+    await owner.get("/api/auth/organization/list").set(sourceHeaders).expect(200);
+    await owner
+      .post("/api/auth/organization/set-active")
+      .set(sourceHeaders)
+      .send({ organizationId: orgId })
+      .expect(200);
+    await owner
+      .post("/api/auth/organization/update")
+      .set(sourceHeaders)
+      .send({ organizationId: orgId, data: { name: "Hosted metadata" } })
+      .expect(200);
+    await owner
+      .get(`/api/auth/organization/get-full-organization?organizationId=${orgId}`)
+      .set(sourceHeaders)
+      .expect(200);
+    const memberEmail = fresh("member");
+    // No entitlement exists at creation: invitation growth must fail until the operator test seed.
+    await owner
+      .post("/api/hosted-admission/invite")
+      .set(sourceHeaders)
+      .send({ orgId, email: memberEmail, role: "author", locale: "en" })
+      .expect(402);
+    await seedEntitlement(orgId);
+    const invitation = await owner
+      .post("/api/hosted-admission/invite")
+      .set(sourceHeaders)
+      .send({ orgId, email: memberEmail, role: "author", locale: "en" })
       .expect(200);
     await (await import("./auth")).authMailer?.drain();
     await vi.waitFor(
@@ -211,9 +350,9 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .send({ email: memberEmail, password, name: "Member" })
       .expect(200);
     await member
-      .post("/api/auth/organization/accept-invitation")
+      .post("/api/hosted-admission/accept")
       .set(memberHeaders)
-      .send({ invitationId: invitation.body.id })
+      .send({ orgId, invitationId: invitation.body.id })
       .expect(401);
     await verify(memberEmail);
     await member
@@ -222,9 +361,9 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .send({ email: memberEmail, password })
       .expect(200);
     await member
-      .post("/api/auth/organization/accept-invitation")
+      .post("/api/hosted-admission/accept")
       .set(memberHeaders)
-      .send({ invitationId: invitation.body.id })
+      .send({ orgId, invitationId: invitation.body.id })
       .expect(200);
     const known = await owner
       .post("/api/auth/request-password-reset")
@@ -238,7 +377,13 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .expect(200);
     expect(unknown.body).toEqual(known.body);
     const reset = await emailLink(ownerEmail, "reset-password");
-    expect([...committedKinds].sort()).toEqual(["invite", "reset", "verify"]);
+    expect([...committedKinds].sort()).toEqual(["reset", "verify"]);
+    // Custom invitation and encrypted job commit atomically in the domain transaction.
+    const persistedInvite = await external.db
+      .select()
+      .from(schema.invitation)
+      .where(eq(schema.invitation.id, invitation.body.id));
+    expect(persistedInvite[0]?.status).toBe("accepted");
     const jobs = await external.pool.query("select data from pgboss.job where name=$1", [
       AUTH_MAIL_QUEUE,
     ]);
@@ -415,6 +560,8 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       expect(capabilities.body).toEqual({
         requiresEmailVerification: true,
         passwordRecoveryEnabled: true,
+        billingEnabled: true,
+        billingTestMode: true,
       });
     } finally {
       logger.mockRestore();

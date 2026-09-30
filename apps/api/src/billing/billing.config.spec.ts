@@ -95,3 +95,33 @@ it("rejects live keys and secret-bearing diagnostics", () => {
     expect(String(error)).not.toContain(secret);
   }
 });
+
+it("treats Compose blank optional values as absent while keeping hosted fields required", () => {
+  expect(
+    parseBillingConfig(
+      {
+        ...fixture,
+        BILLING_STRIPE_SECRET_KEY: "",
+        BILLING_STRIPE_WEBHOOK_SECRET: "",
+        BILLING_SDK_TIMEOUT_MS: "",
+        BILLING_TICK_BUDGET_MS: " ",
+        BILLING_SWEEP_INTERVAL_MS: "",
+      },
+      context,
+    ),
+  ).toMatchObject({ sdkTimeoutMs: 2000, tickBudgetMs: 10000, sweepIntervalMs: 60000 });
+  for (const field of [
+    "BILLING_DRIVER",
+    "BILLING_MAX_OWNED_WORKSPACES",
+    "BILLING_MAX_CREATES_PER_DAY",
+  ])
+    expect(() => parseBillingConfig({ ...fixture, [field]: "" }, context)).toThrow(
+      BillingConfigurationError,
+    );
+  expect(
+    parseBillingConfig(
+      { BILLING_DRIVER: "", BILLING_MAX_OWNED_WORKSPACES: "", BILLING_SDK_TIMEOUT_MS: "" },
+      { ...context, deploymentMode: "self-hosted" },
+    ),
+  ).toEqual({ enabled: false });
+});
