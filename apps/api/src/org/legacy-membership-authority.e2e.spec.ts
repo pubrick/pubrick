@@ -51,9 +51,10 @@ describe.skipIf(!url)("real legacy duplicate membership authority", () => {
       .update(schema.member)
       .set({ role: "author" })
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+    const legacyId = randomUUID();
     await connection.db
       .insert(schema.member)
-      .values({ id: randomUUID(), organizationId: orgId, userId, role: "owner" });
+      .values({ id: legacyId, organizationId: orgId, userId, role: "owner" });
     return { agent, orgId, userId, legacyId };
   }
   it("allows both manager creation and brand-scoped manager/read routes with the owner in a later row", async () => {
