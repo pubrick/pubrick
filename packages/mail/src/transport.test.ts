@@ -1,6 +1,11 @@
 import nodemailer from "nodemailer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMailIdentity, createSmtpMailTransport } from "./index.js";
+import {
+  type AuthMailPayload,
+  createMailIdentity,
+  createSmtpMailTransport,
+  type MailOwnershipSnapshot,
+} from "./index.js";
 
 const now = 1_790_000_000_000;
 const identity = createMailIdentity("https://pubrick.example", "hosted", "private-auth-secret");
@@ -38,6 +43,45 @@ function capture() {
 }
 afterEach(() => vi.restoreAllMocks());
 describe("SMTP delivery attempt boundary", () => {
+  it("does not submit SMTP after shutdown while awaiting authoritative ownership", async () => {
+    const smtp = capture();
+    const mail = createSmtpMailTransport(config, { identity, now: () => now });
+    let release: (snapshot: MailOwnershipSnapshot) => void = () => {
+      throw new Error("Missing resolver");
+    };
+    const delivery = mail.deliver(
+      payload,
+      () =>
+        new Promise<MailOwnershipSnapshot>((resolve) => {
+          release = resolve;
+        }),
+    );
+    mail.close();
+    release({ user: { id: payload.userId, email: payload.recipient, emailVerified: true } });
+    await expect(delivery).rejects.toMatchObject({
+      name: "AuthMailError",
+      code: "unavailable",
+      message: "unavailable",
+    });
+    expect(smtp.sendMail).not.toHaveBeenCalled();
+  });
+  it("reports malformed runtime values with closed errors without querying ownership", async () => {
+    const smtp = capture();
+    const mail = createSmtpMailTransport(config, { identity, now: () => now });
+    const resolve = vi.fn();
+    for (const input of [undefined, null, { identity: null }, {}]) {
+      await expect(
+        mail.deliver(input as unknown as AuthMailPayload, resolve),
+      ).rejects.toMatchObject({
+        name: "AuthMailError",
+        code: "invalid_payload",
+        message: "invalid_payload",
+      });
+    }
+    expect(resolve).not.toHaveBeenCalled();
+    expect(smtp.sendMail).not.toHaveBeenCalled();
+  });
+
   it("requires authenticated certificate-verified TLS except explicit loopback tests", () => {
     capture();
     expect(() =>
