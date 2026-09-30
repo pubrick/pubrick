@@ -1,0 +1,18 @@
+# Overlay requires Docker Compose >= 2.24.4 (!reset support).
+# Use with docker-compose.yml; never use this file on its own.
+services:
+  postgres:
+    # Same PostgreSQL 16 multi-platform image validated by the database CI tier.
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+  api:
+    build: !reset null
+    image: ${PUBRICK_API_IMAGE:?set a versioned image or digest from the release manifest}
+    pull_policy: always
+  worker:
+    build: !reset null
+    image: ${PUBRICK_WORKER_IMAGE:?set a versioned image or digest from the release manifest}
+    pull_policy: always
+  web:
+    build: !reset null
+    image: ${PUBRICK_WEB_IMAGE:?set a versioned image or digest from the release manifest}
+    pull_policy: always

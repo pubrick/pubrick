@@ -1,0 +1,136 @@
+name: Release images
+
+# Deliberately manual: publishing consumes runner minutes and reserves a version.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing reviewed tag (for example v0.1.0 or v0.1.0-beta.1)'
+        required: true
+        type: string
+      source_sha:
+        description: 'Exact full commit SHA the tag points to, already merged into main'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pubrick-release-images
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+      repository: ${{ steps.validate.outputs.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable source and reserve draft release
+        id: validate
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ inputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          node scripts/validate-release.mjs
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "repository=${GH_REPO,,}" >> "$GITHUB_OUTPUT"
+          # A pre-existing release fails rather than overwriting its images.
+          # The draft also reserves this version if a later build fails.
+          flags=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" "${flags[@]}" \
+            --notes "Source commit: $RELEASE_SHA. Multi-platform images and digest manifest are being prepared."
+
+  images:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, web]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: build
+        with:
+          context: .
+          file: docker/${{ matrix.service }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.service }}:${{ needs.validate.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.tag }}
+          provenance: mode=max
+          sbom: true
+      - name: Record digest and source linkage
+        env:
+          SERVICE: ${{ matrix.service }}
+          IMAGE: ghcr.io/${{ needs.validate.outputs.repository }}-${{ matrix.service }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          mkdir -p release-artifacts
+          printf 'PUBRICK_%s_IMAGE=%s@%s\n' "${SERVICE^^}" "$IMAGE" "$DIGEST" > "release-artifacts/$SERVICE.env"
+          jq -n --arg service "$SERVICE" --arg image "$IMAGE@$DIGEST" \
+            --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
+            '{service:$service,image:$image,tag:$tag,sourceSha:$sha,platforms:["linux/amd64","linux/arm64"]}' \
+            > "release-artifacts/$SERVICE.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.service }}
+          path: release-artifacts/
+          retention-days: 7
+
+  manifest:
+    needs: [validate, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Attach complete manifest to draft release
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat release-artifacts/api.env release-artifacts/worker.env release-artifacts/web.env > release-images.env
+          jq -s '.' release-artifacts/api.json release-artifacts/worker.json release-artifacts/web.json > release-manifest.json
+          gh release upload "$RELEASE_TAG" release-images.env release-manifest.json
+          echo "Draft release $RELEASE_TAG is ready for operator smoke testing. Publishing it remains a separate action." >> "$GITHUB_STEP_SUMMARY"
