@@ -18,7 +18,7 @@ import { organization } from "./auth.js";
 // ownership evidence must survive deletion. Access only through privileged,
 // provider/environment/account-scoped repository methods, never public IDs.
 const identity = () => ({
-  provider: text("provider").notNull(),
+  provider: text("provider", { enum: ["stripe", "fixture"] }).notNull(),
   environment: text("environment").notNull(),
   accountId: text("account_id").notNull(),
 });
@@ -113,7 +113,18 @@ export const billingSubscriptions = pgTable(
     ...identity(),
     customerId: text("customer_id").notNull(),
     subscriptionId: text("subscription_id").notNull(),
-    status: text("status").notNull(),
+    status: text("status", {
+      enum: [
+        "active",
+        "trialing",
+        "past_due",
+        "unpaid",
+        "canceled",
+        "incomplete",
+        "incomplete_expired",
+        "paused",
+      ],
+    }).notNull(),
     priceId: text("price_id").notNull(),
     planVersionId: uuid("plan_version_id")
       .notNull()
@@ -144,7 +155,7 @@ export const billingSubscriptions = pgTable(
     ),
     check("billing_subscription_revision_nonnegative", sql`${t.revision} >= 0`),
     check(
-      "billing_subscription_status_check",
+      "billing_subscriptions_status_check",
       sql`${t.status} IN ('active','trialing','past_due','unpaid','canceled','incomplete','incomplete_expired','paused')`,
     ),
   ],
@@ -183,7 +194,9 @@ export const billingCheckoutAttempts = pgTable(
     cancelUrl: text("cancel_url").notNull(),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
     recoveryDeadline: timestamp("recovery_deadline", { withTimezone: true }).notNull(),
-    status: text("status").notNull().default("pending"),
+    status: text("status", { enum: ["pending", "ready", "closed", "operator_action"] })
+      .notNull()
+      .default("pending"),
     revision: integer("revision").notNull().default(0),
     leaseToken: uuid("lease_token"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
@@ -204,7 +217,7 @@ export const billingCheckoutAttempts = pgTable(
       t.checkoutId,
     ),
     check(
-      "billing_checkout_status_check",
+      "billing_checkout_attempts_status_check",
       sql`${t.status} IN ('pending','ready','closed','operator_action')`,
     ),
     check("billing_checkout_revision_nonnegative", sql`${t.revision} >= 0`),
@@ -218,9 +231,15 @@ export const billingReceipts = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     ...identity(),
     eventId: text("event_id").notNull(),
-    kind: text("kind").notNull(),
+    kind: text("kind", {
+      enum: ["subscription.changed", "checkout.completed", "invoice.changed"],
+    }).notNull(),
     resourceId: text("resource_id").notNull(),
-    status: text("status").notNull().default("pending"),
+    status: text("status", {
+      enum: ["pending", "processing", "complete", "ignored", "retry", "operator_action"],
+    })
+      .notNull()
+      .default("pending"),
     attempts: integer("attempts").notNull().default(0),
     leaseToken: uuid("lease_token"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
@@ -238,11 +257,11 @@ export const billingReceipts = pgTable(
       t.eventId,
     ),
     check(
-      "billing_receipt_kind_check",
+      "billing_receipts_kind_check",
       sql`${t.kind} IN ('subscription.changed','checkout.completed','invoice.changed')`,
     ),
     check(
-      "billing_receipt_status_check",
+      "billing_receipts_status_check",
       sql`${t.status} IN ('pending','processing','complete','ignored','retry','operator_action')`,
     ),
     index("billing_receipt_due_idx").on(t.nextAttemptAt),
@@ -254,10 +273,14 @@ export const billingCleanup = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     orgId: text("org_id").notNull(),
     ...identity(),
-    kind: text("kind").notNull(),
+    kind: text("kind", { enum: ["attempt", "subscription"] }).notNull(),
     resourceId: text("resource_id").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
-    status: text("status").notNull().default("pending"),
+    status: text("status", {
+      enum: ["pending", "processing", "complete", "retry", "operator_action"],
+    })
+      .notNull()
+      .default("pending"),
     attempts: integer("attempts").notNull().default(0),
     leaseToken: uuid("lease_token"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),

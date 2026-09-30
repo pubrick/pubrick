@@ -27,7 +27,7 @@ export async function stageMediaCleanup(
 ): Promise<void> {
   if (
     !orgId ||
-    (scope?.brandId && !uuid.test(scope.brandId)) ||
+    (scope && "brandId" in scope && (!scope.brandId || !uuid.test(scope.brandId))) ||
     (scope?.assetIds &&
       (scope.assetIds.length > 1000 || scope.assetIds.some((id) => !uuid.test(id))))
   )

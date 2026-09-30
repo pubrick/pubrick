@@ -119,6 +119,9 @@ describe.skipIf(!url)("native durable media cleanup", () => {
   it("scopes explicit and brand staging to the owning organization", async () => {
     const own = await fixture();
     const other = await fixture();
+    await expect(
+      connection.db.transaction((tx) => stageMediaCleanup(own.orgId, tx, { brandId: "" })),
+    ).rejects.toThrow("media_cleanup_invalid_scope");
     await connection.db.transaction(async (tx) => {
       await stageMediaCleanup(own.orgId, tx, { assetIds: other.ids });
       await stageMediaCleanup(own.orgId, tx, { brandId: other.brandId });
@@ -228,8 +231,10 @@ describe.skipIf(!url)("native durable media cleanup", () => {
       current = await repository.claim(now);
     }
     expect(current).toHaveLength(0);
-    expect((await row(f.ids[0] as string)).state).toBe("operator_action");
-    expect((await row(f.ids[1] as string)).state).toBe("operator_action");
+    const [firstId, secondId] = f.ids;
+    if (!firstId || !secondId) throw new Error("Missing exhausted fixture IDs");
+    expect((await row(firstId)).state).toBe("operator_action");
+    expect((await row(secondId)).state).toBe("operator_action");
   });
   it("prunes only completed proofs older than seven days in bounded batches", async () => {
     const f = await fixture("image", 30);
