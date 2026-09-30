@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createDb, schema } from "@pubrick/db";
 import { openAuthMail } from "@pubrick/mail";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -71,6 +71,60 @@ describe.skipIf(!url)("encrypted durable authentication outbox admission", () =>
     expect(decoded.jobId).toBe(rows.rows[0].id);
     await boss.deleteAllJobs(names.queue);
   });
+  it("rolls back an invitation and its encrypted outbox job together", async () => {
+    const { enqueueAuthMailInTransaction } = await import("./auth-mail-outbox.repository");
+    const orgId = randomUUID();
+    const invitationId = randomUUID();
+    const inviterId = randomUUID();
+    await expect(
+      database.db.transaction(async (tx) => {
+        await tx.insert(schema.user).values({
+          id: inviterId,
+          name: "Atomic mail fixture",
+          email: `${inviterId}@example.com`,
+          emailVerified: true,
+        });
+        await tx
+          .insert(schema.organization)
+          .values({ id: orgId, name: "Atomic invitation", slug: orgId });
+        await tx.insert(schema.invitation).values({
+          id: invitationId,
+          organizationId: orgId,
+          inviterId,
+          email: "atomic@example.com",
+          role: "member",
+          status: "pending",
+          expiresAt: new Date(Date.now() + 3600000),
+        });
+        await enqueueAuthMailInTransaction(
+          boss,
+          {
+            kind: "invite",
+            organizationId: orgId,
+            invitationId,
+            recipient: "atomic@example.com",
+            locale: "en",
+            link: `${origin}/en/onboarding?invitation=${invitationId}`,
+          },
+          tx,
+          names,
+          1,
+        );
+        const staged = await tx.execute<{ count: string }>(
+          sql`select count(*)::text as count from pgboss.job where name = ${names.queue}`,
+        );
+        expect(Number(staged.rows[0]?.count)).toBe(1);
+        throw new Error("Deliberate outer transaction rollback");
+      }),
+    ).rejects.toThrow("Deliberate outer transaction rollback");
+    expect(
+      (await database.pool.query("select id from organization where id=$1", [orgId])).rows,
+    ).toHaveLength(0);
+    expect(
+      (await database.pool.query("select id from pgboss.job where name=$1", [names.queue])).rows,
+    ).toHaveLength(0);
+  });
+
   it("rolls back failed insertion without consuming capacity and closes vendor diagnostics", async () => {
     const send = vi.spyOn(boss, "send").mockResolvedValueOnce(null);
     await expect(enqueue(boss, payload(), database.db, names, 1)).rejects.toMatchObject({
