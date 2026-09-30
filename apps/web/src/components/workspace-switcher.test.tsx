@@ -17,7 +17,7 @@ beforeEach(() => {
     ],
     error: null,
   });
-  mocks.setActive.mockResolvedValue({ data: {}, error: null });
+  mocks.setActive.mockResolvedValue({ data: { id: "second" }, error: null });
 });
 it("changes workspace only after explicit confirmation and performs a full navigation", async () => {
   const user = userEvent.setup();
@@ -29,13 +29,16 @@ it("changes workspace only after explicit confirmation and performs a full navig
   expect(mocks.navigate).toHaveBeenCalledWith("en");
 });
 it("keeps the current workspace on refused switching and shows a local error", async () => {
-  mocks.setActive.mockResolvedValue({ data: null, error: { message: "PRIVATE SERVER DETAILS" } });
+  mocks.setActive.mockResolvedValue({
+    data: null,
+    error: { status: 403, message: "PRIVATE SERVER DETAILS" },
+  });
   const user = userEvent.setup();
   render(<WorkspaceSwitcher activeId="first" />);
   await user.selectOptions(await screen.findByLabelText("Workspace"), "second");
   await user.click(screen.getByRole("button", { name: "Switch" }));
   await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
-    "Could not switch workspaces. Your current workspace is unchanged.",
+    "Could not switch workspaces. Please try again.",
   );
   expect(mocks.navigate).not.toHaveBeenCalled();
   expect(screen.queryByText("PRIVATE SERVER DETAILS")).not.toBeInTheDocument();
@@ -48,3 +51,24 @@ it("reports a failed list instead of pretending the user has no workspaces", asy
   );
   expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 });
+
+it("resets a removed active workspace to a placeholder instead of displaying another membership", async () => {
+  mocks.list.mockResolvedValue({ data: [{ id: "second", name: "Second" }], error: null });
+  render(<WorkspaceSwitcher activeId="removed" />);
+  const select = await screen.findByLabelText("Workspace");
+  expect(select).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Switch" })).toBeDisabled();
+});
+for (const scenario of ["network", "server", "unknown"] as const) {
+  it(`reconciles an ambiguous ${scenario} response through a full document navigation`, async () => {
+    if (scenario === "network") mocks.setActive.mockRejectedValue(new Error("network"));
+    if (scenario === "server")
+      mocks.setActive.mockResolvedValue({ data: null, error: { status: 503 } });
+    if (scenario === "unknown") mocks.setActive.mockResolvedValue({ data: null, error: null });
+    const user = userEvent.setup();
+    render(<WorkspaceSwitcher activeId="first" />);
+    await user.selectOptions(await screen.findByLabelText("Workspace"), "second");
+    await user.click(screen.getByRole("button", { name: "Switch" }));
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith("en"));
+  });
+}
