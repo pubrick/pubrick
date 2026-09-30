@@ -10,6 +10,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BrandsRepository } from "../brands/brands.repository";
 import type { ChannelsRepository } from "../channels/channels.repository";
 import type { ContentImagesRepository } from "../content/content-images.repository";
+import { type RequestAuthority, runWithRequestAuthority } from "../request-authority";
+import { authorizeRequestActor } from "../request-authority-admission";
 import type { MediaRepository } from "./media.repository";
 
 const controls = vi.hoisted(() => ({
@@ -25,7 +27,10 @@ const controls = vi.hoisted(() => ({
 }));
 vi.mock("../tenant-quota", async (original) => ({
   ...(await original<typeof import("../tenant-quota")>()),
-  tenantQuotaMode: () => controls.mode,
+  tenantQuotaMode: () =>
+    controls.mode.mode === "hosted"
+      ? { ...controls.mode, authorizeActor: authorizeRequestActor }
+      : controls.mode,
 }));
 vi.mock("../content/content-image-file", async (original) => {
   const actual = await original<typeof import("../content/content-image-file")>();
@@ -47,6 +52,7 @@ describe.skipIf(!url)("native API resource writers", () => {
   let png: Buffer;
   const orgIds: string[] = [];
   const planIds: string[] = [];
+  const userIds: string[] = [];
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
@@ -83,6 +89,8 @@ describe.skipIf(!url)("native API resource writers", () => {
       await connection.db
         .delete(schema.billingPlanVersions)
         .where(eq(schema.billingPlanVersions.id, id));
+    for (const userId of userIds)
+      await connection.db.delete(schema.user).where(eq(schema.user.id, userId));
     await connection.pool.end();
     const { pool } = await import("../db");
     await pool.end();
@@ -94,6 +102,29 @@ describe.skipIf(!url)("native API resource writers", () => {
     await connection.db
       .insert(schema.organization)
       .values({ id: orgId, name: "Writer fixture", slug: orgId });
+    const userId = randomUUID();
+    const sessionId = randomUUID();
+    userIds.push(userId);
+    await connection.db
+      .insert(schema.user)
+      .values({
+        id: userId,
+        name: "Verified owner",
+        email: `${userId}@example.test`,
+        emailVerified: true,
+      });
+    await connection.db
+      .insert(schema.session)
+      .values({
+        id: sessionId,
+        userId,
+        token: randomUUID(),
+        activeOrganizationId: orgId,
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+    await connection.db
+      .insert(schema.member)
+      .values({ id: randomUUID(), organizationId: orgId, userId, role: "owner" });
     const planId = randomUUID();
     planIds.push(planId);
     const identity = {
@@ -151,7 +182,48 @@ describe.skipIf(!url)("native API resource writers", () => {
       .values({ orgId, name: "Existing brand" })
       .returning();
     if (!brand) throw new Error("Missing fixture brand");
-    return { orgId, brandId: brand.id, planId };
+    const actor = { orgId, userId, sessionId, brandId: brand.id };
+    const scope = <T>(action: () => Promise<T>, contentId?: string, orgOnly = false) => {
+      const snapshot: RequestAuthority = Object.freeze({
+        kind: "session",
+        orgId,
+        userId,
+        sessionId,
+        scope: Object.freeze(
+          orgOnly
+            ? { kind: "org", roles: "manager" }
+            : contentId
+              ? { kind: "resource", resource: "content", source: "param" }
+              : { kind: "brand", source: "body" },
+        ),
+        capability: undefined,
+        mutation: true,
+        brandId: orgOnly ? undefined : actor.brandId,
+        resourceId: contentId,
+      });
+      return runWithRequestAuthority(snapshot, action);
+    };
+    // Trusted fixture identities correspond to actual verified DB sessions and
+    // membership rows. Every writer still executes the real authority callback.
+    const authorized = {
+      brands: {
+        create: (...args: Parameters<BrandsRepository["create"]>) =>
+          scope(() => brands.create(...args), undefined, true),
+      },
+      channels: {
+        create: (...args: Parameters<ChannelsRepository["create"]>) =>
+          scope(() => channels.create(...args)),
+      },
+      media: {
+        upload: (...args: Parameters<MediaRepository["upload"]>) =>
+          scope(() => media.upload(...args)),
+      },
+      images: {
+        crop: (...args: Parameters<ContentImagesRepository["crop"]>) =>
+          scope(() => images.crop(...args), args[1]),
+      },
+    };
+    return { ...actor, planId, authorized };
   }
   async function assertQuota(error: unknown, resource: string) {
     expect(error).toBeInstanceOf(HttpException);
@@ -164,8 +236,16 @@ describe.skipIf(!url)("native API resource writers", () => {
   it("admits exactly one simultaneous brand at the final available brand slot and commits no refused row", async () => {
     const f = await fixture({ brands: 2 });
     const results = await Promise.allSettled([
-      brands.create(f.orgId, { name: "One", contentLanguage: "en", automaticClaimEvidence: false }),
-      brands.create(f.orgId, { name: "Two", contentLanguage: "en", automaticClaimEvidence: false }),
+      f.authorized.brands.create(f.orgId, {
+        name: "One",
+        contentLanguage: "en",
+        automaticClaimEvidence: false,
+      }),
+      f.authorized.brands.create(f.orgId, {
+        name: "Two",
+        contentLanguage: "en",
+        automaticClaimEvidence: false,
+      }),
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const refusal = results.find((r) => r.status === "rejected");
@@ -179,7 +259,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     const f = await fixture();
     const results = await Promise.allSettled(
       ["One", "Two"].map((name) =>
-        channels.create(f.orgId, { brandId: f.brandId, platform: "vc_ru", name }),
+        f.authorized.channels.create(f.orgId, { brandId: f.brandId, platform: "vc_ru", name }),
       ),
     );
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
@@ -194,7 +274,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     const f = await fixture({ mediaBytes: 1 });
     const before = await readdir(mediaDir);
     await assertQuota(
-      await media
+      await f.authorized.media
         .upload(f.orgId, f.brandId, {
           buffer: png,
           originalname: "fixture.png",
@@ -216,7 +296,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     const video = await readFile(path.resolve(process.cwd(), "src/media/fixtures/tiny-h264.mp4"));
     const before = await readdir(mediaDir);
     await assertQuota(
-      await media
+      await f.authorized.media
         .upload(f.orgId, f.brandId, {
           buffer: video,
           originalname: "fixture.mp4",
@@ -235,7 +315,7 @@ describe.skipIf(!url)("native API resource writers", () => {
   });
   it("allows expired workspaces to delete media and durably stage physical cleanup", async () => {
     const f = await fixture();
-    const asset = await media.upload(f.orgId, f.brandId, {
+    const asset = await f.authorized.media.upload(f.orgId, f.brandId, {
       buffer: png,
       originalname: "fixture.png",
       mimetype: "image/png",
@@ -261,7 +341,7 @@ describe.skipIf(!url)("native API resource writers", () => {
   });
   async function cropFixture() {
     const f = await fixture();
-    const asset = await media.upload(f.orgId, f.brandId, {
+    const asset = await f.authorized.media.upload(f.orgId, f.brandId, {
       buffer: png,
       originalname: "source.png",
       mimetype: "image/png",
@@ -294,7 +374,7 @@ describe.skipIf(!url)("native API resource writers", () => {
   }
   it("commits an admitted crop with exact normalized byte metadata and atomic slot revision", async () => {
     const f = await cropFixture();
-    const result = await images.crop(f.orgId, f.item.id, f.slot.id, f.crop);
+    const result = await f.authorized.images.crop(f.orgId, f.item.id, f.slot.id, f.crop);
     expect(result.revision).toBe(2);
     const image = result.images[0];
     if (!image) throw new Error("Missing cropped slot");
@@ -321,7 +401,7 @@ describe.skipIf(!url)("native API resource writers", () => {
       .where(eq(schema.billingPlanVersions.id, f.planId));
     const before = await readdir(mediaDir);
     await assertQuota(
-      await images.crop(f.orgId, f.item.id, f.slot.id, f.crop).catch((error) => error),
+      await f.authorized.images.crop(f.orgId, f.item.id, f.slot.id, f.crop).catch((error) => error),
       "mediaBytes",
     );
     expect(await readdir(mediaDir)).toEqual(before);
@@ -339,7 +419,9 @@ describe.skipIf(!url)("native API resource writers", () => {
         .where(eq(schema.contentItems.id, f.item.id));
     };
     try {
-      await expect(images.crop(f.orgId, f.item.id, f.slot.id, f.crop)).rejects.toMatchObject({
+      await expect(
+        f.authorized.images.crop(f.orgId, f.item.id, f.slot.id, f.crop),
+      ).rejects.toMatchObject({
         response: { code: "content_images_changed" },
       });
     } finally {
@@ -364,12 +446,32 @@ describe.skipIf(!url)("native API resource writers", () => {
       await connection.db.delete(schema.mediaAssets).where(eq(schema.mediaAssets.id, f.asset.id));
     };
     try {
-      await expect(images.crop(f.orgId, f.item.id, f.slot.id, f.crop)).rejects.toMatchObject({
+      await expect(
+        f.authorized.images.crop(f.orgId, f.item.id, f.slot.id, f.crop),
+      ).rejects.toMatchObject({
         response: { code: "content_image_not_found" },
       });
     } finally {
       controls.afterCropWrite = undefined;
     }
     expect(await readdir(mediaDir)).toEqual(before);
+  });
+  it("refuses a hosted write without trusted request context and cleans the prepared image", async () => {
+    const f = await fixture();
+    const before = await readdir(mediaDir);
+    await expect(
+      media.upload(f.orgId, f.brandId, {
+        buffer: png,
+        originalname: "anonymous.png",
+        mimetype: "image/png",
+      }),
+    ).rejects.toMatchObject({ status: 403, response: { code: "forbidden" } });
+    expect(await readdir(mediaDir)).toEqual(before);
+    expect(
+      await connection.db
+        .select({ id: schema.mediaAssets.id })
+        .from(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.orgId, f.orgId)),
+    ).toHaveLength(0);
   });
 });

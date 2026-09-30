@@ -3,13 +3,18 @@ import { createDb, schema, type TenantResourceQuotaMode } from "@pubrick/db";
 import { runCreateSchema } from "@pubrick/shared";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type RequestAuthority, runWithRequestAuthority } from "../request-authority";
+import { authorizeRequestActor } from "../request-authority-admission";
 import type { RunsRepository } from "./runs.repository";
 
 const identity = { provider: "stripe", environment: "sandbox", accountId: "acct_jobs" } as const;
 const control = vi.hoisted(() => ({ mode: { mode: "self-hosted" } as TenantResourceQuotaMode }));
 vi.mock("../tenant-quota", async (original) => ({
   ...(await original<typeof import("../tenant-quota")>()),
-  tenantQuotaMode: () => control.mode,
+  tenantQuotaMode: () =>
+    control.mode.mode === "hosted"
+      ? { ...control.mode, authorizeActor: authorizeRequestActor }
+      : control.mode,
 }));
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)("native hosted API job admission", () => {
@@ -18,6 +23,7 @@ describe.skipIf(!url)("native hosted API job admission", () => {
   const enqueue = vi.fn(async () => undefined);
   const orgIds: string[] = [];
   const planIds: string[] = [];
+  const userIds: string[] = [];
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
@@ -41,6 +47,8 @@ describe.skipIf(!url)("native hosted API job admission", () => {
       await connection.db
         .delete(schema.billingPlanVersions)
         .where(eq(schema.billingPlanVersions.id, id));
+    for (const userId of userIds)
+      await connection.db.delete(schema.user).where(eq(schema.user.id, userId));
     await connection.pool.end();
     const { pool } = await import("../db");
     await pool.end();
@@ -51,6 +59,29 @@ describe.skipIf(!url)("native hosted API job admission", () => {
     await connection.db
       .insert(schema.organization)
       .values({ id: orgId, name: "Resource fixture", slug: orgId });
+    const userId = randomUUID();
+    const sessionId = randomUUID();
+    userIds.push(userId);
+    await connection.db
+      .insert(schema.user)
+      .values({
+        id: userId,
+        name: "Verified owner",
+        email: `${userId}@example.test`,
+        emailVerified: true,
+      });
+    await connection.db
+      .insert(schema.session)
+      .values({
+        id: sessionId,
+        userId,
+        token: randomUUID(),
+        activeOrganizationId: orgId,
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+    await connection.db
+      .insert(schema.member)
+      .values({ id: randomUUID(), organizationId: orgId, userId, role: "owner" });
     const planId = randomUUID();
     planIds.push(planId);
     const priceId = `price_${planId}`;
@@ -113,7 +144,23 @@ describe.skipIf(!url)("native hosted API job admission", () => {
       credentialsEncrypted: "fixture never decrypted",
       defaultModel: "fixture-text-model",
     });
-    return { orgId, brandId: brand.id, channelId: channel.id };
+    await connection.db
+      .insert(schema.aiTextSettings)
+      .values({ orgId, provider: "google", model: "fixture-text-model" });
+    const authority: RequestAuthority = Object.freeze({
+      kind: "session",
+      orgId,
+      userId,
+      sessionId,
+      scope: Object.freeze({ kind: "brand", source: "body" }),
+      capability: "author",
+      mutation: true,
+      brandId: brand.id,
+      resourceId: undefined,
+    });
+    const create = (...args: Parameters<RunsRepository["create"]>) =>
+      runWithRequestAuthority(authority, () => runs.create(...args));
+    return { orgId, userId, sessionId, brandId: brand.id, channelId: channel.id, create };
   }
 
   function input(f: Awaited<ReturnType<typeof fixture>>) {
@@ -133,8 +180,8 @@ describe.skipIf(!url)("native hosted API job admission", () => {
     const f = await fixture();
     enqueue.mockClear();
     const result = await Promise.allSettled([
-      runs.create(f.orgId, input(f)),
-      runs.create(f.orgId, input(f)),
+      f.create(f.orgId, input(f)),
+      f.create(f.orgId, input(f)),
     ]);
     expect(result.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const refusal = result.find((r) => r.status === "rejected");
@@ -148,7 +195,7 @@ describe.skipIf(!url)("native hosted API job admission", () => {
     const f = await fixture();
     enqueue.mockClear();
     control.mode = { mode: "hosted", identity: { ...identity, accountId: "replacement" } };
-    await expect(runs.create(f.orgId, input(f))).rejects.toMatchObject({
+    await expect(f.create(f.orgId, input(f))).rejects.toMatchObject({
       status: 503,
       response: { code: "billing_identity_mismatch" },
     });
@@ -157,7 +204,7 @@ describe.skipIf(!url)("native hosted API job admission", () => {
       .update(schema.organizationBillingState)
       .set({ accessUntil: new Date(0) })
       .where(eq(schema.organizationBillingState.orgId, f.orgId));
-    await expect(runs.create(f.orgId, input(f))).rejects.toMatchObject({
+    await expect(f.create(f.orgId, input(f))).rejects.toMatchObject({
       status: 402,
       response: { code: "subscription_required" },
     });
@@ -166,20 +213,29 @@ describe.skipIf(!url)("native hosted API job admission", () => {
   });
   it("current hosted plan replaces static three while self-hosted keeps three", async () => {
     const f = await fixture({ concurrentJobs: 4 });
-    for (let i = 0; i < 3; i++) await runs.create(f.orgId, input(f));
+    for (let i = 0; i < 3; i++) await f.create(f.orgId, input(f));
     control.mode = { mode: "self-hosted" };
-    await expect(runs.create(f.orgId, input(f))).rejects.toMatchObject({
+    await expect(f.create(f.orgId, input(f))).rejects.toMatchObject({
       status: 409,
       response: { code: "run_limit_reached" },
     });
     control.mode = { mode: "hosted", identity };
-    await runs.create(f.orgId, input(f));
+    await f.create(f.orgId, input(f));
     expect(await count(f.orgId)).toHaveLength(4);
   });
   it("enqueue failure rolls back admitted run", async () => {
     const f = await fixture();
     enqueue.mockRejectedValueOnce(new Error("queue unavailable"));
-    await expect(runs.create(f.orgId, input(f))).rejects.toThrow("queue unavailable");
+    await expect(f.create(f.orgId, input(f))).rejects.toThrow("queue unavailable");
     expect(await count(f.orgId)).toHaveLength(0);
+  });
+  it("refuses missing or revoked actor authority without a run or queue enqueue", async () => {
+    const f = await fixture();
+    enqueue.mockClear();
+    await expect(runs.create(f.orgId, input(f))).rejects.toMatchObject({ status: 403 });
+    await connection.db.delete(schema.member).where(eq(schema.member.userId, f.userId));
+    await expect(f.create(f.orgId, input(f))).rejects.toMatchObject({ status: 403 });
+    expect(await count(f.orgId)).toHaveLength(0);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });
