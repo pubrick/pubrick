@@ -18,7 +18,11 @@ const publicPaths = new Set([
   "/get-session",
 ]);
 /** Protect all Better Auth mutations as well as the Nest guard's getSession API. */
-export function hostedIdentityPlugin(hosted: boolean, recoveryEnabled: boolean): BetterAuthPlugin {
+export function hostedIdentityPlugin(
+  hosted: boolean,
+  recoveryEnabled: boolean,
+  billing: { enabled: boolean; testMode: boolean } = { enabled: false, testMode: false },
+): BetterAuthPlugin {
   return {
     id: "pubrick-hosted-identity",
     endpoints: {
@@ -26,7 +30,13 @@ export function hostedIdentityPlugin(hosted: boolean, recoveryEnabled: boolean):
         "/pubrick-capabilities",
         { method: "GET" },
         async (ctx) =>
-          ctx.json({ requiresEmailVerification: hosted, passwordRecoveryEnabled: recoveryEnabled }),
+          ctx.json({
+            requiresEmailVerification: hosted,
+            passwordRecoveryEnabled: recoveryEnabled,
+            deploymentMode: hosted ? "hosted" : "self-hosted",
+            billingEnabled: billing.enabled,
+            billingTestMode: billing.enabled && billing.testMode,
+          }),
       ),
     },
     hooks: {
