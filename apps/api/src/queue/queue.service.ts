@@ -60,8 +60,8 @@ import {
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 import { v5 as uuidv5 } from "uuid";
-import { authMailer } from "../auth-mail";
 import { enqueueAuthMail } from "../auth-mail-outbox.repository";
+import { authMailer } from "../auth-mail-runtime";
 import { env } from "../env";
 
 export { GENERATE_DLQ, GENERATE_QUEUE, PUBLISH_DLQ, PUBLISH_QUEUE } from "@pubrick/shared";

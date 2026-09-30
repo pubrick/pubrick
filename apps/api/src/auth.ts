@@ -9,9 +9,10 @@ import { adminAc, defaultStatements, ownerAc } from "better-auth/plugins/organiz
 import { eq } from "drizzle-orm";
 import { hostedIdentityPlugin } from "./auth-hosted.plugin";
 import { invitationRoleGate } from "./auth-invitation-role-gate";
-import { authMailer, invitationMailUrl, mailLocale } from "./auth-mail";
+import { invitationMailUrl, mailLocale } from "./auth-mail";
+import { authMailer } from "./auth-mail-runtime";
 
-export { authMailer } from "./auth-mail";
+export { authMailer } from "./auth-mail-runtime";
 
 import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";

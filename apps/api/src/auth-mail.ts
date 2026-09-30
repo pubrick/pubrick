@@ -1,10 +1,10 @@
-import { identity } from "./env";
 export type AuthMailRequest = {
   recipient: string;
   link: string;
   locale: "en" | "es" | "ru" | "pt";
 } & (
-  | { kind: "verify" | "reset"; userId: string }
+  | { kind: "verify"; userId: string }
+  | { kind: "reset"; userId: string }
   | { kind: "invite"; invitationId: string; organizationId: string }
 );
 type Enqueue = (request: AuthMailRequest) => Promise<void>;
@@ -48,7 +48,6 @@ export function createAuthMailer() {
     },
   };
 }
-export const authMailer = identity.mail ? createAuthMailer() : null;
 export function invitationMailUrl(origin: string, invitationId: string, request?: Request) {
   const url = new URL(`/${mailLocale(request)}/onboarding`, origin);
   url.searchParams.set("invitation", invitationId);
