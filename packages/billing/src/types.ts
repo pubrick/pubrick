@@ -1,0 +1,125 @@
+export type BillingIdentity = Readonly<{
+  provider: "stripe" | "fixture";
+  environment: "sandbox";
+  accountId: string;
+}>;
+
+export const SUBSCRIPTION_STATUSES = [
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "canceled",
+  "incomplete",
+  "incomplete_expired",
+  "paused",
+] as const;
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+export type SubscriptionSnapshot = Readonly<{
+  identity: BillingIdentity;
+  subscriptionId: string;
+  customerId: string;
+  priceId: string;
+  status: SubscriptionStatus;
+  cancelAtPeriodEnd: boolean;
+  /** Unix seconds, from the single recurring subscription item. */
+  periodStart: number;
+  periodEnd: number;
+}>;
+
+export type VerifiedEvent = Readonly<{
+  identity: BillingIdentity;
+  eventId: string;
+  kind: "subscription.changed" | "checkout.completed" | "invoice.changed";
+  /** External ID only. Resolve ownership through Pubrick's persisted mapping. */
+  resourceId: string;
+}>;
+export type CheckoutRequest = Readonly<{
+  customerId: string;
+  priceId: string;
+  successUrl: string;
+  cancelUrl: string;
+  idempotencyKey: string;
+}>;
+export type PortalRequest = Readonly<{
+  customerId: string;
+  returnUrl: string;
+  idempotencyKey: string;
+}>;
+export type SessionResult = Readonly<{ id: string; url: string }>;
+export interface BillingDriver {
+  readonly identity: BillingIdentity;
+  createCheckout(input: CheckoutRequest): Promise<SessionResult>;
+  createPortal(input: PortalRequest): Promise<SessionResult>;
+  verifyWebhook(rawBody: Buffer, signature: string): VerifiedEvent;
+  retrieveSubscription(id: string): Promise<SubscriptionSnapshot>;
+}
+
+export type BillingErrorCode =
+  | "configuration"
+  | "invalid_request"
+  | "invalid_signature"
+  | "environment_mismatch"
+  | "unsupported_account"
+  | "unsupported_event"
+  | "invalid_response"
+  | "authentication"
+  | "rate_limited"
+  | "timeout"
+  | "unavailable"
+  | "not_found"
+  | "idempotency_conflict";
+
+/** Never retains provider messages, response bodies, credentials or error causes. */
+export class BillingError extends Error {
+  constructor(public readonly code: BillingErrorCode) {
+    super(code);
+    this.name = "BillingError";
+  }
+}
+
+export function requireId(
+  value: string,
+  prefix: string,
+  code: BillingErrorCode = "invalid_request",
+): void {
+  if (
+    !value.startsWith(prefix) ||
+    !/^[A-Za-z0-9_]+$/.test(value) ||
+    value.length <= prefix.length
+  ) {
+    throw new BillingError(code);
+  }
+}
+export function validateAttempt(key: string): void {
+  if (!key.trim() || key.length > 255 || !/^[\x20-\x7e]+$/.test(key))
+    throw new BillingError("invalid_request");
+}
+export function validateReturnUrl(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new BillingError("invalid_request");
+  }
+  if (
+    url.username ||
+    url.password ||
+    !["https:", "http:"].includes(url.protocol) ||
+    (url.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+  ) {
+    throw new BillingError("invalid_request");
+  }
+}
+export function validateCheckout(input: CheckoutRequest): void {
+  requireId(input.customerId, "cus_");
+  requireId(input.priceId, "price_");
+  validateAttempt(input.idempotencyKey);
+  validateReturnUrl(input.successUrl);
+  validateReturnUrl(input.cancelUrl);
+}
+export function validatePortal(input: PortalRequest): void {
+  requireId(input.customerId, "cus_");
+  validateAttempt(input.idempotencyKey);
+  validateReturnUrl(input.returnUrl);
+}

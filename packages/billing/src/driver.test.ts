@@ -54,14 +54,12 @@ function signed(payload: string) {
   return Stripe.webhooks.generateTestHeaderString({ payload, secret: config.webhookSecret });
 }
 function transport(body: unknown, status = 200) {
-  return vi
-    .fn<typeof fetch>()
-    .mockResolvedValue(
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { "content-type": "application/json" },
-      }),
-    );
+  return vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    }),
+  );
 }
 
 describe("Stripe sandbox boundary", () => {
@@ -84,6 +82,7 @@ describe("Stripe sandbox boundary", () => {
   it.each([
     [{ livemode: true }, "environment_mismatch"],
     [{ account: "acct_connected" }, "unsupported_account"],
+    [{ context: "acct_connected" }, "unsupported_account"],
     [{ type: "charge.succeeded" }, "unsupported_event"],
     [{ data: { object: { id: "cus_wrong" } } }, "invalid_response"],
   ])("rejects incompatible verified facts %j", (changes, code) => {
@@ -107,7 +106,9 @@ describe("Stripe sandbox boundary", () => {
       id: "cs_test",
       url: "https://checkout.stripe.com/test",
     });
-    const [url, init] = fetch.mock.calls[0]!;
+    const call = fetch.mock.calls[0];
+    if (!call) throw new Error("Expected checkout transport call");
+    const [url, init] = call;
     expect(String(url)).toContain("/v1/checkout/sessions");
     expect(new Headers(init?.headers).get("Idempotency-Key")).toBe(checkout.idempotencyKey);
     const params = new URLSearchParams(String(init?.body));
@@ -117,12 +118,23 @@ describe("Stripe sandbox boundary", () => {
     expect(params.get("success_url")).toBe(checkout.successUrl);
     expect(params.get("cancel_url")).toBe(checkout.cancelUrl);
     expect(params.has("metadata[orgId]")).toBe(false);
+    fetch.mockImplementationOnce(
+      async () =>
+        new Response(JSON.stringify({ id: "bps_test", url: "https://billing.stripe.com/test" })),
+    );
     await driver.createPortal({
       customerId: "cus_test",
       returnUrl: checkout.successUrl,
       idempotencyKey: "org_test:portal:attempt_1",
     });
-    expect(String(fetch.mock.calls[1]![0])).toContain("/v1/billing_portal/sessions");
+    expect(String(fetch.mock.calls[1]?.[0])).toContain("/v1/billing_portal/sessions");
+    const portalInit = fetch.mock.calls[1]?.[1];
+    expect(new Headers(portalInit?.headers).get("Idempotency-Key")).toBe(
+      "org_test:portal:attempt_1",
+    );
+    const portalParams = new URLSearchParams(String(portalInit?.body));
+    expect(portalParams.get("customer")).toBe("cus_test");
+    expect(portalParams.get("return_url")).toBe(checkout.successUrl);
   });
   it("refuses missing idempotency keys and credential-bearing return URLs before transport", async () => {
     const fetch = transport({});
@@ -208,6 +220,26 @@ describe("Stripe sandbox boundary", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("sanitizes connection failures without attaching the original cause", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new Error("private_proxy_password"));
+    const driver = new StripeSandboxDriver({ ...config, fetch });
+    const error = await driver.retrieveSubscription("sub_test").catch((error: unknown) => error);
+    expect(error).toMatchObject({ code: "unavailable" });
+    expect(String(error)).not.toContain("password");
+    expect(error).not.toHaveProperty("cause");
+  });
+  it.each([
+    { id: "cs_test", url: null },
+    { id: "cs_test", url: "https://attacker.example/test" },
+    { id: "cs_test", url: "https://user:password@checkout.stripe.com/test" },
+  ])("refuses invalid checkout session responses", async (response) => {
+    const driver = new StripeSandboxDriver({ ...config, fetch: transport(response) });
+    await expect(driver.createCheckout(checkout)).rejects.toMatchObject({
+      code: "invalid_response",
+    });
+  });
 });
 
 describe("deterministic fixture driver", () => {
@@ -218,6 +250,15 @@ describe("deterministic fixture driver", () => {
     });
     const first = await driver.createCheckout(checkout);
     expect(await driver.createCheckout(checkout)).toEqual(first);
+    expect(
+      await driver.createCheckout({
+        cancelUrl: checkout.cancelUrl,
+        priceId: checkout.priceId,
+        idempotencyKey: checkout.idempotencyKey,
+        customerId: checkout.customerId,
+        successUrl: checkout.successUrl,
+      }),
+    ).toEqual(first);
     await expect(
       driver.createCheckout({ ...checkout, priceId: "price_changed" }),
     ).rejects.toThrowError("idempotency_conflict");
@@ -258,6 +299,14 @@ describe("deterministic fixture driver", () => {
     await expect(driver.retrieveSubscription("sub_missing")).rejects.toThrowError("not_found");
     expect(
       () => new FixtureBillingDriver({ accountId: "fixture_local", origin: "https://example.com" }),
+    ).toThrowError("configuration");
+    expect(
+      () =>
+        new FixtureBillingDriver({
+          accountId: "fixture_local",
+          origin: "http://localhost:31300",
+          subscriptions: [{ ...snapshot, status: "future_status" as typeof snapshot.status }],
+        }),
     ).toThrowError("configuration");
   });
 });
