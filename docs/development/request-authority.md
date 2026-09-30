@@ -1,0 +1,7 @@
+Trusted hosted API authority admission
+
+Successful guards attach an immutable server-only symbol snapshot. Global interceptor establishes AsyncLocalStorage at the lazy RxJS subscription boundary, including undefined for public requests. No transaction surrounds HTTP handlers.
+
+After RUN_ADMISSION advisory and the organization's existing strongest required lock, API resource/queue/physical model admission revalidates session ID + user + active organization + database clock expiry + verified email; unions all scoped membership roles using the existing closed helpers; rechecks actual route manager/editorial capability. Brand KEY SHARE precedes grant lookup to conflict with grant replacement's brand UPDATE. Resource routes resolve their original target's current org/brand association again; writer-side association checks remain authoritative. Session/user SHARE and brand KEY SHARE persist only to DB commit. HTTP/file work remains outside transactions. Already admitted physical calls may finish after revocation; next attempt refuses. Current public API keys are explicitly read-only and cannot authorize resource growth/physical calls. Background worker system modes deliberately omit the API-only trusted actor callback.
+
+Tests cover concurrent lazy Observable contexts and cancellation/errors, actual HTTP guard -> advisory wait -> member removal/downgrade/session expiration/verification revocation/grant revocation, run insertion refusal, physical probe refusal and missing authority. No provider HTTP in fixtures.

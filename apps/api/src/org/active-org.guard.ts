@@ -11,11 +11,13 @@ import { schema } from "@pubrick/db";
 import type { ApiErrorCode } from "@pubrick/shared";
 import { hasOrganizationRole, isOrganizationManager, ORGANIZATION_ROLES } from "@pubrick/shared";
 import { fromNodeHeaders } from "better-auth/node";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { forbidden, notFound } from "../api-error";
 import { auth } from "../auth";
 import { BrandAccessRepository } from "../brand-access/brand-access.repository";
 import { db } from "../db";
+import { type AuthorityRequest, REQUEST_AUTHORITY } from "../request-authority";
+import { brandIdForResource } from "./brand-resource";
 import {
   BRAND_SCOPE_KEY,
   type BrandResource,
@@ -31,7 +33,7 @@ import {
 // request.session verbatim (see its dist/index.mjs canActivate: `request.session = session`).
 type AuthSession = Awaited<ReturnType<typeof auth.api.getSession>>;
 
-type ScopedRequest = {
+type ScopedRequest = AuthorityRequest & {
   session?: AuthSession;
   headers: Record<string, string | string[] | undefined>;
   params?: Record<string, unknown>;
@@ -67,22 +69,6 @@ const RESOURCE_NOT_FOUND_MESSAGES: Partial<Record<BrandResource, string>> = {
   adaptation: "Adaptation not found",
 };
 
-/** Only fixed schema tables may be interpolated into resource lookups. */
-const RESOURCE_TABLES = {
-  topic: schema.topics,
-  content: schema.contentItems,
-  run: schema.pipelineRuns,
-  channel: schema.channels,
-  calendarSlot: schema.calendarSlots,
-  newsItem: schema.newsItems,
-  media: schema.mediaAssets,
-  knowledge: schema.knowledgeEntries,
-  source: schema.newsSources,
-  sourceItem: schema.newsItems,
-  memorableDate: schema.memorableDates,
-  generationJob: schema.pipelineRuns,
-} as const;
-
 function scopedId(request: ScopedRequest, source: "param" | "query" | "body", key: string): string {
   const value = request[source === "param" ? "params" : source]?.[key];
   // Guards run before ParseUUIDPipe and body validation. Reject arrays and other
@@ -91,48 +77,6 @@ function scopedId(request: ScopedRequest, source: "param" | "query" | "body", ke
     throw new BadRequestException(`Invalid ${key}`);
   }
   return value;
-}
-
-async function brandIdForResource(
-  orgId: string,
-  resource: BrandResource,
-  id: string,
-): Promise<string | null> {
-  if (resource === "brand") {
-    const [brand] = await db
-      .select({ id: schema.brands.id })
-      .from(schema.brands)
-      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)))
-      .limit(1);
-    return brand?.id ?? null;
-  }
-  if (resource === "publication") {
-    // Historical receipts may outlive their adaptation and channel. An orphan
-    // has no surviving brand relationship, so it is deliberately inaccessible
-    // through brand-scoped routes.
-    const [row] = await db
-      .select({ brandId: schema.contentItems.brandId })
-      .from(schema.publications)
-      .innerJoin(schema.adaptations, eq(schema.publications.adaptationId, schema.adaptations.id))
-      .innerJoin(schema.contentItems, eq(schema.adaptations.contentItemId, schema.contentItems.id))
-      .where(and(eq(schema.publications.orgId, orgId), eq(schema.publications.id, id)))
-      .limit(1);
-    return row?.brandId ?? null;
-  }
-  if (resource === "adaptation") {
-    const [row] = await db
-      .select({ brandId: schema.contentItems.brandId })
-      .from(schema.adaptations)
-      .innerJoin(schema.contentItems, eq(schema.adaptations.contentItemId, schema.contentItems.id))
-      .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, id)))
-      .limit(1);
-    return row?.brandId ?? null;
-  }
-  const table = RESOURCE_TABLES[resource];
-  const result = await db.execute<{ brand_id: string }>(
-    sql`select brand_id from ${table} where org_id = ${orgId} and id = ${id} limit 1`,
-  );
-  return result.rows[0]?.brand_id ?? null;
 }
 
 /** Requires an authenticated session with an active organization the user is a member of. */
@@ -192,6 +136,31 @@ export class ActiveOrgGuard implements CanActivate {
     if (!scope) throw new ForbiddenException("Brand scope is required for this route");
     // Legacy duplicate rows represent one scoped account, not independent roles.
     const role = membership.map((row) => row.role).join(",");
+    const approve = () => {
+      request[REQUEST_AUTHORITY] = Object.freeze({
+        kind: "session" as const,
+        orgId,
+        sessionId: session.session.id,
+        userId: session.user.id,
+        scope: Object.freeze({
+          ...scope,
+          ...(scope.kind === "org" && scope.editorialBrand
+            ? { editorialBrand: Object.freeze({ ...scope.editorialBrand }) }
+            : {}),
+        }),
+        capability: this.reflector.getAllAndOverride<EditorialCapability>(
+          EDITORIAL_CAPABILITY_KEY,
+          [context.getHandler()],
+        ),
+        mutation: !["GET", "HEAD"].includes(request.method ?? ""),
+        brandId: request.brandId,
+        resourceId:
+          scope.kind === "resource"
+            ? scopedId(request, scope.source ?? "param", scope.key ?? "id")
+            : undefined,
+      });
+      return true;
+    };
     const manager = isOrganizationManager(role);
     if (!hasOrganizationRole(role, ORGANIZATION_ROLES)) {
       throw new ForbiddenException("Organization role is not recognized");
@@ -220,7 +189,7 @@ export class ActiveOrgGuard implements CanActivate {
       if (editorial && !["GET", "HEAD"].includes(request.method ?? "")) {
         throw new ForbiddenException("Editorial role cannot perform this action");
       }
-      return true;
+      return approve();
     }
     if (scope.kind === "org") {
       if (scope.roles === "manager" && !manager) {
@@ -239,7 +208,7 @@ export class ActiveOrgGuard implements CanActivate {
         request.brandId = brandId;
         checkEditorialMutation();
       }
-      return true;
+      return approve();
     }
     const brandId =
       scope.kind === "brand"
@@ -248,6 +217,7 @@ export class ActiveOrgGuard implements CanActivate {
             orgId,
             scope.resource,
             scopedId(request, scope.source ?? "param", scope.key ?? "id"),
+            db,
           );
     if (!brandId) {
       const code = scope.kind === "resource" ? RESOURCE_NOT_FOUND_CODES[scope.resource] : undefined;
@@ -276,6 +246,6 @@ export class ActiveOrgGuard implements CanActivate {
       throw new ForbiddenException("Organization owner or admin required");
     }
     checkEditorialMutation();
-    return true;
+    return approve();
   }
 }

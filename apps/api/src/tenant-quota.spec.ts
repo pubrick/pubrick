@@ -19,6 +19,7 @@ describe("quota errors at the HTTP repository boundary", () => {
   });
   it.each([
     ["target_unavailable", 404, "not_found"],
+    ["authority_revoked", 403, "forbidden"],
     ["invalid_growth", 503, "unavailable"],
     ["growth_mismatch", 503, "unavailable"],
   ] as const)(

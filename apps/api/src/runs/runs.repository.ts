@@ -384,6 +384,8 @@ export class RunsRepository {
       if (!org)
         throw forbidden("no_active_organization", "The active workspace is no longer available");
     }
+    if (mode.mode === "hosted" && (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId))))
+      throw forbidden("forbidden", "Workspace authority changed; sign in and retry");
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(schema.pipelineRuns)
@@ -524,6 +526,11 @@ export class RunsRepository {
               note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
             }))
           : undefined;
+        if (
+          mode.mode === "hosted" &&
+          (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId)))
+        )
+          throw forbidden("forbidden", "Workspace authority changed; sign in and retry");
         const inserted = await tx
           .insert(schema.pipelineRuns)
           .values({

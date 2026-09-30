@@ -36,7 +36,7 @@ function fixture(roles: string[], scope: BrandScopeMetadata = { kind: "org", rol
   Reflect.defineMetadata(BRAND_SCOPE_KEY, scope, Probe.prototype.handler);
   const request = {
     session: {
-      session: { activeOrganizationId: "org-authority" },
+      session: { id: "session-authority", activeOrganizationId: "org-authority" },
       user: { id: "actor-authority" },
     },
     headers: {},

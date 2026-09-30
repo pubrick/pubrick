@@ -56,6 +56,7 @@ describe("API physical dispatch scope", () => {
   });
   it.each([
     ["concurrency_limit", 409, "resource_limit"],
+    ["authority_revoked", 403, "forbidden"],
     ["probe_concurrency_limit", 409, "resource_limit"],
     ["subscription_required", 402, "subscription_required"],
     ["billing_identity_mismatch", 503, "billing_identity_mismatch"],

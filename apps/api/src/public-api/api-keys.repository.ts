@@ -85,12 +85,20 @@ export class ApiKeysRepository {
 
   /** Authentication has no org id yet; the indexed prefix is the lookup boundary. */
   async authenticate(key: string, scope: ApiKeyCreate["scope"]): Promise<string | null> {
+    return (await this.authenticateIdentity(key, scope))?.orgId ?? null;
+  }
+
+  async authenticateIdentity(
+    key: string,
+    scope: ApiKeyCreate["scope"],
+  ): Promise<{ orgId: string; keyId: string } | null> {
     const match = /^pbrk_([a-f0-9]{24})_([A-Za-z0-9_-]{43})$/.exec(key);
     if (!match) return null;
     const prefix = match[1];
     if (!prefix) return null;
     const [row] = await db
       .select({
+        keyId: schema.organizationApiKeys.id,
         orgId: schema.organizationApiKeys.orgId,
         keyHash: schema.organizationApiKeys.keyHash,
         scope: schema.organizationApiKeys.scope,
@@ -105,6 +113,6 @@ export class ApiKeysRepository {
       .limit(1);
     if (!row || row.scope !== scope || !/^[a-f0-9]{64}$/.test(row.keyHash)) return null;
     if (!timingSafeEqual(hashKey(key), Buffer.from(row.keyHash, "hex"))) return null;
-    return row.orgId;
+    return { orgId: row.orgId, keyId: row.keyId };
   }
 }

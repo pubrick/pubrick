@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import type { ApiKeyCreate } from "@pubrick/shared";
+import { type AuthorityRequest, REQUEST_AUTHORITY } from "../request-authority";
 import { ApiKeysRepository } from "./api-keys.repository";
 import { REQUIRED_API_KEY_SCOPE } from "./required-api-key-scope.decorator";
 
@@ -18,10 +19,12 @@ export class ApiKeyGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<{
-      headers: { authorization?: string };
-      apiKeyOrgId?: string;
-    }>();
+    const request = context.switchToHttp().getRequest<
+      AuthorityRequest & {
+        headers: { authorization?: string };
+        apiKeyOrgId?: string;
+      }
+    >();
     const scope = this.reflector.getAllAndOverride<ApiKeyCreate["scope"]>(REQUIRED_API_KEY_SCOPE, [
       context.getHandler(),
       context.getClass(),
@@ -29,9 +32,15 @@ export class ApiKeyGuard implements CanActivate {
     if (!scope) throw new UnauthorizedException("Invalid API key");
     const header = request.headers.authorization;
     const match = typeof header === "string" ? /^Bearer (\S+)$/.exec(header) : null;
-    const orgId = match?.[1] ? await this.keys.authenticate(match[1], scope) : null;
-    if (!orgId) throw new UnauthorizedException("Invalid API key");
-    request.apiKeyOrgId = orgId;
+    const identity = match?.[1] ? await this.keys.authenticateIdentity(match[1], scope) : null;
+    if (!identity) throw new UnauthorizedException("Invalid API key");
+    request.apiKeyOrgId = identity.orgId;
+    request[REQUEST_AUTHORITY] = Object.freeze({
+      kind: "api-key",
+      orgId: identity.orgId,
+      keyId: identity.keyId,
+      scope,
+    });
     return true;
   }
 }

@@ -1,4 +1,5 @@
 import { Module, type OnModuleDestroy } from "@nestjs/common";
+import { APP_INTERCEPTOR } from "@nestjs/core";
 import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
@@ -23,6 +24,7 @@ import { PaidRepliesModule } from "./paid-replies/paid-replies.module";
 import { PromptsModule } from "./prompts/prompts.module";
 import { PublicApiModule } from "./public-api/public-api.module";
 import { QueueModule } from "./queue/queue.module";
+import { RequestAuthorityInterceptor } from "./request-authority.interceptor";
 import { RoleTemplatesModule } from "./role-templates/role-templates.module";
 import { RunsModule } from "./runs/runs.module";
 import { SearchCredentialsModule } from "./search-credentials/search-credentials.module";
@@ -33,6 +35,7 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
 import { WorkspaceDataModule } from "./workspace-data/workspace-data.module";
 
 @Module({
+  providers: [{ provide: APP_INTERCEPTOR, useClass: RequestAuthorityInterceptor }],
   imports: [
     AuthModule.forRoot({ auth }),
     HostedAdmissionModule.forRoot(billingConfig),

@@ -10,13 +10,21 @@ import { mediaAssets } from "./schema/media.js";
 type Database = ReturnType<typeof createDb>["db"];
 export type TenantResourceQuotaMode =
   | { mode: "self-hosted" }
-  | { mode: "hosted"; identity: BillingGrowthIdentity };
+  | {
+      mode: "hosted";
+      identity: BillingGrowthIdentity;
+      authorizeActor?: (tx: BillingTransaction, orgId: string) => Promise<boolean>;
+    };
 export type TenantResourceGrowth =
   | { resource: "brands" | "channels"; additional: 1 }
   | { resource: "mediaBytes"; additional: number };
 export class ResourceAdmissionError extends Error {
   constructor(
-    readonly code: "target_unavailable" | "invalid_growth" | "growth_mismatch",
+    readonly code:
+      | "target_unavailable"
+      | "invalid_growth"
+      | "growth_mismatch"
+      | "authority_revoked",
     readonly resource: TenantResourceGrowth["resource"],
   ) {
     super(code);
@@ -89,6 +97,10 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
   validateGrowth(input);
   // Self-hosted installations keep their existing insertion/locking behavior.
   if (mode.mode === "self-hosted") return insert(tx);
+  // API callers supply trusted actor revalidation; worker callers deliberately omit it
+  // for durable system-owned jobs, never deriving actor identity from job payloads.
+  if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
+    throw new ResourceAdmissionError("authority_revoked", input.resource);
   const occupied = await resourceUsage(orgId, tx, input.resource);
   if (!Number.isSafeInteger(occupied + input.additional))
     throw new ResourceAdmissionError("invalid_growth", input.resource);
@@ -97,10 +109,13 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
     occupied,
     additional: input.additional,
   });
+  // Billing row acquisition may wait long enough for a session to expire.
+  if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
+    throw new ResourceAdmissionError("authority_revoked", input.resource);
   const result = await insert(tx);
   const actual = await resourceUsage(orgId, tx, input.resource);
   if (actual !== occupied + input.additional)
-    throw new ResourceAdmissionError("growth_mismatch", input.resource);
+    throw new ResourceAdmissionError("growth_mismatch" | "authority_revoked", input.resource);
   return result;
 }
 

@@ -1,5 +1,6 @@
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, eq, gt, sql } from "drizzle-orm";
+import type { BillingTransaction } from "./billing-entitlement.js";
 import { resolveBillingEntitlement } from "./billing-entitlement.js";
 import {
   assertBillingGrowth,
@@ -14,7 +15,11 @@ type Database = ReturnType<typeof createDb>["db"];
 export type AiCallKind = "text" | "image" | "embedding" | "probe";
 export type AiCallAdmissionMode =
   | { mode: "self-hosted" }
-  | { mode: "hosted"; identity: BillingGrowthIdentity };
+  | {
+      mode: "hosted";
+      identity: BillingGrowthIdentity;
+      authorizeActor?: (tx: BillingTransaction, orgId: string) => Promise<boolean>;
+    };
 export type HostedAiCallLease = {
   id: string;
   kind: AiCallKind;
@@ -29,6 +34,7 @@ export type HostedAiCallScope = {
 export class AiCallAdmissionError extends Error {
   constructor(
     readonly code:
+      | "authority_revoked"
       | "aborted"
       | "organization_unavailable"
       | "subscription_required"
@@ -75,6 +81,10 @@ export async function acquireHostedAiCall(
         .where(eq(organization.id, orgId))
         .for("key share");
       if (!tenant) throw new AiCallAdmissionError("organization_unavailable");
+      // API actor authority is checked for every physical attempt. Background
+      // system-owned worker calls explicitly use the mode without this callback.
+      if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
+        throw new AiCallAdmissionError("authority_revoked");
       const clock = async () => {
         const [row] = await tx
           .select({ now: sql<Date>`clock_timestamp()` })
@@ -111,6 +121,9 @@ export async function acquireHostedAiCall(
       await tx.execute(
         sql`delete from ${hostedAiCallLeases} where ${hostedAiCallLeases.id} in (select id from ${hostedAiCallLeases} where org_id = ${orgId} and lease_expires_at <= ${now} order by lease_expires_at, id limit 1000)`,
       );
+      // Recheck expiry after a potentially waiting billing lock, before dispatch admission.
+      if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
+        throw new AiCallAdmissionError("authority_revoked");
       const dispatchDeadlineAt = new Date(now.getTime() + budget);
       const [inserted] = await tx
         .insert(hostedAiCallLeases)
