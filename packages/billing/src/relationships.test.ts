@@ -196,3 +196,78 @@ it("keeps customer idempotency and seeded relationship retrieval consistent in f
     status: "open",
   });
 });
+it("validates and clones fixture relationships so caller mutations cannot inject new facts", async () => {
+  const identity = {
+    provider: "fixture" as const,
+    environment: "sandbox" as const,
+    accountId: "fixture_test",
+  };
+  const checkout = {
+    identity,
+    checkoutId: "cs_seeded",
+    customerId: "cus_seeded",
+    subscriptionId: "sub_seeded",
+    status: "complete" as const,
+    paymentStatus: "paid" as const,
+  };
+  const invoice = {
+    identity,
+    invoiceId: "in_seeded",
+    customerId: "cus_seeded",
+    subscriptionId: "sub_seeded",
+    status: "paid" as const,
+  };
+  const fixture = {
+    accountId: "fixture_test",
+    origin: "http://localhost:31300",
+    checkouts: [checkout],
+    invoices: [invoice],
+  };
+  const driver = new FixtureBillingDriver(fixture);
+  checkout.customerId = "cus_injected";
+  invoice.subscriptionId = "sub_injected";
+  expect(await driver.retrieveCheckout("cs_seeded")).toMatchObject({ customerId: "cus_seeded" });
+  expect(await driver.retrieveInvoice("in_seeded")).toMatchObject({ subscriptionId: "sub_seeded" });
+  const result = await driver.retrieveCheckout("cs_seeded");
+  Object.assign(result, { customerId: "cus_mutated" });
+  expect(await driver.retrieveCheckout("cs_seeded")).toMatchObject({ customerId: "cus_seeded" });
+  expect(
+    () =>
+      new FixtureBillingDriver({
+        ...fixture,
+        checkouts: [{ ...checkout, status: "future_status" as typeof checkout.status }],
+      }),
+  ).toThrowError("configuration");
+  expect(
+    () =>
+      new FixtureBillingDriver({
+        ...fixture,
+        invoices: [{ ...invoice, subscriptionId: "cus_wrong" }],
+      }),
+  ).toThrowError("configuration");
+  expect(
+    () =>
+      new FixtureBillingDriver({
+        ...fixture,
+        invoices: [{ ...invoice, identity: { ...identity, accountId: "wrong_account" } }],
+      }),
+  ).toThrowError("configuration");
+});
+it("normalizes expanded SDK relationship objects to IDs without leaking their contents", async () => {
+  const driver = new StripeSandboxDriver({
+    ...config,
+    fetch: transport({
+      ...session,
+      customer: { id: "cus_test", email: "private@example.test" },
+      subscription: { id: "sub_test", metadata: { orgId: "wrong" } },
+    }),
+  });
+  expect(await driver.retrieveCheckout("cs_test")).toEqual({
+    identity,
+    checkoutId: "cs_test",
+    customerId: "cus_test",
+    subscriptionId: "sub_test",
+    status: "complete",
+    paymentStatus: "paid",
+  });
+});

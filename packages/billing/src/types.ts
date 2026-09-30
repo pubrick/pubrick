@@ -47,12 +47,40 @@ export type PortalRequest = Readonly<{
   idempotencyKey: string;
 }>;
 export type SessionResult = Readonly<{ id: string; url: string }>;
+export type CustomerRequest = Readonly<{
+  orgReference: string;
+  idempotencyKey: string;
+  /** Optional server-resolved contact only; never billing ownership. */
+  email?: string;
+}>;
+export type CustomerSnapshot = Readonly<{ identity: BillingIdentity; customerId: string }>;
+export const CHECKOUT_STATUSES = ["open", "complete", "expired"] as const;
+export const CHECKOUT_PAYMENT_STATUSES = ["paid", "unpaid", "no_payment_required"] as const;
+export const INVOICE_STATUSES = ["draft", "open", "paid", "uncollectible", "void"] as const;
+export type CheckoutSnapshot = Readonly<{
+  identity: BillingIdentity;
+  checkoutId: string;
+  customerId: string;
+  subscriptionId: string | null;
+  status: (typeof CHECKOUT_STATUSES)[number];
+  paymentStatus: (typeof CHECKOUT_PAYMENT_STATUSES)[number];
+}>;
+export type InvoiceSnapshot = Readonly<{
+  identity: BillingIdentity;
+  invoiceId: string;
+  customerId: string;
+  subscriptionId: string;
+  status: (typeof INVOICE_STATUSES)[number];
+}>;
 export interface BillingDriver {
   readonly identity: BillingIdentity;
+  createCustomer(input: CustomerRequest): Promise<CustomerSnapshot>;
   createCheckout(input: CheckoutRequest): Promise<SessionResult>;
   createPortal(input: PortalRequest): Promise<SessionResult>;
   verifyWebhook(rawBody: Buffer, signature: string): VerifiedEvent;
   retrieveSubscription(id: string): Promise<SubscriptionSnapshot>;
+  retrieveCheckout(id: string): Promise<CheckoutSnapshot>;
+  retrieveInvoice(id: string): Promise<InvoiceSnapshot>;
 }
 
 export type BillingErrorCode =
@@ -79,17 +107,45 @@ export class BillingError extends Error {
 }
 
 export function requireId(
-  value: string,
+  value: unknown,
   prefix: string,
   code: BillingErrorCode = "invalid_request",
 ): void {
   if (
+    typeof value !== "string" ||
     !value.startsWith(prefix) ||
     !/^[A-Za-z0-9_]+$/.test(value) ||
     value.length <= prefix.length
   ) {
     throw new BillingError(code);
   }
+}
+export function validateCustomer(input: CustomerRequest): void {
+  validateAttempt(input.idempotencyKey);
+  if (
+    typeof input.orgReference !== "string" ||
+    !/^[A-Za-z0-9_-]{1,200}$/.test(input.orgReference) ||
+    (input.email !== undefined && (!input.email.trim() || input.email.length > 512))
+  ) {
+    throw new BillingError("invalid_request");
+  }
+}
+export function validateCheckoutSnapshot(snapshot: CheckoutSnapshot, code: BillingErrorCode): void {
+  requireId(snapshot.checkoutId, "cs_", code);
+  requireId(snapshot.customerId, "cus_", code);
+  if (snapshot.subscriptionId !== null) requireId(snapshot.subscriptionId, "sub_", code);
+  if (
+    !CHECKOUT_STATUSES.includes(snapshot.status) ||
+    !CHECKOUT_PAYMENT_STATUSES.includes(snapshot.paymentStatus)
+  ) {
+    throw new BillingError(code);
+  }
+}
+export function validateInvoiceSnapshot(snapshot: InvoiceSnapshot, code: BillingErrorCode): void {
+  requireId(snapshot.invoiceId, "in_", code);
+  requireId(snapshot.customerId, "cus_", code);
+  requireId(snapshot.subscriptionId, "sub_", code);
+  if (!INVOICE_STATUSES.includes(snapshot.status)) throw new BillingError(code);
 }
 export function validateAttempt(key: string): void {
   if (!key.trim() || key.length > 255 || !/^[\x20-\x7e]+$/.test(key))

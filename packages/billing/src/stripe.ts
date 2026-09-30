@@ -3,6 +3,10 @@ import type {
   BillingDriver,
   BillingIdentity,
   CheckoutRequest,
+  CheckoutSnapshot,
+  CustomerRequest,
+  CustomerSnapshot,
+  InvoiceSnapshot,
   PortalRequest,
   SessionResult,
   SubscriptionSnapshot,
@@ -14,6 +18,9 @@ import {
   requireId,
   SUBSCRIPTION_STATUSES,
   validateCheckout,
+  validateCheckoutSnapshot,
+  validateCustomer,
+  validateInvoiceSnapshot,
   validatePortal,
 } from "./types.js";
 
@@ -74,6 +81,22 @@ export class StripeSandboxDriver implements BillingDriver {
     });
   }
 
+  async createCustomer(input: CustomerRequest): Promise<CustomerSnapshot> {
+    validateCustomer(input);
+    return this.call(async () => {
+      const customer = await this.stripe.customers.create(
+        {
+          ...(input.email === undefined ? {} : { email: input.email }),
+          metadata: { pubrick_org_reference: input.orgReference },
+        },
+        { idempotencyKey: input.idempotencyKey },
+      );
+      if (customer.livemode !== false) throw new BillingError("environment_mismatch");
+      if (customer.object !== "customer") throw new BillingError("invalid_response");
+      requireId(customer.id, "cus_", "invalid_response");
+      return { identity: this.identity, customerId: customer.id };
+    });
+  }
   async createCheckout(input: CheckoutRequest): Promise<SessionResult> {
     validateCheckout(input);
     return this.call(async () => {
@@ -88,6 +111,54 @@ export class StripeSandboxDriver implements BillingDriver {
         { idempotencyKey: input.idempotencyKey },
       );
       return sessionResult(session, "cs_", "checkout.stripe.com");
+    });
+  }
+  async retrieveCheckout(id: string): Promise<CheckoutSnapshot> {
+    requireId(id, "cs_");
+    return this.call(async () => {
+      const session = await this.stripe.checkout.sessions.retrieve(id);
+      if (session.livemode !== false) throw new BillingError("environment_mismatch");
+      if (
+        session.id !== id ||
+        session.object !== "checkout.session" ||
+        session.mode !== "subscription"
+      ) {
+        throw new BillingError("invalid_response");
+      }
+      const snapshot: CheckoutSnapshot = {
+        identity: this.identity,
+        checkoutId: id,
+        customerId: relationshipId(session.customer, "cus_"),
+        subscriptionId:
+          session.subscription === null ? null : relationshipId(session.subscription, "sub_"),
+        status: session.status as CheckoutSnapshot["status"],
+        paymentStatus: session.payment_status as CheckoutSnapshot["paymentStatus"],
+      };
+      validateCheckoutSnapshot(snapshot, "invalid_response");
+      return snapshot;
+    });
+  }
+  async retrieveInvoice(id: string): Promise<InvoiceSnapshot> {
+    requireId(id, "in_");
+    return this.call(async () => {
+      const invoice = await this.stripe.invoices.retrieve(id);
+      if (invoice.livemode !== false) throw new BillingError("environment_mismatch");
+      if (
+        invoice.id !== id ||
+        invoice.object !== "invoice" ||
+        invoice.parent?.type !== "subscription_details"
+      ) {
+        throw new BillingError("invalid_response");
+      }
+      const snapshot: InvoiceSnapshot = {
+        identity: this.identity,
+        invoiceId: id,
+        customerId: relationshipId(invoice.customer, "cus_"),
+        subscriptionId: relationshipId(invoice.parent.subscription_details?.subscription, "sub_"),
+        status: invoice.status as InvoiceSnapshot["status"],
+      };
+      validateInvoiceSnapshot(snapshot, "invalid_response");
+      return snapshot;
     });
   }
   async createPortal(input: PortalRequest): Promise<SessionResult> {
@@ -205,6 +276,17 @@ export class StripeSandboxDriver implements BillingDriver {
       throw new BillingError("unavailable");
     }
   }
+}
+
+function relationshipId(value: unknown, prefix: string): string {
+  const id =
+    typeof value === "string"
+      ? value
+      : value && typeof value === "object" && "id" in value
+        ? value.id
+        : undefined;
+  requireId(id, prefix, "invalid_response");
+  return id as string;
 }
 
 function sessionResult(

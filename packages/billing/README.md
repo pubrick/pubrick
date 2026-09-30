@@ -38,6 +38,14 @@ operators must verify it matches the sandbox API key and webhook endpoint; an
 ordinary direct-account webhook does not contain evidence of that account ID.
 Fixture facts must match the configured fixture identity.
 
+`createCustomer({ orgReference, idempotencyKey, email? })` enables the first
+subscription without requiring an existing vendor customer ID. The organization
+reference and optional contact email must come from the server. The reference is
+sent as diagnostic metadata, never returned as authorization evidence. Persist
+the returned `{ identity, customerId }` in Pubrick's organization mapping before
+checkout; repeat ambiguous attempts with the same persisted key. Email does not
+establish ownership, and returned customer metadata/email is omitted.
+
 `createCheckout` accepts server-resolved customer/price IDs, success/cancel URLs
 and a **stable persisted attempt key**. It forwards that key to the SDK. Calling
 applications must authorize the organization and resolve these values from their
@@ -70,6 +78,29 @@ ambiguous outcomes: an external operation may already have succeeded. Retry
 using the same durable attempt key and reconcile, rather than creating a new
 checkout. SDK network retries are disabled for predictable admission, but the
 SDK can still retry a closed connection once with the same idempotency key.
+
+`retrieveCheckout(csId)` retrieves current subscription-checkout relationships:
+`{ identity, checkoutId, customerId, subscriptionId, status, paymentStatus }`.
+`subscriptionId` is explicitly `null` while a pending checkout has no subscription.
+Statuses are `open | complete | expired`; payment statuses are
+`paid | unpaid | no_payment_required`. These are facts, not subscription access.
+
+`retrieveInvoice(inId)` retrieves current recurring-invoice relationships:
+`{ identity, invoiceId, customerId, subscriptionId, status }`. Status is
+`draft | open | paid | uncollectible | void`. The SDK's current
+`parent.subscription_details.subscription` supplies the subscription relationship;
+standalone invoices are refused. Both retrieval methods check sandbox mode, IDs
+and closed statuses, strip metadata/email, and normalize expanded relationships
+to IDs. After checkout/invoice webhook hints, resolve these current facts and
+then separately call `retrieveSubscription` for authoritative subscription status.
+Every relationship still requires authorization through Pubrick's persisted
+organization/customer/subscription mapping. Never grant access directly from a
+webhook snapshot or checkout/invoice payment status.
+
+Fixtures accept cloned, validated `checkouts` and `invoices` seeds. Fresh fixture
+checkouts are retrievable as `open`, `unpaid`, with a null subscription; configured
+seeds model completed scenarios. A fixture customer attempt returns the same
+deterministic ID on repetition and refuses changed server facts under that key.
 
 ## Responsibilities outside the driver
 

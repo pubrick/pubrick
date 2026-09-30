@@ -2,6 +2,10 @@ import type {
   BillingDriver,
   BillingIdentity,
   CheckoutRequest,
+  CheckoutSnapshot,
+  CustomerRequest,
+  CustomerSnapshot,
+  InvoiceSnapshot,
   PortalRequest,
   SessionResult,
   SubscriptionSnapshot,
@@ -12,6 +16,9 @@ import {
   requireId,
   SUBSCRIPTION_STATUSES,
   validateCheckout,
+  validateCheckoutSnapshot,
+  validateCustomer,
+  validateInvoiceSnapshot,
   validatePortal,
 } from "./types.js";
 
@@ -19,6 +26,8 @@ export type FixtureBillingConfig = {
   accountId: string;
   origin: string;
   subscriptions?: readonly SubscriptionSnapshot[];
+  checkouts?: readonly CheckoutSnapshot[];
+  invoices?: readonly InvoiceSnapshot[];
   webhooks?: readonly { rawBody: string; signature: string; event: VerifiedEvent }[];
 };
 
@@ -27,6 +36,12 @@ export class FixtureBillingDriver implements BillingDriver {
   readonly identity: BillingIdentity;
   private readonly origin: string;
   private readonly subscriptions: readonly SubscriptionSnapshot[];
+  private readonly checkouts: CheckoutSnapshot[];
+  private readonly invoices: readonly InvoiceSnapshot[];
+  private readonly customerAttempts = new Map<
+    string,
+    { request: string; result: CustomerSnapshot }
+  >();
   private readonly webhooks: NonNullable<FixtureBillingConfig["webhooks"]>;
   private readonly attempts = new Map<string, { request: string; result: SessionResult }>();
   constructor(config: FixtureBillingConfig) {
@@ -54,8 +69,15 @@ export class FixtureBillingDriver implements BillingDriver {
       accountId: config.accountId,
     });
     this.subscriptions = structuredClone(config.subscriptions ?? []);
+    this.checkouts = [...structuredClone(config.checkouts ?? [])];
+    this.invoices = structuredClone(config.invoices ?? []);
     this.webhooks = structuredClone(config.webhooks ?? []);
-    for (const fact of [...this.subscriptions, ...this.webhooks.map((webhook) => webhook.event)]) {
+    for (const fact of [
+      ...this.subscriptions,
+      ...this.checkouts,
+      ...this.invoices,
+      ...this.webhooks.map((webhook) => webhook.event),
+    ]) {
       if (
         fact.identity.provider !== "fixture" ||
         fact.identity.environment !== "sandbox" ||
@@ -63,6 +85,8 @@ export class FixtureBillingDriver implements BillingDriver {
       )
         throw new BillingError("configuration");
     }
+    for (const fact of this.checkouts) validateCheckoutSnapshot(fact, "configuration");
+    for (const fact of this.invoices) validateInvoiceSnapshot(fact, "configuration");
     for (const fact of this.subscriptions) {
       requireId(fact.subscriptionId, "sub_", "configuration");
       requireId(fact.customerId, "cus_", "configuration");
@@ -78,9 +102,35 @@ export class FixtureBillingDriver implements BillingDriver {
         throw new BillingError("configuration");
     }
   }
+  async createCustomer(input: CustomerRequest): Promise<CustomerSnapshot> {
+    validateCustomer(input);
+    const request = JSON.stringify([input.orgReference, input.email ?? null]);
+    const prior = this.customerAttempts.get(input.idempotencyKey);
+    if (prior) {
+      if (prior.request !== request) throw new BillingError("idempotency_conflict");
+      return { ...prior.result };
+    }
+    const result = {
+      identity: this.identity,
+      customerId: `cus_fixture_${this.customerAttempts.size + 1}`,
+    };
+    this.customerAttempts.set(input.idempotencyKey, { request, result });
+    return { ...result };
+  }
   async createCheckout(input: CheckoutRequest): Promise<SessionResult> {
     validateCheckout(input);
-    return this.session("checkout", input);
+    const result = this.session("checkout", input);
+    if (!this.checkouts.some((checkout) => checkout.checkoutId === result.id)) {
+      this.checkouts.push({
+        identity: this.identity,
+        checkoutId: result.id,
+        customerId: input.customerId,
+        subscriptionId: null,
+        status: "open",
+        paymentStatus: "unpaid",
+      });
+    }
+    return result;
   }
   async createPortal(input: PortalRequest): Promise<SessionResult> {
     validatePortal(input);
@@ -98,6 +148,18 @@ export class FixtureBillingDriver implements BillingDriver {
     if (!subscription) throw new BillingError("not_found");
     return structuredClone(subscription);
   }
+  async retrieveCheckout(id: string): Promise<CheckoutSnapshot> {
+    requireId(id, "cs_");
+    const checkout = this.checkouts.find((entry) => entry.checkoutId === id);
+    if (!checkout) throw new BillingError("not_found");
+    return structuredClone(checkout);
+  }
+  async retrieveInvoice(id: string): Promise<InvoiceSnapshot> {
+    requireId(id, "in_");
+    const invoice = this.invoices.find((entry) => entry.invoiceId === id);
+    if (!invoice) throw new BillingError("not_found");
+    return structuredClone(invoice);
+  }
   private session(
     kind: "checkout" | "portal",
     input: CheckoutRequest | PortalRequest,
@@ -112,7 +174,7 @@ export class FixtureBillingDriver implements BillingDriver {
       if (prior.request !== request) throw new BillingError("idempotency_conflict");
       return { ...prior.result };
     }
-    const id = `fixture_${kind}_${this.attempts.size + 1}`;
+    const id = `${kind === "checkout" ? "cs" : "bps"}_fixture_${this.attempts.size + 1}`;
     const result = { id, url: `${this.origin}/__billing-fixture/${kind}/${id}` };
     this.attempts.set(input.idempotencyKey, { request, result });
     return { ...result };
