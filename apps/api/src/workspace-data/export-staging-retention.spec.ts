@@ -42,9 +42,17 @@ it("does not purge stages owned by another effective user", async () => {
   expect(await readdir(root)).toEqual([name]);
 });
 
-it("does not start a janitor timer after shutdown interrupts the initial sweep",async()=>{
-  const root=await mkdtemp(join(tmpdir(),"pubrick-retention-test-"));directories.push(root);
+it("does not start a janitor timer after shutdown interrupts the initial sweep", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pubrick-retention-test-"));
+  directories.push(root);
   vi.useFakeTimers();
-  try {const janitor=createExportStageJanitor({root});const starting=janitor.start();janitor.stop();await starting;expect(vi.getTimerCount()).toBe(0);}
-  finally {vi.useRealTimers();}
+  try {
+    const janitor = createExportStageJanitor({ root });
+    const starting = janitor.start();
+    janitor.stop();
+    await starting;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
