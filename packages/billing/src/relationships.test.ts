@@ -1,6 +1,60 @@
 import { expect, it, vi } from "vitest";
 import { FixtureBillingDriver, StripeSandboxDriver } from "./index.js";
 
+it("never allocates a fixture customer ID already owned by seeded relationships", async () => {
+  const identity = {
+    provider: "fixture" as const,
+    environment: "sandbox" as const,
+    accountId: "fixture_test",
+  };
+  const driver = new FixtureBillingDriver({
+    accountId: identity.accountId,
+    origin: "http://localhost:31300",
+    subscriptions: [
+      {
+        identity,
+        subscriptionId: "sub_customerA",
+        customerId: "cus_fixture_1",
+        priceId: "price_test",
+        status: "active",
+        cancelAtPeriodEnd: false,
+        periodStart: 100,
+        periodEnd: 200,
+      },
+    ],
+    checkouts: [
+      {
+        identity,
+        checkoutId: "cs_customerA",
+        customerId: "cus_fixture_2",
+        subscriptionId: "sub_customerA",
+        status: "complete",
+        paymentStatus: "paid",
+      },
+    ],
+    invoices: [
+      {
+        identity,
+        invoiceId: "in_customerA",
+        customerId: "cus_fixture_3",
+        subscriptionId: "sub_customerA",
+        status: "paid",
+      },
+    ],
+  });
+  const request = { orgReference: "org_customerB", idempotencyKey: "customer:B" };
+  const created = await driver.createCustomer(request);
+  expect(created.customerId).toBe("cus_fixture_4");
+  expect(await driver.createCustomer(request)).toEqual(created);
+  expect(
+    (await driver.createCustomer({ orgReference: "org_customerC", idempotencyKey: "customer:C" }))
+      .customerId,
+  ).toBe("cus_fixture_5");
+  expect(await driver.retrieveSubscription("sub_customerA")).toMatchObject({
+    customerId: "cus_fixture_1",
+  });
+});
+
 it("allocates fixture checkout IDs without reusing another customer's seeded checkout", async () => {
   const identity = {
     provider: "fixture" as const,
