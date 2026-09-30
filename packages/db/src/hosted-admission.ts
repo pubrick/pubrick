@@ -77,6 +77,24 @@ export class HostedAdmissionRepository {
       .for("update");
     if (!found) throw new HostedAdmissionError("not_found");
   }
+  private async preflightActor(
+    tx: HostedAdmissionTransaction,
+    actor: HostedAdmissionActor,
+  ): Promise<void> {
+    const [found] = await tx
+      .select({ id: session.id })
+      .from(session)
+      .innerJoin(user, eq(user.id, session.userId))
+      .where(
+        and(
+          eq(session.id, actor.sessionId),
+          eq(session.userId, actor.userId),
+          eq(user.emailVerified, true),
+          gt(session.expiresAt, new Date()),
+        ),
+      );
+    if (!found) throw new HostedAdmissionError("unauthenticated");
+  }
   private async actor(tx: HostedAdmissionTransaction, actor: HostedAdmissionActor, now: Date) {
     // Update-lock avoids shared-to-exclusive session upgrades when activating an organization.
     const [s] = await tx
@@ -241,6 +259,9 @@ export class HostedAdmissionRepository {
       throw new HostedAdmissionError("invalid_input");
     return this.db.transaction(async (tx) => {
       await this.lockOrganization(tx, orgId);
+      await this.preflightActor(tx, actor);
+      const initialMembership = await this.membership(tx, orgId, actor.userId);
+      assertInvitationRole(initialMembership.role, invitedRole, !!input.resendId);
       if (hasRole(invitedRole, "owner")) {
         const [recipient] = await tx
           .select({ id: user.id })
@@ -364,7 +385,8 @@ export class HostedAdmissionRepository {
       )
         throw new HostedAdmissionError("invitation_unavailable");
       const acceptedRole = normalizeHostedRoles(inv.role);
-      if (hasRole(acceptedRole, "owner")) await this.assertOwnerCapacity(tx, actor.userId, orgId);
+      if (!existing.length && hasRole(acceptedRole, "owner"))
+        await this.assertOwnerCapacity(tx, actor.userId, orgId);
       const seats = await this.seats(tx, orgId, now);
       // Pending email is already reserved. Accept converts it, never adds a second seat.
       await this.ports.authorizeGrowth(tx, {
