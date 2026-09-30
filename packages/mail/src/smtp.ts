@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { z } from "zod";
 import {
   AuthMailError,
@@ -90,7 +91,7 @@ export function createSmtpMailTransport(
     throw new AuthMailError("configuration");
   }
   const { from, ...connection } = config;
-  const client = nodemailer.createTransport({
+  const connectionOptions: SMTPTransport.Options = {
     ...connection,
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
@@ -99,7 +100,8 @@ export function createSmtpMailTransport(
     disableUrlAccess: true,
     logger: false,
     debug: false,
-  });
+  };
+  const client = nodemailer.createTransport(connectionOptions);
   const now = options.now ?? Date.now;
   let closed = false;
   return {
@@ -141,9 +143,7 @@ export function createSmtpMailTransport(
           disableUrlAccess: true,
         });
         const accepted = result.accepted.some(
-          (address) =>
-            (typeof address === "string" ? address : address.address)?.toLowerCase() ===
-            payload.recipient.toLowerCase(),
+          (address) => address.toLowerCase() === payload.recipient.toLowerCase(),
         );
         if (!accepted) throw new AuthMailError("rejected");
         return { status: "sent" };
