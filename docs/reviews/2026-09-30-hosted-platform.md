@@ -51,11 +51,36 @@ passed nine native DB regressions, and its runtime passed 41 focused checks plus
 an inventory startup regression. No live emails, publications, payments or paid
 model calls were performed.
 
+## Final milestone gate
+
+The integrated workspace build and typecheck passed **24/24 tasks**. After the
+last controller and membership fixes, API/web types passed **9/9 dependency
+tasks**, and full Biome passed **933 files** without changes.
+
+Focused follow-up passed **101 API tests in 15 files**, including native atomic
+mail and the previously failing generation admission fixtures; **five worker
+checkpoint regressions**; and **eight DB policy/historical timestamp checks**.
+The native HTTP contracts passed **16 tests**, covering the billing status route,
+trusted-origin JSON writes, unchanged anonymous signed webhooks, server-derived
+actors and persisted invitation response fields. Web transport passed **34 tests**.
+Separately, the hosted UI slice passed **154 tests**, with two further affected
+confirmation/recovery cases; admission passed **20 native/pure cases** and three
+final migration/response checks. A nondeterministic legacy duplicate-member
+selection was fixed by checking every locked membership for actual manager rights;
+no historical memberships were deleted.
+
+The compiled API and production Next browser journey passed in **10.3 seconds**:
+account creation, workspace/brand/manual draft, persisted editing, locale and
+workspace switching, and downloading a real workspace archive containing the
+edited draft and complete manifest. The runner removed its isolated servers,
+media directory and disposable database. No GitHub Actions workflow was dispatched.
+
 ## Remaining acceptance
 
-Hosted API composition, resource/concurrency admission across every writer and
-physical model call, deletion cleanup bindings and the hosted user journey remain
-integration work. Initial trials are disabled. Seller details, domain, plans,
+Hosted controller/module composition now binds seat checks, durable invitation
+mail and deletion tombstones. It remains unregistered until resource/concurrency
+admission covers every writer and physical model call. The hosted user journey
+and full deletion cleanup acceptance remain integration work. Initial trials are disabled. Seller details, domain, plans,
 prices and a real payment sandbox account are operator inputs, not inferred
 product values. No live paid checkout is advertised by the fixture adapter.
 A real versioned release artifact and live commercial launch remain separate
