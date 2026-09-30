@@ -32,13 +32,23 @@ async function requireFreePort(value) {
   await new Promise((resolve) => server.close(resolve));
 }
 async function ready(url, child) {
-  for (let i = 0; i < 120; i++) {
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
     if (child?.exitCode !== null && child?.exitCode !== undefined)
       throw new Error(`Server exited: ${url}`);
     try {
-      if ((await fetch(url, { signal: AbortSignal.timeout(2_000) })).ok) return;
+      if (
+        (
+          await fetch(url, {
+            signal: AbortSignal.timeout(Math.max(1, Math.min(2_000, deadline - Date.now()))),
+          })
+        ).ok
+      )
+        return;
     } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(0, Math.min(500, deadline - Date.now()))),
+    );
   }
   throw new Error(`Server not ready: ${url}`);
 }
@@ -71,6 +81,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 try {
+  command("pnpm", ["exec", "tsc", "--noEmit", "-p", "scripts/e2e"]);
   const webPort = 31300;
   const apiPort = 31301;
   await requireFreePort(webPort);
@@ -84,6 +95,9 @@ try {
     PUBRICK_E2E_ORIGIN: origin,
     PUBRICK_E2E_DISPOSABLE: container,
   });
+  console.info(
+    `Disposable browser stack: ${container}; web ${origin}; API ${env.API_INTERNAL_URL}`,
+  );
   command("docker", [
     "run",
     "-d",

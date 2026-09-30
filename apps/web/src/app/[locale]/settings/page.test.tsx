@@ -20,7 +20,13 @@ vi.mock("@/lib/auth-client", () => ({
     useSession: vi.fn(),
     useActiveOrganization: vi.fn(),
     signOut: vi.fn(),
-    organization: { inviteMember: vi.fn(), cancelInvitation: vi.fn(), updateMemberRole: vi.fn() },
+    organization: {
+      list: vi.fn(),
+      setActive: vi.fn(),
+      inviteMember: vi.fn(),
+      cancelInvitation: vi.fn(),
+      updateMemberRole: vi.fn(),
+    },
   },
 }));
 
@@ -39,6 +45,8 @@ type MockAuthClient = {
   useActiveOrganization: ReturnType<typeof vi.fn>;
   signOut: ReturnType<typeof vi.fn>;
   organization: {
+    list: ReturnType<typeof vi.fn>;
+    setActive: ReturnType<typeof vi.fn>;
     inviteMember: ReturnType<typeof vi.fn>;
     cancelInvitation: ReturnType<typeof vi.fn>;
     updateMemberRole: ReturnType<typeof vi.fn>;
@@ -151,6 +159,7 @@ async function renderSettings(): Promise<void> {
 }
 
 beforeEach(() => {
+  mockAuthClient.organization.list.mockResolvedValue({ data: [], error: null });
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
   mockApi.mockReset();

@@ -27,6 +27,7 @@ import { Modal } from "@/components/ui/modal";
 import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { useSignOut } from "@/hooks/use-sign-out";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
@@ -986,6 +987,8 @@ export default function SettingsPage() {
           ) : (
             <p className="text-sm text-fg-secondary">{organization?.name ?? t("workspaceNoOrg")}</p>
           )}
+
+          <WorkspaceSwitcher activeId={organization?.id ?? null} />
 
           {organization && (
             <>

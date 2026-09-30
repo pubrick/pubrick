@@ -13,6 +13,7 @@ free disk space for the Chromium download and a workspace production build.
 ```sh
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
+pnpm exec tsc --noEmit -p scripts/e2e
 node scripts/e2e/run.mjs
 ```
 
@@ -37,16 +38,21 @@ runner in the foreground until cleanup completes. If the OS kills it forcibly,
 remove only the exact `pubrick-browser-*` container printed by that run, never
 prune unrelated containers or volumes.
 
+Check the browser TypeScript fixtures before rebuilding the stack. Their separate
+configuration covers files outside the normal application typecheck. The manual
+channel fixture is typed against the shared `ManualPlatformId` contract.
+
 ## Coverage
 
 The journey creates an account and workspace through the browser, creates a
 brand and manual channel, writes and saves a draft, reloads it and checks the
 review action without approving or publishing. It checks the HttpOnly session
 cookie, creates a second workspace through the actual first-party auth endpoint,
-switches the session's active workspace, verifies brand isolation on the Russian
-route, and switches back to verify the saved draft. Requests are not intercepted
-or mocked. The second-workspace fixture exercises the same-origin auth rewrite
-and cookie update; it does not claim there is a workspace picker in the UI.
+switches through the Settings workspace selector, verifies brand isolation on
+the Russian route, and switches back through the Russian Settings selector to
+verify the saved draft. Requests are not intercepted or mocked. The second-
+workspace fixture and UI switches exercise the same-origin auth rewrite and
+cookie updates.
 
 Failure screenshots and traces live under `.data/browser-tests` (gitignored).
 Open a trace using `pnpm exec playwright show-trace <trace.zip>`. These artifacts

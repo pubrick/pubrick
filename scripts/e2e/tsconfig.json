@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["*.ts"]
+}

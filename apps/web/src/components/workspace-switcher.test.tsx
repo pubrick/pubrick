@@ -24,7 +24,7 @@ it("changes workspace only after explicit confirmation and performs a full navig
   render(<WorkspaceSwitcher activeId="first" />);
   await user.selectOptions(await screen.findByLabelText("Workspace"), "second");
   expect(mocks.setActive).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("button", { name: "Switch", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Switch" }));
   await waitFor(() => expect(mocks.setActive).toHaveBeenCalledWith({ organizationId: "second" }));
   expect(mocks.navigate).toHaveBeenCalledWith("en");
 });
@@ -33,7 +33,7 @@ it("keeps the current workspace on refused switching and shows a local error", a
   const user = userEvent.setup();
   render(<WorkspaceSwitcher activeId="first" />);
   await user.selectOptions(await screen.findByLabelText("Workspace"), "second");
-  await user.click(screen.getByRole("button", { name: "Switch", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Switch" }));
   await expect(screen.findByRole("alert")).resolves.toHaveTextContent(
     "Could not switch workspaces. Your current workspace is unchanged.",
   );
