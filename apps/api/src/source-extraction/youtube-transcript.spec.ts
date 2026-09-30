@@ -56,6 +56,47 @@ describe("YouTube transcript import", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("preserves streamed caption bytes from a shared backing buffer", async () => {
+    const bytes = new TextEncoder().encode("<text>Shared caption ✓</text>");
+    const shared = new Uint8Array(new SharedArrayBuffer(bytes.length + 4));
+    shared.set(bytes, 2);
+    const chunk = shared.subarray(2, bytes.length + 2);
+    // BlobPart excludes SharedArrayBuffer-backed views. Guard the constructor
+    // rather than allowing native Node Blob to abort on this invalid input.
+    const NativeBlob = Blob;
+    vi.stubGlobal(
+      "Blob",
+      class extends NativeBlob {
+        constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+          if (
+            parts.some(
+              (part) => ArrayBuffer.isView(part) && part.buffer instanceof SharedArrayBuffer,
+            )
+          )
+            throw new TypeError("Shared buffers are not BlobPart values");
+          super(parts, options);
+        }
+      },
+    );
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+      { status: 206, headers: { "content-type": "text/xml" } },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+    const bounded = await youtubeFetch("https://www.youtube.com/api/timedtext");
+    expect(bounded.status).toBe(206);
+    expect(bounded.headers.get("content-type")).toBe("text/xml");
+    expect(await bounded.text()).toBe(new TextDecoder().decode(bytes));
+  });
+
   it("bounds each YouTube response before the transcript library parses it", async () => {
     vi.stubGlobal(
       "fetch",
