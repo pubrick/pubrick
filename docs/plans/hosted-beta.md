@@ -36,12 +36,21 @@ selling entity or publish a fictional live purchase flow.
   ID, or subscription status. Provider metadata alone never authorizes access.
 - Checkout success redirects show pending confirmation until the backend has
   verified authoritative state. A returned URL is not proof of payment.
+- Concurrent checkout attempts share a durable organization-level pending
+  attempt and a stable provider idempotency key. Two browser tabs must not
+  create independent subscriptions.
 - Persist processed vendor event IDs with a unique constraint. Resolve the
   current authoritative subscription state rather than trusting delivery order.
   Serialize updates per organization, recheck ownership/mapping, and commit
   state and event receipt atomically. Failed processing remains retryable.
 - Reconciliation repairs dropped webhooks. Network calls use timeouts and happen
   outside row-lock transactions. Recheck the reconciled revision on commit.
+- Keep exact webhook bytes before JSON parsing. Provider account and sandbox/live
+  identity belong in both mappings and receipts; reject events for another
+  environment. Restoring a snapshot must not silently enable live processing.
+- Organization deletion schedules retryable external cancellation and retains
+  a minimal billing tombstone until reconciliation completes. Late events must
+  not recreate a deleted workspace or grant access.
 - Document active/trial/past-due/cancelled behavior, grace periods and period-end
   cancellation. Export and deletion remain available after subscription expiry;
   an expired account must not lose the ability to retrieve its own data.
@@ -104,6 +113,17 @@ webhook verification; duplicate/out-of-order/dropped event cases; tenant access
 and owner/admin/member cases; concurrent quota admission; cancellation and
 plan-change journeys; billing-disabled self-hosted regression coverage; export
 and account deletion; disposable backup/restore including billing receipts.
+
+The initial local driver slice uses the maintained official Stripe SDK behind
+the replaceable boundary, plus a deterministic fixture driver. This is a sandbox
+implementation choice, not a decision that Stripe is available to the eventual
+selling entity. Pubrick owns subscription state and quota admission; the Better
+Auth billing plugin would introduce a second subscription authority here.
+
+Implementation references: [Stripe SDK](https://github.com/stripe/stripe-node),
+[webhook ordering and retries](https://docs.stripe.com/webhooks),
+[billing test clocks](https://docs.stripe.com/billing/testing), and
+[supported seller regions](https://stripe.com/global).
 
 Live launch additionally needs an operating entity, payment account, public
 origin/domain, deployment region, configured prices/limits, retention and support
