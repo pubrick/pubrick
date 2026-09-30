@@ -35,8 +35,12 @@ is still authoritative if an upstream guard or active organization changes.
 - Only an owner can delete a workspace. Expired entitlement cannot prevent
   cancel, removal, deletion, export or billing access.
 
-Existing organization writes first acquire `FOR UPDATE` on the organization,
-then the acting session, verified account and domain rows. Creation instead
+Existing organization writes first acquire the shared
+`RUN_ADMISSION_LOCK_NAMESPACE` / `hashtext(orgId)` transaction advisory, then
+`FOR UPDATE` on the organization, recipient quota locks when granting ownership,
+and acting session, verified account and domain rows. Billing, AI selection and
+generation use this same advisory before tenant rows; reentering it inside the
+billing port is safe. Never take an organization row before that advisory. Creation instead
 acquires the account advisory lock (hash seed `39427`), acting session/account,
 then creates a new organization that is private to its transaction. Existing
 organization mutations that grant ownership acquire sorted recipient account quota

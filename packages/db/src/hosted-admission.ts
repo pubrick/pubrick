@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, eq, gt, lt, sql } from "drizzle-orm";
 import type { createDb } from "./client.js";
 import {
@@ -61,7 +62,7 @@ export interface HostedAdmissionPorts {
   ): Promise<void>;
 }
 
-/** All existing-org writes serialize on the strongest organization lock first. */
+/** Shared tenant advisory -> strongest organization lock -> quota/session/domain rows. */
 export class HostedAdmissionRepository {
   constructor(
     private readonly db: Database,
@@ -70,6 +71,9 @@ export class HostedAdmissionRepository {
   ) {}
 
   private async lockOrganization(tx: HostedAdmissionTransaction, orgId: string): Promise<void> {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+    );
     const [found] = await tx
       .select({ id: organization.id })
       .from(organization)

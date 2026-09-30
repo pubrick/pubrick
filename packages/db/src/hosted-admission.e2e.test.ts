@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb } from "./client.js";
@@ -27,7 +28,10 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
         .where(eq(schema.invitation.id, input.invitationId));
       expect(row?.id).toBe(input.invitationId);
     },
-    stageDeletion: async () => {
+    stageDeletion: async (tx, input) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${input.orgId}))`,
+      );
       if (refuseDeletion) throw new Error("tombstone_unavailable");
     },
   };
@@ -304,5 +308,69 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
         { email: recipient.email, role: "owner", locale: "en" },
       ),
     ).rejects.toThrow("unauthenticated");
+  });
+  it("interleaves shared-advisory writers with deletion and invitation without lock inversion", async () => {
+    limit = 10;
+    for (const operation of ["delete", "invite"] as const) {
+      const owner = await account();
+      const orgId = await workspace(owner);
+      let announce!: () => void;
+      let advance!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        announce = resolve;
+      });
+      const proceed = new Promise<void>((resolve) => {
+        advance = resolve;
+      });
+      const writer = connection.db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${orgId}))`,
+        );
+        announce();
+        await proceed;
+        await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .for("update");
+      });
+      const writerOutcome = writer.then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, error }),
+      );
+      await ready;
+      const mutation =
+        operation === "delete"
+          ? repository().delete(orgId, owner)
+          : repository().invite(orgId, owner, {
+              email: "interleave@example.test",
+              role: "member",
+              locale: "en",
+            });
+      const mutationOutcome = mutation.then(
+        () => ({ ok: true }),
+        (error) => ({ ok: false, error }),
+      );
+      // Avoid a time-based scheduling guess: observe the blocked native advisory.
+      const waiting = async () => {
+        const deadline = Date.now() + 2000;
+        while (Date.now() < deadline) {
+          const result = await connection.pool.query(
+            "select count(*)::int as n from pg_locks where locktype='advisory' and classid=$1 and not granted",
+            [RUN_ADMISSION_LOCK_NAMESPACE],
+          );
+          if (result.rows[0].n > 0) return;
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        throw new Error("Mutation did not reach shared advisory barrier");
+      };
+      try {
+        await waiting();
+      } finally {
+        advance();
+      }
+      expect(await writerOutcome).toEqual({ ok: true });
+      expect(await mutationOutcome).toEqual({ ok: true });
+    }
   });
 });
