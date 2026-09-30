@@ -5184,10 +5184,10 @@ it("retains later rich edits after a deferred save and uses the returned revisio
   await user.click(save);
   const submitted = calls.filter((call) => call.method === "PATCH");
   expect(submitted).toHaveLength(2);
-  expect(JSON.parse(submitted[1].body ?? "{}")).toMatchObject({
+  expect(JSON.parse(submitted[1]?.body ?? "{}")).toMatchObject({
     body: expectedBody,
     expectedBody: firstPayload.body,
     expectedBodyRevision: 1,
   });
-  expect(JSON.parse(submitted[1].body ?? "{}").richBody).not.toEqual(firstPayload.richBody);
+  expect(JSON.parse(submitted[1]?.body ?? "{}").richBody).not.toEqual(firstPayload.richBody);
 });
