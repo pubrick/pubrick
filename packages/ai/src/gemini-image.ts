@@ -45,6 +45,7 @@ export class GeminiImageCaller {
     prompt: string,
     source?: Buffer,
     proxyUrl?: string,
+    abortSignal?: AbortSignal,
   ): Promise<ImageCall> {
     const started = Date.now();
     try {
@@ -61,7 +62,9 @@ export class GeminiImageCaller {
             contents: [{ role: "user", parts }],
             generationConfig: { responseModalities: ["IMAGE"], imageConfig: { imageSize: "1K" } },
           }),
-          signal: AbortSignal.timeout(120_000),
+          signal: abortSignal
+            ? AbortSignal.any([abortSignal, AbortSignal.timeout(120_000)])
+            : AbortSignal.timeout(120_000),
         },
         proxyUrl,
       );

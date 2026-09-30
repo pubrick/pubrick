@@ -13,7 +13,12 @@ function validVector(value: number[] | undefined): value is number[] {
 }
 
 /** Google can handle 100 texts per request; callers cap batches at ten. */
-export async function embedKnowledgeBatch(apiKey: string, texts: string[], proxyUrl?: string) {
+export async function embedKnowledgeBatch(
+  apiKey: string,
+  texts: string[],
+  proxyUrl?: string,
+  abortSignal?: AbortSignal,
+) {
   if (texts.length < 1 || texts.length > 10)
     throw new Error("Knowledge batch must contain 1–10 texts");
   const result = await embedMany({
@@ -24,7 +29,9 @@ export async function embedKnowledgeBatch(apiKey: string, texts: string[], proxy
     values: texts,
     maxRetries: 0,
     maxParallelCalls: 1,
-    abortSignal: AbortSignal.timeout(30_000),
+    abortSignal: abortSignal
+      ? AbortSignal.any([abortSignal, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000),
     providerOptions: {
       google: {
         outputDimensionality: KNOWLEDGE_EMBEDDING_DIMENSIONS,
@@ -47,6 +54,7 @@ export async function embedKnowledgeText(
   text: string,
   taskType: KnowledgeEmbeddingTask,
   proxyUrl?: string,
+  abortSignal?: AbortSignal,
 ) {
   const result = await embed({
     model: createGoogleGenerativeAI({
@@ -55,7 +63,9 @@ export async function embedKnowledgeText(
     }).embeddingModel(KNOWLEDGE_EMBEDDING_MODEL),
     value: text,
     maxRetries: 0,
-    abortSignal: AbortSignal.timeout(30_000),
+    abortSignal: abortSignal
+      ? AbortSignal.any([abortSignal, AbortSignal.timeout(30_000)])
+      : AbortSignal.timeout(30_000),
     providerOptions: { google: { outputDimensionality: KNOWLEDGE_EMBEDDING_DIMENSIONS, taskType } },
   });
   if (!validVector(result.embedding)) {

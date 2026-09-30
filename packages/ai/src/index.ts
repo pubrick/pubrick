@@ -51,6 +51,7 @@ export {
 export { estimateCostUsd, type ModelRate, priceFor } from "./pricing.js";
 export {
   AI_PROVIDERS,
+  type AiCallScope,
   type AiCredential,
   type AiProvider,
   credentialFromStored,

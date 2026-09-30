@@ -36,6 +36,12 @@ import { vertexModel } from "./vertex.js";
 export { AI_PROVIDERS } from "@pubrick/shared";
 export type AiProvider = AiProviderId;
 
+/** One physical provider request; the host owns admission, cancellation and release. */
+export type AiCallScope = <T>(
+  execute: (signal: AbortSignal) => Promise<T>,
+  incoming?: AbortSignal,
+) => Promise<T>;
+
 /**
  * An org's key, already decrypted.
  *
@@ -50,13 +56,19 @@ export type AiCredential = WithoutDefaultModel<ProviderAiCredential> & {
   proxyUrl?: string | null;
   defaultModel?: string | null;
   admitCall?: () => Promise<void>;
+  /** Acquired separately for every SDK retry/repair. Scoped streaming is refused. */
+  callScope?: AiCallScope;
 };
 
 /** Shared typed decryption boundary; never fabricate an API key for account auth. */
 export function credentialFromStored(
   provider: AiProvider,
   plaintext: unknown,
-  options: { defaultModel?: string | null; admitCall?: () => Promise<void> } = {},
+  options: {
+    defaultModel?: string | null;
+    admitCall?: () => Promise<void>;
+    callScope?: AiCallScope;
+  } = {},
 ): AiCredential {
   return { ...parseProviderAiCredential(provider, plaintext), ...options };
 }
@@ -111,7 +123,25 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
       model,
       middleware: {
         specificationVersion: "v4",
-        wrapGenerate: async ({ doGenerate }) => {
+        wrapGenerate: async ({ doGenerate, params, model: innerModel }) => {
+          if (credential.callScope) {
+            try {
+              return await credential.callScope(async (signal) => {
+                await credential.admitCall?.();
+                // Middleware params have already passed through SDK transformations.
+                // Call the inner model with a clone: the supplied closure cannot
+                // receive a new signal, and mutating params leaks across retries.
+                return innerModel.doGenerate({
+                  ...params,
+                  abortSignal: params.abortSignal
+                    ? AbortSignal.any([params.abortSignal, signal])
+                    : signal,
+                });
+              }, params.abortSignal);
+            } catch (error) {
+              throw preflightError(error) ?? error;
+            }
+          }
           await credential.admitCall?.();
           try {
             return await doGenerate();
@@ -120,6 +150,10 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
           }
         },
         wrapStream: async ({ doStream }) => {
+          if (credential.callScope)
+            throw new ProviderPreflightError(
+              "Scoped provider calls support nonstreaming generation only",
+            );
           if (credential.provider === "openai_compatible")
             throw new ProviderPreflightError(
               "Compatible endpoints support nonstreaming text generation only",
