@@ -1,14 +1,20 @@
 import { NestFactory } from "@nestjs/core";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { runMigrations } from "@pubrick/db";
 import { originDoctorLines } from "@pubrick/shared";
 import { AppModule } from "./app.module";
+import { installBillingWebhookParser } from "./billing/webhook-parser";
 import { pool } from "./db";
 import { env } from "./env";
 import { closeApi } from "./shutdown";
 
 async function bootstrap(): Promise<void> {
   await runMigrations(env.DATABASE_URL);
-  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+    rawBody: true,
+  });
+  installBillingWebhookParser(app);
   app.setGlobalPrefix("api");
   await app.listen(env.API_PORT);
   console.log(`api listening on :${env.API_PORT}`);
