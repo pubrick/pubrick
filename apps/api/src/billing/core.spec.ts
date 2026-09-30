@@ -1,5 +1,5 @@
 import type { BillingIdentity, SubscriptionSnapshot } from "@pubrick/billing";
-import { FixtureBillingDriver } from "@pubrick/billing";
+import { BillingError, FixtureBillingDriver } from "@pubrick/billing";
 import { expect, it, vi } from "vitest";
 import { BillingCatalog } from "./catalog-core";
 import { CheckoutCore } from "./checkout-core";
@@ -311,4 +311,77 @@ it("does no provider work for a receipt already processed or leased elsewhere", 
   await new ReconciliationCore(sdk, catalog, store).process("receipt_1");
   expect(retrieve).not.toHaveBeenCalled();
   expect(store.apply).not.toHaveBeenCalled();
+});
+it("retries an interrupted checkout with its original persisted URLs after locale changes", async () => {
+  const sdk = driver();
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  const store = checkoutStore();
+  const persisted = {
+    ...attempt,
+    customerId: "cus_test",
+    successUrl: "http://localhost:31300/en/settings",
+    cancelUrl: "http://localhost:31300/en/settings",
+  };
+  vi.mocked(store.begin).mockResolvedValue({ kind: "attempt", attempt: persisted });
+  const checkout = vi
+    .spyOn(sdk, "createCheckout")
+    .mockRejectedValueOnce(new BillingError("timeout"));
+  const core = new CheckoutCore(sdk, catalog, store, "http://localhost:31300");
+  await expect(core.start(attempt.orgId, "user_verified", plan.id, "en")).rejects.toThrowError(
+    "timeout",
+  );
+  expect(store.complete).not.toHaveBeenCalled();
+  await core.start(attempt.orgId, "user_verified", plan.id, "ru");
+  expect(checkout.mock.calls[1]?.[0]).toEqual(checkout.mock.calls[0]?.[0]);
+  expect(checkout.mock.calls[1]?.[0].successUrl).toBe(persisted.successUrl);
+});
+it("refuses restored attempts from a different public origin before reusing their key", async () => {
+  const sdk = driver();
+  const catalog = new BillingCatalog(sdk, [plan]);
+  await catalog.initialize();
+  const store = checkoutStore();
+  vi.mocked(store.begin).mockResolvedValue({
+    kind: "attempt",
+    attempt: {
+      ...attempt,
+      customerId: "cus_test",
+      successUrl: "http://localhost:31300/en/settings",
+      cancelUrl: "http://localhost:31300/en/settings",
+    },
+  });
+  const checkout = vi.spyOn(sdk, "createCheckout");
+  await expect(
+    new CheckoutCore(sdk, catalog, store, "http://localhost:31310").start(
+      attempt.orgId,
+      "user_verified",
+      plan.id,
+      "ru",
+    ),
+  ).rejects.toThrowError("invalid_attempt");
+  expect(checkout).not.toHaveBeenCalled();
+});
+it("coalesces overlapping initialization and closes the catalog after a later independent failure", async () => {
+  const sdk = driver();
+  const facts = await sdk.retrievePrice(plan.priceId);
+  let release = () => {};
+  const delayed = new Promise<typeof facts>((resolve) => {
+    release = () => resolve(facts);
+  });
+  const retrieve = vi
+    .spyOn(sdk, "retrievePrice")
+    .mockReturnValueOnce(delayed)
+    .mockRejectedValueOnce(new BillingError("unavailable"));
+  const catalog = new BillingCatalog(sdk, [plan]);
+  const first = catalog.initialize();
+  await Promise.resolve();
+  const overlapping = catalog.initialize();
+  await Promise.resolve();
+  release();
+  const results = await Promise.allSettled([first, overlapping]);
+  expect(results.map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+  expect(retrieve).toHaveBeenCalledTimes(1);
+  expect(catalog.select(plan.id).price).toEqual(facts);
+  await expect(catalog.initialize()).rejects.toThrowError("unavailable");
+  expect(() => catalog.select(plan.id)).toThrowError("not_ready");
 });
