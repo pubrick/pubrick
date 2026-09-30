@@ -848,6 +848,13 @@
       "when": 1790784137428,
       "tag": "0121_hosted_account_admission",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1790786235109,
+      "tag": "0122_hosted_ai_call_leases",
+      "breakpoints": true
     }
   ]
 }

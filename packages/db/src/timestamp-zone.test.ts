@@ -244,10 +244,17 @@ async function seedAdaptation(pool: pg.Pool) {
 describe("timestamps carry their zone", () => {
   it("keeps hosted rolling-window and accepted-recipient instants zoned", () => {
     const hosted = timestampColumns.filter((column) =>
-      ["hosted_account_creation_claims", "hosted_invitation_acceptances"].includes(column.table),
+      [
+        "hosted_account_creation_claims",
+        "hosted_ai_call_leases",
+        "hosted_invitation_acceptances",
+      ].includes(column.table),
     );
     expect(hosted.map((column) => `${column.table}.${column.column}`).sort()).toEqual([
       "hosted_account_creation_claims.created_at",
+      "hosted_ai_call_leases.created_at",
+      "hosted_ai_call_leases.dispatch_deadline_at",
+      "hosted_ai_call_leases.lease_expires_at",
       "hosted_invitation_acceptances.accepted_at",
     ]);
     expect(hosted.every((column) => column.zoned)).toBe(true);
