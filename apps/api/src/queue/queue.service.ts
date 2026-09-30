@@ -60,7 +60,8 @@ import {
 import { sql } from "drizzle-orm";
 import { fromDrizzle, PgBoss } from "pg-boss";
 import { v5 as uuidv5 } from "uuid";
-import { enqueueAuthMail } from "../auth-mail-outbox.repository";
+import type { AuthMailRequest } from "../auth-mail";
+import { enqueueAuthMail, enqueueAuthMailInTransaction } from "../auth-mail-outbox.repository";
 import { authMailer } from "../auth-mail-runtime";
 import { env } from "../env";
 
@@ -121,6 +122,7 @@ type Tx = Parameters<Parameters<typeof import("../db").db.transaction>[0]>[0];
 @Injectable()
 export class QueueService implements OnModuleInit, OnModuleDestroy {
   private boss?: PgBoss;
+  private closing = false;
 
   async onModuleInit(): Promise<void> {
     const boss = new PgBoss(env.DATABASE_URL);
@@ -179,8 +181,18 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.closing = true;
     await authMailer?.close();
     await this.boss?.stop({ graceful: true });
+  }
+
+  async enqueueInvitation(
+    tx: Tx,
+    request: Extract<AuthMailRequest, { kind: "invite" }>,
+  ): Promise<void> {
+    if (this.closing || !this.boss || !authMailer)
+      throw new ConflictException("Authentication email admission unavailable.");
+    await enqueueAuthMailInTransaction(this.boss, request, tx);
   }
 
   async enqueueRssPoll(tx: Tx, payload: RssPollJob): Promise<boolean> {

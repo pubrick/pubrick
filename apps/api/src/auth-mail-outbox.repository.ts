@@ -15,14 +15,12 @@ import { canonicalMailUrl } from "./auth-hosted-policy";
 import type { AuthMailRequest } from "./auth-mail";
 import { db } from "./db";
 import { env } from "./env";
-/** One lock only, taken before reading queue capacity; no domain row locks. */
-export async function enqueueAuthMail(
-  boss: PgBoss,
-  request: AuthMailRequest,
-  database = db,
-  names = { queue: AUTH_MAIL_QUEUE, deadLetter: AUTH_MAIL_DLQ },
-  cap = AUTH_MAIL_ADMISSION_CAP,
-): Promise<void> {
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type QueueNames = { queue: string; deadLetter: string };
+const defaultNames = { queue: AUTH_MAIL_QUEUE, deadLetter: AUTH_MAIL_DLQ };
+
+async function prepareAuthMail(request: AuthMailRequest, database: Pick<typeof db, "select">) {
   const createdAt = Date.now();
   const jobId = randomUUID();
   const link =
@@ -81,22 +79,54 @@ export async function enqueueAuthMail(
     expiresAt,
     messageId: `<pubrick-auth.${jobId}@${new URL(identity.origin).hostname}>`,
   } as AuthMailPayload;
-  const encrypted = sealAuthMail(payload, env.APP_ENCRYPTION_KEY);
+  return { jobId, encrypted: sealAuthMail(payload, env.APP_ENCRYPTION_KEY) };
+}
+
+/** Lock order: domain organization, then mail queue capacity. No SMTP I/O. */
+async function insertAuthMail(
+  boss: PgBoss,
+  prepared: Awaited<ReturnType<typeof prepareAuthMail>>,
+  tx: Tx,
+  names: QueueNames,
+  cap: number,
+): Promise<void> {
   try {
-    await database.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(746352991)`);
-      const result = await tx.execute<{ count: string }>(
-        sql`select count(*)::text as count from pgboss.job where name in (${names.queue},${names.deadLetter})`,
-      );
-      if (Number(result.rows[0]?.count ?? cap) >= cap) throw new AuthMailError("unavailable");
-      const id = await boss.send(names.queue, encrypted, {
-        id: jobId,
-        group: { id: "auth-mail" },
-        db: fromDrizzle(tx, sql),
-      });
-      if (id === null) throw new AuthMailError("unavailable");
+    await tx.execute(sql`select pg_advisory_xact_lock(746352991)`);
+    const result = await tx.execute<{ count: string }>(
+      sql`select count(*)::text as count from pgboss.job where name in (${names.queue},${names.deadLetter})`,
+    );
+    if (Number(result.rows[0]?.count ?? cap) >= cap) throw new AuthMailError("unavailable");
+    const id = await boss.send(names.queue, prepared.encrypted, {
+      id: prepared.jobId,
+      group: { id: "auth-mail" },
+      db: fromDrizzle(tx, sql),
     });
+    if (id === null) throw new AuthMailError("unavailable");
   } catch {
     throw new AuthMailError("unavailable");
   }
+}
+
+/** SDK callbacks publish after their domain write; commit admission before return. */
+export async function enqueueAuthMail(
+  boss: PgBoss,
+  request: AuthMailRequest,
+  database = db,
+  names: QueueNames = defaultNames,
+  cap = AUTH_MAIL_ADMISSION_CAP,
+): Promise<void> {
+  const prepared = await prepareAuthMail(request, database);
+  await database.transaction((tx) => insertAuthMail(boss, prepared, tx, names, cap));
+}
+
+/** Hosted invitation and outbox share the caller's domain transaction. */
+export async function enqueueAuthMailInTransaction(
+  boss: PgBoss,
+  request: Extract<AuthMailRequest, { kind: "invite" }>,
+  tx: Tx,
+  names: QueueNames = defaultNames,
+  cap = AUTH_MAIL_ADMISSION_CAP,
+): Promise<void> {
+  const prepared = await prepareAuthMail(request, tx);
+  await insertAuthMail(boss, prepared, tx, names, cap);
 }
