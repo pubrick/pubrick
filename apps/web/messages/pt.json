@@ -1361,7 +1361,21 @@
     "aiTextReload": "Recarregar",
     "aiTestModel": "Modelo do teste: {model}",
     "aiTestFailConfigurationChanged": "A chave mudou antes da admissão da solicitação. Revise as configurações e tente novamente.",
-    "aiTextModelOptions": "Opções do modelo"
+    "aiTextModelOptions": "Opções do modelo",
+    "aiCompatibleEndpoint": "URL base da API (obrigatória)",
+    "aiCompatibleHint": "API HTTPS pública compatível com OpenAI Chat Completions. Selecione este provedor e informe seu modelo em Geração de texto. Streaming não é suportado.",
+    "aiVertexMode": "Autenticação do Vertex",
+    "aiVertexExpress": "Chave API Express",
+    "aiVertexAccount": "Conta de serviço",
+    "aiVertexProject": "ID do projeto Google Cloud (obrigatório)",
+    "aiVertexLocation": "Localização",
+    "aiVertexExpressHint": "Use uma chave explícita do Vertex Express. O prefixo da chave não determina a autenticação.",
+    "aiVertexAccountHint": "Cole o JSON padrão completo da conta de serviço no campo secreto. Apenas essa conta é usada; nunca as credenciais do servidor.",
+    "aiVertexAccountJSON": "JSON da conta de serviço (obrigatório)",
+    "aiVertexProxy": "URL do proxy do Vertex",
+    "aiVertexProxyReplace": "Deixe sem alterações ou informe outro proxy",
+    "aiVertexProxyHint": "Opcional. Usado apenas para esta credencial Vertex, incluindo OAuth. Esvaziar o campo editado remove o proxy salvo. A URL é criptografada e não volta a ser exibida.",
+    "aiTextModelRequired": "O provedor está salvo. Informe seu modelo abaixo para ativar a geração de texto."
   },
   "SearchSettings": {
     "title": "API de pesquisa",

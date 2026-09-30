@@ -1361,7 +1361,21 @@
     "aiTextReload": "Reload",
     "aiTestModel": "Test model: {model}",
     "aiTestFailConfigurationChanged": "The key changed before this request was admitted. Review Settings and try again.",
-    "aiTextModelOptions": "Model options"
+    "aiTextModelOptions": "Model options",
+    "aiCompatibleEndpoint": "API base URL (required)",
+    "aiCompatibleHint": "Use a public HTTPS OpenAI-compatible Chat Completions API. Select this provider and enter its model ID under Text generation. Streaming is not supported.",
+    "aiVertexMode": "Vertex authentication",
+    "aiVertexExpress": "Express API key",
+    "aiVertexAccount": "Service account",
+    "aiVertexProject": "Google Cloud project ID (required)",
+    "aiVertexLocation": "Location",
+    "aiVertexExpressHint": "Use an explicit Vertex Express API key. Keys are never selected by their prefix.",
+    "aiVertexAccountHint": "Paste the complete standard service-account JSON in the secret field. Pubrick uses this account only; server credentials are never used.",
+    "aiVertexAccountJSON": "Service-account JSON (required)",
+    "aiVertexProxy": "Vertex proxy URL",
+    "aiVertexProxyReplace": "Leave unchanged, or enter a replacement proxy",
+    "aiVertexProxyHint": "Optional. Used only for this Vertex credential, including OAuth. Changing the field to empty removes its saved proxy. The URL is encrypted and never shown after saving.",
+    "aiTextModelRequired": "This provider is saved. Enter its model ID below to enable text generation."
   },
   "SearchSettings": {
     "title": "Search API",

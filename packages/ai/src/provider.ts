@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 // `ai` imports LanguageModelV4 but does not re-export it, and its own
 // `LanguageModel` is a union that includes a bare gateway model-id string — so a
 // function returning it hands callers something they cannot read `.modelId` off.
@@ -10,10 +11,19 @@ import { createOpenAI } from "@ai-sdk/openai";
 // `pnpm -r ls @ai-sdk/provider --depth 10`, which must show one version).
 import type { LanguageModelV4, SharedV4ProviderOptions } from "@ai-sdk/provider";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { type AiProviderId, DEFAULT_TEXT_MODELS, PermanentError } from "@pubrick/shared";
+import {
+  type AiProviderId,
+  DEFAULT_TEXT_MODELS,
+  PermanentError,
+  type ProviderAiCredential,
+  parseProviderAiCredential,
+} from "@pubrick/shared";
 import { wrapLanguageModel } from "ai";
 import { withRunFailure } from "./classify.js";
+import { compatibleFetch } from "./compatible-transport.js";
 import { googleFetchForProxy } from "./google-transport.js";
+import { ProviderPreflightError, preflightError } from "./provider-preflight.js";
+import { vertexModel } from "./vertex.js";
 
 /**
  * Providers a BYOK key can be stored for.
@@ -34,14 +44,22 @@ export type AiProvider = AiProviderId;
  * is nullable in that table — null means "use the provider's default" — so it is
  * optional here too.
  */
-export type AiCredential = {
-  provider: AiProvider;
-  apiKey: string;
+type WithoutDefaultModel<T> = T extends unknown ? Omit<T, "defaultModel"> : never;
+export type AiCredential = WithoutDefaultModel<ProviderAiCredential> & {
+  apiKey?: string;
+  proxyUrl?: string | null;
   defaultModel?: string | null;
-  proxyUrl?: string;
-  /** Admission runs immediately before every provider HTTP request, including retries/repairs. */
   admitCall?: () => Promise<void>;
 };
+
+/** Shared typed decryption boundary; never fabricate an API key for account auth. */
+export function credentialFromStored(
+  provider: AiProvider,
+  plaintext: unknown,
+  options: { defaultModel?: string | null; admitCall?: () => Promise<void> } = {},
+): AiCredential {
+  return { ...parseProviderAiCredential(provider, plaintext), ...options };
+}
 
 /**
  * The model used when neither the call nor the credential names one.
@@ -73,7 +91,12 @@ export const DEFAULT_MODELS = DEFAULT_TEXT_MODELS;
 export function resolveModel(credential: AiCredential, modelId?: string): LanguageModelV4 {
   const id = modelId ?? credential.defaultModel ?? DEFAULT_MODELS[credential.provider];
 
-  if (credential.apiKey.trim() === "") {
+  if (!id)
+    throw new ProviderPreflightError(
+      "Set a model ID in text generation Settings first",
+      "model_not_found",
+    );
+  if (credential.apiKey !== undefined && credential.apiKey.trim() === "") {
     // Caught here rather than at the first call: an empty key produces a
     // provider 401 that reads like the user's key was rejected, which sends
     // them to re-copy a key that was never saved.
@@ -84,36 +107,58 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
   }
 
   const admitted = (model: LanguageModelV4): LanguageModelV4 =>
-    credential.admitCall
-      ? wrapLanguageModel({
-          model,
-          middleware: {
-            specificationVersion: "v4",
-            wrapGenerate: async ({ doGenerate }) => {
-              await credential.admitCall?.();
-              return doGenerate();
-            },
-            wrapStream: async ({ doStream }) => {
-              await credential.admitCall?.();
-              return doStream();
-            },
-          },
-        })
-      : model;
+    wrapLanguageModel({
+      model,
+      middleware: {
+        specificationVersion: "v4",
+        wrapGenerate: async ({ doGenerate }) => {
+          await credential.admitCall?.();
+          try {
+            return await doGenerate();
+          } catch (error) {
+            throw preflightError(error) ?? error;
+          }
+        },
+        wrapStream: async ({ doStream }) => {
+          if (credential.provider === "openai_compatible")
+            throw new ProviderPreflightError(
+              "Compatible endpoints support nonstreaming text generation only",
+            );
+          await credential.admitCall?.();
+          try {
+            return await doStream();
+          } catch (error) {
+            throw preflightError(error) ?? error;
+          }
+        },
+      },
+    });
 
   switch (credential.provider) {
+    case "vertex":
+      return admitted(vertexModel(credential, id));
+    case "openai_compatible":
+      return admitted(
+        createOpenAICompatible({
+          name: "openai_compatible",
+          apiKey: credential.apiKey,
+          baseURL: credential.baseURL,
+          fetch: compatibleFetch(credential.baseURL),
+          supportsStructuredOutputs: false,
+        }).chatModel(id),
+      );
     case "google":
       return admitted(
         createGoogleGenerativeAI({
           apiKey: credential.apiKey,
-          fetch: googleFetchForProxy(credential.proxyUrl),
+          fetch: googleFetchForProxy(credential.proxyUrl ?? undefined),
         })(id),
       );
     case "openrouter":
       return admitted(createOpenRouter({ apiKey: credential.apiKey })(id));
     case "openai":
       // Direct BYOK must not inherit OPENAI_BASE_URL from the server environment.
-      // Custom endpoints are a distinct future mode requiring SSRF validation.
+      // Custom endpoints use the separate guarded compatible mode.
       return admitted(
         createOpenAI({
           apiKey: credential.apiKey,
@@ -178,6 +223,8 @@ export function probeThinkingOptions(
 ): SharedV4ProviderOptions | undefined {
   if (modelId !== DEFAULT_MODELS[provider]) return undefined;
   switch (provider) {
+    case "vertex":
+      return { googleVertex: { thinkingConfig: { thinkingLevel: PROBE_THINKING_LEVEL } } };
     case "google":
       // `thinkingLevel` alone. Google's API supersedes `thinking_budget` with
       // it and rejects a request carrying both — see `resolveModel` above.

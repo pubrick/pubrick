@@ -28,7 +28,11 @@
     "@pubrick/shared": "workspace:*",
     "ai": "^7.0.123",
     "undici": "^7.29.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@ai-sdk/google-vertex": "5.0.99",
+    "@ai-sdk/openai-compatible": "3.0.60",
+    "google-auth-library": "10.6.2",
+    "guarded-fetch": "0.1.4"
   },
   "devDependencies": {
     "@types/node": "^22",

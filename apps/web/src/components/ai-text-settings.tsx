@@ -20,14 +20,18 @@ export const AI_PROVIDER_NAMES: Record<AiProviderId, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
+  vertex: "Google Vertex AI",
+  openai_compatible: "OpenAI-compatible API",
 };
 
 export function AiTextSettingsForm({
   credentials,
   onChanged,
+  onDirtyChanged,
 }: {
   credentials: AiCredentialPublic[] | null;
   onChanged: (settings: AiTextSettings) => void;
+  onDirtyChanged?: (dirty: boolean) => void;
 }) {
   const t = useTranslations("SettingsPage");
   const te = useTranslations("Errors");
@@ -70,6 +74,9 @@ export function AiTextSettingsForm({
   const dirty =
     saved !== null && (provider !== (saved.provider ?? "") || model.trim() !== (saved.model ?? ""));
   draftDirty.current = dirty;
+  useEffect(() => {
+    onDirtyChanged?.(dirty);
+  }, [dirty, onDirtyChanged]);
   function reload() {
     forceReload.current = true;
     setJustSaved(false);
@@ -130,7 +137,10 @@ export function AiTextSettingsForm({
                     provider: AI_PROVIDER_NAMES[saved.provider],
                     model: saved.modelId ?? "",
                   })
-                : t("aiTextMissing", { provider: AI_PROVIDER_NAMES[saved.provider] })
+                : saved.modelId === null &&
+                    credentials?.some((row) => row.provider === saved.provider)
+                  ? t("aiTextModelRequired")
+                  : t("aiTextMissing", { provider: AI_PROVIDER_NAMES[saved.provider] })
               : t("aiTextEmpty")}
           </p>
           <form onSubmit={save} className="space-y-3">
@@ -155,22 +165,39 @@ export function AiTextSettingsForm({
                   </option>
                 ))}
               </Select>
-              <Advanced
-                label={t("aiTextModelOptions")}
-                dirty={Boolean(model.trim() || saved.model)}
-              >
+              {provider === "openai_compatible" ? (
                 <Input
                   label={t("aiModelLabel")}
-                  placeholder={provider ? DEFAULT_TEXT_MODELS[provider] : t("aiModelPlaceholder")}
+                  required
+                  placeholder={t("aiModelPlaceholder")}
                   value={model}
-                  disabled={busy || !provider}
+                  disabled={busy}
+                  maxLength={200}
                   onChange={(event) => {
                     setModel(event.target.value);
                     setJustSaved(false);
                   }}
-                  maxLength={200}
                 />
-              </Advanced>
+              ) : (
+                <Advanced
+                  label={t("aiTextModelOptions")}
+                  dirty={Boolean(model.trim() || saved.model)}
+                >
+                  <Input
+                    label={t("aiModelLabel")}
+                    placeholder={
+                      (provider ? DEFAULT_TEXT_MODELS[provider] : null) ?? t("aiModelPlaceholder")
+                    }
+                    value={model}
+                    disabled={busy || !provider}
+                    maxLength={200}
+                    onChange={(event) => {
+                      setModel(event.target.value);
+                      setJustSaved(false);
+                    }}
+                  />
+                </Advanced>
+              )}
             </div>
             <p className="text-sm text-fg-secondary">{t("aiTextModelHint")}</p>
             {dirty && (
@@ -190,6 +217,7 @@ export function AiTextSettingsForm({
                 busy ||
                 !dirty ||
                 !provider ||
+                (provider === "openai_compatible" && !model.trim()) ||
                 !credentials?.some((row) => row.provider === provider)
               }
             >

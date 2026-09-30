@@ -6,6 +6,7 @@ import {
   type AiCredential,
   builtInRoleTemplateSource,
   composeRoleTemplateInstruction,
+  credentialFromStored,
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,
   RoleTemplateError,
@@ -955,12 +956,13 @@ export class GenerateRepository {
     if (!selected) return undefined;
     const { row, pinned } = selected;
 
-    let apiKey: string;
-    let proxyUrl: string | undefined;
+    let credential: AiCredential;
     try {
-      ({ apiKey, proxyUrl } = parseStoredAiCredential(
+      credential = credentialFromStored(
+        row.provider,
         decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
-      ));
+        { defaultModel: pinned.modelId, admitCall: () => admitAiTextCall(orgId, db, pinned) },
+      );
     } catch (error) {
       // Two events, one code, two sentences. Both are deterministic — the same
       // ciphertext under the same ring answers identically on every retry — so
@@ -983,13 +985,7 @@ export class GenerateRepository {
       // pg-boss retries it — the treatment every other unclassified throw gets.
       throw error;
     }
-    return {
-      provider: row.provider,
-      apiKey,
-      defaultModel: pinned.modelId,
-      admitCall: () => admitAiTextCall(orgId, db, pinned),
-      ...(row.provider === "google" && proxyUrl ? { proxyUrl } : {}),
-    };
+    return credential;
   }
 
   async hasKnowledge(orgId: string, brandId: string): Promise<boolean> {

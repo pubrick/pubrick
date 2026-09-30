@@ -1,0 +1,6 @@
+ALTER TABLE "ai_credentials" DROP CONSTRAINT "ai_credentials_provider_check";--> statement-breakpoint
+ALTER TABLE "organization_ai_text_settings" DROP CONSTRAINT "organization_ai_text_settings_provider_check";--> statement-breakpoint
+ALTER TABLE "usage_ledger" DROP CONSTRAINT "usage_ledger_provider_check";--> statement-breakpoint
+ALTER TABLE "ai_credentials" ADD CONSTRAINT "ai_credentials_provider_check" CHECK ("ai_credentials"."provider" in ('google', 'openrouter', 'openai', 'anthropic', 'deepseek', 'vertex', 'openai_compatible')) NOT VALID;--> statement-breakpoint
+ALTER TABLE "organization_ai_text_settings" ADD CONSTRAINT "organization_ai_text_settings_provider_check" CHECK ("organization_ai_text_settings"."provider" in ('google', 'openrouter', 'openai', 'anthropic', 'deepseek', 'vertex', 'openai_compatible')) NOT VALID;--> statement-breakpoint
+ALTER TABLE "usage_ledger" ADD CONSTRAINT "usage_ledger_provider_check" CHECK ("usage_ledger"."provider" in ('google', 'openrouter', 'openai', 'anthropic', 'deepseek', 'vertex', 'openai_compatible')) NOT VALID;

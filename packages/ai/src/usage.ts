@@ -7,6 +7,7 @@ import {
 import { APICallError } from "ai";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { AiProvider } from "./provider.js";
+import { preflightError } from "./provider-preflight.js";
 
 /**
  * The ledger row's three value sets, aliased from `@pubrick/shared` rather than
@@ -259,7 +260,7 @@ export function createCallRecorder(fallbackModelId: string): {
           return result;
         } catch (error) {
           // Middleware refused before provider HTTP: this is not a billed call.
-          if (error instanceof AiTextSelectionChangedError) throw error;
+          if (error instanceof AiTextSelectionChangedError || preflightError(error)) throw error;
           // The error is classified HERE and nowhere later. This catch is the
           // last place that knows whether the provider delivered a verdict or
           // simply stopped talking to us; the row it writes carries zero tokens

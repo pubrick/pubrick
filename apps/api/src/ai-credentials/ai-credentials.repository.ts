@@ -1,5 +1,12 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
-import { type AiCredential, isAllowedGoogleProxy, type UsageRecord } from "@pubrick/ai";
+import {
+  type AiCredential,
+  credentialFromStored,
+  isAllowedGoogleProxy,
+  type UsageRecord,
+  validateCompatibleEndpoint,
+  validateVertexCredential,
+} from "@pubrick/ai";
 import {
   admitAiTextCall,
   aiTextSettingsView,
@@ -22,15 +29,15 @@ import {
   type GoogleProxyTestResult,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
-  MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
   MAX_TEST_CALLS_PER_HOUR,
+  parseProviderAiCredential,
   parseStoredAiCredential,
   summarizeCost,
   toLedgerCostUsd,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { conflict, notFound } from "../api-error";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
@@ -53,21 +60,36 @@ function publicCredential(row: {
   updatedAt: Date;
   credentialsEncrypted: string;
 }) {
-  let proxyConfigured = false;
-  if (row.provider === "google") {
-    try {
-      proxyConfigured = !!parseStoredAiCredential(
-        decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
-      ).proxyUrl;
-    } catch {
-      // A corrupt key is still listed, so the user can replace or remove it.
+  const metadata: {
+    proxyConfigured: boolean;
+    authMode?: "express" | "service_account";
+    project?: string;
+    location?: "global" | "us" | "eu";
+    baseURL?: string;
+  } = { proxyConfigured: false };
+  try {
+    const secret = parseProviderAiCredential(
+      row.provider,
+      decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+    );
+    if (secret.provider === "google" || secret.provider === "vertex")
+      metadata.proxyConfigured = !!secret.proxyUrl;
+    if (secret.provider === "vertex") {
+      metadata.authMode = secret.authMode;
+      if (secret.authMode === "service_account") {
+        metadata.project = secret.project;
+        metadata.location = secret.location;
+      }
     }
+    if (secret.provider === "openai_compatible") metadata.baseURL = secret.baseURL;
+  } catch {
+    /* Keep corrupt keys visible so they can be replaced or removed. */
   }
   return {
     provider: row.provider,
     defaultModel: row.defaultModel,
     updatedAt: row.updatedAt,
-    proxyConfigured,
+    ...metadata,
   };
 }
 
@@ -142,6 +164,12 @@ export class AiCredentialsRepository {
   }
 
   async upsert(orgId: string, data: AiCredentialUpsert) {
+    try {
+      if (data.provider === "vertex") validateVertexCredential(data);
+      if (data.provider === "openai_compatible") await validateCompatibleEndpoint(data.baseURL);
+    } catch {
+      throw badRequest("invalid_request", "Invalid AI provider configuration");
+    }
     const defaultModel = data.defaultModel ?? null;
     return db.transaction(async (tx) => {
       const selectionState = await lockAiTextSelection(orgId, tx);
@@ -167,8 +195,21 @@ export class AiCredentialsRepository {
           // A newly saved key repairs an unreadable row rather than preserving it.
         }
       }
+      if (data.provider === "vertex" && data.proxyUrl === undefined && previous[0]) {
+        try {
+          const old = parseProviderAiCredential(
+            "vertex",
+            decryptJson(previous[0].credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+          );
+          if (old.provider === "vertex" && old.proxyUrl) data = { ...data, proxyUrl: old.proxyUrl };
+        } catch {
+          /* Replacing corrupt credentials repairs the row. */
+        }
+      }
       const credentialsEncrypted = encryptJson(
-        { apiKey: data.apiKey, ...(proxyUrl ? { proxyUrl } : {}) },
+        data.provider === "vertex" || data.provider === "openai_compatible"
+          ? (({ provider: _provider, defaultModel: _model, ...secret }) => secret)(data)
+          : { apiKey: data.apiKey, ...(proxyUrl ? { proxyUrl } : {}) },
         env.APP_ENCRYPTION_KEY,
       );
       const rows = await tx
@@ -254,12 +295,8 @@ export class AiCredentialsRepository {
    * between "the run failed" and "the run failed because you removed the
    * OpenRouter key".
    *
-   * All of the org's queued runs, not a subset: nothing on a run records which
-   * provider it intends to use (increment 1 has no per-run model choice), so
-   * "the runs that needed THIS key" is not a question the data can answer. The
-   * honest options are to fail them all with a nameable reason or to let them
-   * fail later with an unreadable one, and a failed run is one click from Try
-   * again once a key is back.
+   * Pinned queued runs are refused only when they retained this provider;
+   * legacy unpinned runs retain the existing conservative cleanup behavior.
    */
   async delete(orgId: string, provider: AiProviderId) {
     return db.transaction(async (tx) => {
@@ -454,7 +491,7 @@ export class AiCredentialsRepository {
     // member and the organisation's key.
     if (await this.overTestBudget(orgId)) return { ok: false, reason: "too_many_tests" };
 
-    let credential: AiCredential;
+    let credential: AiCredential | undefined;
     try {
       credential = await db.transaction(async (tx) => {
         const state = await lockAiTextSelection(orgId, tx);
@@ -465,6 +502,7 @@ export class AiCredentialsRepository {
           state.settings.provider === provider
             ? (state.settings.model ?? DEFAULT_TEXT_MODELS[provider])
             : (row.defaultModel ?? DEFAULT_TEXT_MODELS[provider]);
+        if (!modelId) return undefined;
         const snapshot = {
           provider,
           modelId,
@@ -501,7 +539,7 @@ export class AiCredentialsRepository {
       }
       if (isMalformedStoredAiCredential(error)) {
         this.logger.error(
-          `Stored ${provider} key for org ${orgId}: ${MALFORMED_STORED_AI_CREDENTIAL_MESSAGE}`,
+          `Stored ${provider} credentials for org ${orgId}: ${(error as Error).message}`,
         );
         return { ok: false, reason: "unreadable_key" };
       }
@@ -511,6 +549,7 @@ export class AiCredentialsRepository {
       throw error;
     }
 
+    if (!credential) return { ok: false, reason: "model_not_found" };
     const outcome = await this.probe.run(credential);
 
     // Before the verdict, and for the failed verdict too: the provider counts
@@ -578,6 +617,11 @@ export class AiCredentialsRepository {
    * Internal use only (the Test action). Never expose through a controller —
    * this and `credential` are the only methods that return the key.
    */
+  async getDecrypted(
+    orgId: string,
+    provider: "google",
+  ): Promise<AiCredential & { provider: "google"; apiKey: string; proxyUrl?: string }>;
+  async getDecrypted(orgId: string, provider: AiProviderId): Promise<AiCredential>;
   async getDecrypted(orgId: string, provider: AiProviderId): Promise<AiCredential> {
     const rows = await db
       .select({
@@ -594,28 +638,7 @@ export class AiCredentialsRepository {
     return this.decrypt(provider, row);
   }
 
-  /**
-   * The org's key for a call that names no provider — an editor-side model call,
-   * where the user chose text to work on and not a vendor to bill.
-   *
-   * The choice is `preferredCredential` (`@pubrick/shared`): the oldest key the
-   * org configured, tie-broken by provider name. `GenerateRepository.credential`
-   * sorts with the same function over the same rows, and that is the whole
-   * point — a draft generated against Google and refined against OpenRouter is a
-   * bill the user cannot explain, and nothing on a run or a draft records which
-   * vendor produced it.
-   *
-   * One ordering over one unchanged set of rows is the whole of the guarantee:
-   * because nothing records the vendor, changing the set changes the answer for
-   * work already under way. `preferredCredential` states the limit; the case
-   * that reaches it is a `running` run whose key is deleted.
-   *
-   * Returns `undefined` for "this org has no key", following the worker's
-   * contract rather than `getDecrypted`'s `NotFoundException`. The two differ
-   * honestly: asking for a *named* provider that is not stored is a 404 about a
-   * resource the caller addressed, while asking for "whatever this org uses" is
-   * a question with a legitimate empty answer that the caller has to render.
-   */
+  /** Workspace text configuration, with legacy initialization under the same lock graph. */
   async textSettings(orgId: string) {
     return db.transaction(async (tx) => {
       const state = await lockAiTextSelection(orgId, tx);
@@ -682,15 +705,11 @@ export class AiCredentialsRepository {
     provider: AiProviderId,
     row: { credentialsEncrypted: string; defaultModel: string | null },
   ): AiCredential {
-    const { apiKey, proxyUrl } = parseStoredAiCredential(
-      decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
-    );
-    return {
+    return credentialFromStored(
       provider,
-      apiKey,
-      defaultModel: row.defaultModel,
-      ...(provider === "google" && proxyUrl ? { proxyUrl } : {}),
-    };
+      decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
+      { defaultModel: row.defaultModel },
+    );
   }
 
   /**

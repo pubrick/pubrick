@@ -1,7 +1,7 @@
 # LLM providers
 
-Workspace owners and admins can save one encrypted API key per provider in
-Settings. Keys are not returned to the browser after saving. A provider's Test
+Workspace owners and admins can save one encrypted credential per provider in
+Settings. API keys and service-account secrets are not returned after saving. A provider's Test
 button makes a small paid structured-output request and records its usage;
 it does not merely check that the key looks plausible.
 
@@ -12,18 +12,20 @@ it does not merely check that the key looks plausible.
 | OpenAI | `gpt-6-luna` | Direct OpenAI Responses API |
 | Anthropic | `claude-sonnet-5-5` | Direct Claude Messages API |
 | DeepSeek | `deepseek-flash` | Direct DeepSeek Chat Completions API |
+| Google Vertex AI | `gemini-3.8-flash` | Explicit Express API key or service-account auth; optional independent Vertex proxy |
+| OpenAI-compatible API | None; explicit model required | Public HTTPS Chat Completions endpoint |
 
 Defaults were checked against vendor model catalogs on 2026-09-30. You can set
-another text model supported by that provider in Advanced. Model availability,
+another text model supported by that provider in Advanced. A compatible API requires
+an explicit model in the visible text-model field. Model availability,
 permissions and sufficient provider balance still depend on your API account.
 An ordinary ChatGPT or Claude chat subscription is not an API key or API credit.
-Vertex credentials and arbitrary OpenAI-compatible endpoints are not supported
-by this increment. Vertex uses a distinct authentication mode; it must not be
-treated as an ordinary Gemini Developer API key.
+Vertex uses a distinct authentication mode and must not be treated as an ordinary
+Gemini Developer API key. Compatible APIs support nonstreaming text requests.
 
 ## What is supported
 
-All five providers use the same draft generation, adaptation, revision and
+All seven providers use the same draft generation, adaptation, revision and
 structured-output validation pipeline. The AI SDK's maintained adapters implement
 the vendor protocols; Pubrick does not maintain competing HTTP clients. Every
 physical request, including a schema-repair request or a failed retry, uses the
@@ -54,7 +56,7 @@ provider. Choose another saved provider explicitly to resume new generation.
 
 New pipeline runs retain the selected provider, model, credential ID and credential
 revision. Existing runs keep their original model after a workspace default edit.
-Replacing a key or changing its Google proxy increments the credential revision;
+Replacing a credential or changing its saved provider proxy increments the credential revision;
 the next physical request refuses with `configuration_changed`. Requests already
 admitted before the change commits may finish. The check runs again for native
 SDK retries and schema repairs, and refusals before HTTP do not create paid usage.
@@ -70,6 +72,62 @@ The existing **Test** button remains on each provider credential row. Its displa
 model is the workspace model for the selected provider, otherwise the credential's
 legacy/default model. A model change invalidates the displayed verdict. Saving
 text settings uses a revision check: stale concurrent writes ask the user to reload.
+
+## Vertex and compatible APIs
+
+**Google Vertex AI** is a separate credential from Google AI Studio. Choose an
+explicit authentication mode in Settings:
+
+- **Express API key** uses the fixed Vertex Express endpoint. Both `AQ...` and
+  `AIza...` keys are opaque values; Pubrick never chooses authentication by prefix.
+- **Service account** requires a standard service-account JSON file, an explicit
+  Google Cloud project ID and a supported location (`global`, `us`, or `eu`).
+  The account needs Vertex permissions in the chosen project. Pubrick uses native
+  `google-auth-library` JWT signing with the fixed Google OAuth token endpoint and
+  cloud-platform scope. External-account configuration, arbitrary token endpoints,
+  key files, impersonation, ambient API keys and operator ADC are not accepted.
+
+This Vertex integration supports Gemini publisher text models, not Vertex-hosted
+Claude or arbitrary deployment/endpoints. The native default is `gemini-3.8-flash`
+in `global`. Location hosts are a
+fixed map verified against the maintained SDK; arbitrary regional hostnames are
+not constructed. The optional Vertex proxy belongs only to this credential,
+including its OAuth exchange. Neither the saved Google AI Studio proxy nor the
+operator's `GOOGLE_API_PROXY` is inherited. Rotating credentials without editing
+the proxy preserves it; explicitly clearing the edited field removes it.
+
+**OpenAI-compatible API** requires an API key and a public HTTPS base URL, such as
+`https://api.example.com/v1`. After saving, choose this provider under **Text
+generation** and enter its model ID. There is no guessed model: without one,
+Settings reports the configuration incomplete and generation/Test refuse before
+model dispatch. Keys, service-account JSON and proxy URLs are encrypted and never
+returned to the browser after saving. Authentication mode, project, location and
+credential-free base URL remain visible so their identity is reviewable.
+
+Compatible requests use the maintained AI SDK Chat Completions adapter with JSON
+guidance and Pubrick's local schema validation/repair. Native strict JSON Schema
+support is not promised. Only nonstreaming text generation is supported; the
+resolver explicitly refuses streaming. Requests are fixed to the configured
+`/chat/completions` path, redirects are not followed, and userinfo/query/fragment
+or ambiguous encoded paths are rejected. `guarded-fetch` validates public DNS at
+save time, before a request, and at socket connection to prevent DNS rebinding.
+Responses are bounded to 4 MiB and the shared request deadline/abort is preserved.
+
+Vertex/custom token usage follows the shared physical-call ledger. Unverified
+prices remain **unknown**, never zero. Local OAuth/destination refusals before
+model dispatch create no billed model receipt. A failed model HTTP request or an
+uncertain network outcome retains its receipt; a subsequent credential revision
+refusal does not erase it. Images, knowledge embeddings and Google-only analysis
+continue to require the separate Google credential.
+
+Maintained adapters are pinned to `@ai-sdk/google-vertex@5.0.99` and
+`@ai-sdk/openai-compatible@3.0.60`, sharing provider contract `4.0.20` with the
+existing AI SDK. Authentication uses `google-auth-library@10.6.2`; outbound custom
+transport uses `guarded-fetch@0.1.4` with its checked default dispatcher.
+
+References: [AI SDK Vertex adapter](https://ai-sdk.dev/providers/ai-sdk-providers/google-vertex),
+[AI SDK compatible adapter](https://ai-sdk.dev/providers/openai-compatible-providers/custom-providers),
+[Vertex Gemini 3.8 Flash catalog](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash).
 
 
 ## Retention, proxy and costs
@@ -150,3 +208,16 @@ and relevance items with earlier scoring attempts refuse ambiguous configuration
 Untouched queued legacy batches pin before their first running transition. Start
 new suggestions/recheck requests, or use an item's explicit scoring retry, after
 reviewing Settings. Newly pinned work preserves its configuration on redelivery.
+
+Migration `0120_vertex_compatible_providers` widens the credentials, workspace
+text-settings and usage-ledger provider CHECKs using `NOT VALID`. Existing keys,
+defaults, snapshots and ledger rows are preserved; new writes are checked
+immediately without scanning the historical ledger during API startup. Stop old
+workers first, upgrade the API, then start the matching worker after API health.
+Validate the widened checks in a separately scheduled maintenance step:
+
+```sql
+ALTER TABLE ai_credentials VALIDATE CONSTRAINT ai_credentials_provider_check;
+ALTER TABLE organization_ai_text_settings VALIDATE CONSTRAINT organization_ai_text_settings_provider_check;
+ALTER TABLE usage_ledger VALIDATE CONSTRAINT usage_ledger_provider_check;
+```

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { type INestApplication, Logger } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import type { AiCredential, UsageRecord } from "@pubrick/ai";
@@ -125,6 +125,127 @@ describe.skipIf(!url)("ai credentials e2e", () => {
   }
 
   describe("explicit workspace text settings", () => {
+    it("keeps a custom endpoint unconfigured until its explicit model is selected, then pins and isolates it", async () => {
+      const a = await orgAgent();
+      const b = await orgAgent();
+      const saved = await save(a.agent, {
+        provider: "openai_compatible",
+        baseURL: "https://8.8.8.8/v1",
+      }).expect(200);
+      expect(saved.body).toMatchObject({
+        provider: "openai_compatible",
+        baseURL: "https://8.8.8.8/v1",
+      });
+      expect(JSON.stringify(saved.body)).not.toContain(SECRET_KEY);
+      const settings = await a.agent.get("/api/ai-credentials/text-settings").expect(200);
+      expect(settings.body).toMatchObject({
+        provider: "openai_compatible",
+        configured: false,
+        modelId: null,
+      });
+      await expect(repo.credential(a.orgId)).rejects.toMatchObject({
+        runFailure: "configuration_changed",
+      });
+      const refused = await a.agent
+        .post("/api/ai-credentials/openai_compatible/test")
+        .send({})
+        .expect(200);
+      expect(refused.body).toEqual({ ok: false, reason: "model_not_found" });
+      expect(probeCalls).toEqual([]);
+      await a.agent
+        .put("/api/ai-credentials/text-settings")
+        .send({
+          provider: "openai_compatible",
+          model: "my-api-model",
+          expectedRevision: settings.body.revision,
+        })
+        .expect(200);
+      const pinned = await repo.credential(a.orgId);
+      expect(pinned).toMatchObject({
+        provider: "openai_compatible",
+        defaultModel: "my-api-model",
+        baseURL: "https://8.8.8.8/v1",
+        apiKey: SECRET_KEY,
+      });
+      await a.agent.post("/api/ai-credentials/openai_compatible/test").send({}).expect(200);
+      expect(probeCalls[0]).toMatchObject({ defaultModel: "my-api-model" });
+      await save(a.agent, { provider: "openai_compatible", baseURL: "https://8.8.4.4/v1" }).expect(
+        200,
+      );
+      await expect(pinned?.admitCall?.()).rejects.toMatchObject({
+        runFailure: "configuration_changed",
+      });
+      expect((await b.agent.get("/api/ai-credentials").expect(200)).body).toEqual([]);
+      expect(
+        (await b.agent.get("/api/ai-credentials/text-settings").expect(200)).body.configured,
+      ).toBe(false);
+    });
+
+    it("stores explicit Vertex account auth without readback and preserves only its own proxy across mode rotation", async () => {
+      const { agent, orgId } = await orgAgent();
+      const vertexProxy = "http://fixture-user:fixture-password@8.8.8.8:8080";
+      await save(agent, { provider: "vertex", authMode: "express", proxyUrl: vertexProxy }).expect(
+        200,
+      );
+      const privateKey = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: "spki", format: "pem" },
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      }).privateKey;
+      const account = {
+        type: "service_account",
+        project_id: "fixture-project",
+        private_key_id: "fixture-id",
+        private_key: privateKey,
+        client_email: "fixture@fixture-project.iam.gserviceaccount.com",
+        token_uri: "https://oauth2.googleapis.com/token",
+      };
+      const body = {
+        provider: "vertex",
+        authMode: "service_account",
+        project: "fixture-project",
+        location: "global",
+        serviceAccount: account,
+      };
+      const changed = await agent.put("/api/ai-credentials").send(body).expect(200);
+      expect(changed.body).toMatchObject({
+        provider: "vertex",
+        authMode: "service_account",
+        project: "fixture-project",
+        location: "global",
+        proxyConfigured: true,
+      });
+      expect(JSON.stringify(changed.body)).not.toContain("PRIVATE KEY");
+      expect(JSON.stringify(changed.body)).not.toContain("fixture-password");
+      const credential = await repo.credential(orgId);
+      expect(credential).toMatchObject({
+        provider: "vertex",
+        authMode: "service_account",
+        proxyUrl: vertexProxy,
+      });
+      expect(credential?.apiKey).toBeUndefined();
+      const cleared = await agent
+        .put("/api/ai-credentials")
+        .send({ ...body, proxyUrl: null })
+        .expect(200);
+      expect(cleared.body.proxyConfigured).toBe(false);
+      await expect(credential?.admitCall?.()).rejects.toMatchObject({
+        runFailure: "configuration_changed",
+      });
+      const invalid = await agent
+        .put("/api/ai-credentials")
+        .send({
+          ...body,
+          serviceAccount: { ...account, token_uri: "https://attacker.example/token" },
+        })
+        .expect(400);
+      expect(JSON.stringify(invalid.body)).not.toContain("PRIVATE KEY");
+      await agent
+        .put("/api/ai-credentials")
+        .send({ ...body, serviceAccount: { ...account, private_key: "invalid-rsa-fixture" } })
+        .expect(400);
+      expect(probeCalls).toEqual([]);
+    });
     it("selects a provider and model atomically, probes that model, and rejects stale or missing-key writes", async () => {
       const { agent, orgId } = await orgAgent();
       await save(agent, { defaultModel: "legacy-google" }).expect(200);

@@ -5,6 +5,7 @@ export {
   runFailureOf,
   withRunFailure,
 } from "./classify.js";
+export { validateCompatibleEndpoint } from "./compatible-transport.js";
 export {
   type FeedbackArticle,
   type FeedbackSignals,
@@ -52,6 +53,7 @@ export {
   AI_PROVIDERS,
   type AiCredential,
   type AiProvider,
+  credentialFromStored,
   DEFAULT_MODELS,
   probeThinkingOptions,
   resolveModel,
@@ -129,3 +131,4 @@ export {
   type UsageSink,
   type UsageStatus,
 } from "./usage.js";
+export { validateVertexCredential } from "./vertex.js";

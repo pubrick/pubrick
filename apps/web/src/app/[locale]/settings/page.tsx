@@ -17,6 +17,7 @@ import {
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { type AiProviderDraft, AiProviderFields } from "@/components/ai-provider-fields";
 import { AiTextSettingsForm } from "@/components/ai-text-settings";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
@@ -99,6 +100,8 @@ const PROVIDER_NAMES: Record<AiProviderId, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   deepseek: "DeepSeek",
+  vertex: "Google Vertex AI",
+  openai_compatible: "OpenAI-compatible API",
 };
 
 // Same mechanism for the invite dialog: the submit lives in the modal footer.
@@ -215,6 +218,18 @@ export default function SettingsPage() {
     textSettingsRevision.current = value.revision;
     setTextSettings(value);
   }, []);
+  const [providerDrafts, setProviderDrafts] = useState<
+    Partial<Record<AiProviderId, AiProviderDraft>>
+  >({});
+  const [textSettingsDirty, setTextSettingsDirty] = useState(false);
+  const configuredProvider = credentials?.find((row) => row.provider === provider);
+  const providerDraft: AiProviderDraft = providerDrafts[provider] ?? {
+    authMode: configuredProvider?.authMode ?? "express",
+    project: configuredProvider?.project ?? "",
+    location: configuredProvider?.location ?? "global",
+    baseURL: configuredProvider?.baseURL ?? "",
+    proxyUrl: "",
+  };
   const apiKey = keyDrafts[provider] ?? "";
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
@@ -291,6 +306,12 @@ export default function SettingsPage() {
     setPref(next);
   }
 
+  function modelForTest(credential: AiCredentialPublic): string | null {
+    return textSettings?.provider === credential.provider
+      ? textSettings.modelId
+      : (credential.defaultModel ?? DEFAULT_TEXT_MODELS[credential.provider]);
+  }
+
   async function saveKey(e: React.FormEvent) {
     e.preventDefault();
     if (saving || !apiKey.trim()) return;
@@ -299,11 +320,26 @@ export default function SettingsPage() {
     setSaving(true);
     // The field is omitted rather than sent empty: null in that column means
     // "use the provider's own default model", and "" is not a model id.
-    const body = {
-      provider,
-      apiKey,
-    };
     try {
+      const body =
+        provider === "vertex"
+          ? {
+              provider,
+              authMode: providerDraft.authMode,
+              ...(providerDraft.authMode === "service_account"
+                ? {
+                    project: providerDraft.project,
+                    location: providerDraft.location,
+                    serviceAccount: JSON.parse(apiKey),
+                  }
+                : { apiKey }),
+              ...(providerDraft.proxyEdited
+                ? { proxyUrl: providerDraft.proxyUrl.trim() || null }
+                : {}),
+            }
+          : provider === "openai_compatible"
+            ? { provider, apiKey, baseURL: providerDraft.baseURL }
+            : { provider, apiKey };
       const saved = await api<AiCredentialPublic>("/api/ai-credentials", {
         method: "PUT",
         body: JSON.stringify(body),
@@ -314,6 +350,11 @@ export default function SettingsPage() {
         saved,
       ]);
       setKeyDrafts((previous) => ({ ...previous, [provider]: "" }));
+      setProviderDrafts((previous) => {
+        const next = { ...previous };
+        delete next[provider];
+        return next;
+      });
       setKeySaved(true);
       // A new key makes every earlier verdict meaningless. Same reason the
       // server never caches a test: a green tick must always describe the key
@@ -683,7 +724,11 @@ export default function SettingsPage() {
               </p>
             )}
 
-            <AiTextSettingsForm credentials={credentials} onChanged={onTextSettingsChanged} />
+            <AiTextSettingsForm
+              credentials={credentials}
+              onChanged={onTextSettingsChanged}
+              onDirtyChanged={setTextSettingsDirty}
+            />
 
             {credentials === null ? (
               // Not an EmptyState: an empty state is a verdict, and we do not
@@ -703,13 +748,9 @@ export default function SettingsPage() {
                     meta={
                       <div className="whitespace-normal break-words">
                         <p>
-                          {t("aiTestModel", {
-                            model:
-                              textSettings?.provider === credential.provider
-                                ? (textSettings.modelId ?? DEFAULT_TEXT_MODELS[credential.provider])
-                                : (credential.defaultModel ??
-                                  DEFAULT_TEXT_MODELS[credential.provider]),
-                          })}
+                          {modelForTest(credential) === null
+                            ? t("aiTextModelRequired")
+                            : t("aiTestModel", { model: modelForTest(credential) ?? "" })}
                         </p>
                         {testMeta(credential.provider)}
                       </div>
@@ -723,7 +764,9 @@ export default function SettingsPage() {
                           // when the repair retry fires — so an impatient
                           // double-click must not be charged twice.
                           disabled={
-                            textSettings === null || testResults[credential.provider] === "loading"
+                            textSettings === null ||
+                            modelForTest(credential) === null ||
+                            testResults[credential.provider] === "loading"
                           }
                           onClick={() => testKey(credential.provider)}
                         >
@@ -762,10 +805,28 @@ export default function SettingsPage() {
                     </option>
                   ))}
                 </Select>
+                {(provider === "vertex" || provider === "openai_compatible") && (
+                  <div className="space-y-3">
+                    <AiProviderFields
+                      provider={provider}
+                      draft={providerDraft}
+                      disabled={saving}
+                      proxyConfigured={configuredProvider?.proxyConfigured ?? false}
+                      onChange={(draft) => {
+                        setProviderDrafts((previous) => ({ ...previous, [provider]: draft }));
+                        setKeySaved(false);
+                      }}
+                    />
+                  </div>
+                )}
                 <Input
                   type="password"
                   autoComplete="off"
-                  label={t("aiKeyLabel")}
+                  label={t(
+                    provider === "vertex" && providerDraft.authMode === "service_account"
+                      ? "aiVertexAccountJSON"
+                      : "aiKeyLabel",
+                  )}
                   placeholder={t(
                     selectedCredential ? "aiKeyReplacePlaceholder" : "aiKeyAddPlaceholder",
                   )}
@@ -777,7 +838,11 @@ export default function SettingsPage() {
                     setKeyError(null);
                   }}
                   required
-                  className="w-full"
+                  className={
+                    provider === "vertex" || provider === "openai_compatible"
+                      ? "w-full sm:col-span-2"
+                      : "w-full"
+                  }
                 />
               </div>
               {credentials !== null && (
@@ -806,11 +871,13 @@ export default function SettingsPage() {
                   </a>
                 </p>
               )}
-              {provider !== "google" && (
-                <p className="text-sm text-fg-secondary">
-                  {t("aiDirectKeyHint", { provider: PROVIDER_NAMES[provider] })}
-                </p>
-              )}
+              {provider !== "google" &&
+                provider !== "vertex" &&
+                provider !== "openai_compatible" && (
+                  <p className="text-sm text-fg-secondary">
+                    {t("aiDirectKeyHint", { provider: PROVIDER_NAMES[provider] })}
+                  </p>
+                )}
               <Advanced
                 dirty={proxyUrl.trim() !== "" || Boolean(googleCredential?.proxyConfigured)}
               >
@@ -1135,7 +1202,12 @@ export default function SettingsPage() {
             <Segmented options={themeOptions} value={pref} onChange={changeTheme} />
           </Card>
           <LanguageCard
-            hasUnsavedText={Object.values(keyDrafts).some(Boolean) || proxyUrl !== ""}
+            hasUnsavedText={
+              textSettingsDirty ||
+              Object.values(keyDrafts).some(Boolean) ||
+              Object.keys(providerDrafts).length > 0 ||
+              proxyUrl !== ""
+            }
           />
           <Card>
             <h3 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h3>

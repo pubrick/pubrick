@@ -152,6 +152,7 @@ export class AiCredentialProbe {
   }
 
   protected async googleAcceptsKey(credential: AiCredential): Promise<boolean> {
+    if (credential.provider !== "google") return false;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GOOGLE_KEY_CHECK_TIMEOUT_MS);
     try {

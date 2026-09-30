@@ -3,13 +3,15 @@ import { type AiProviderId, aiProviderSchema } from "./dto/ai-credentials.js";
 import { PermanentError } from "./errors.js";
 
 /** Explicit vendor identifiers, shared with the browser and transactional admissions. */
-export const DEFAULT_TEXT_MODELS: Record<AiProviderId, string> = {
+export const DEFAULT_TEXT_MODELS = {
   google: "gemini-3.8-flash",
   openrouter: "google/gemini-3.8-flash",
   openai: "gpt-6-luna",
   anthropic: "claude-sonnet-5-5",
   deepseek: "deepseek-flash",
-};
+  vertex: "gemini-3.8-flash",
+  openai_compatible: null,
+} as const satisfies Record<AiProviderId, string | null>;
 
 export const aiTextSnapshotSchema = z.object({
   provider: aiProviderSchema,

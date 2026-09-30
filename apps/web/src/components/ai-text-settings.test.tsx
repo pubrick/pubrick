@@ -43,6 +43,40 @@ function install(value = initial, refusal = false) {
   });
 }
 describe("workspace text settings", () => {
+  it("shows the required custom model immediately and reports pending changes to navigation", async () => {
+    install({
+      provider: "openai_compatible",
+      model: null,
+      modelId: null,
+      revision: 4,
+      configured: false,
+    });
+    const dirty = vi.fn();
+    render(
+      <AiTextSettingsForm
+        credentials={[
+          {
+            provider: "openai_compatible",
+            defaultModel: null,
+            proxyConfigured: false,
+            updatedAt: "2026-09-01T00:00:00Z",
+          },
+        ]}
+        onChanged={vi.fn()}
+        onDirtyChanged={dirty}
+      />,
+    );
+    await screen.findByText(en.SettingsPage.aiTextModelRequired);
+    expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).toBeVisible();
+    expect(screen.getByRole("button", { name: en.SettingsPage.aiTextSave })).toBeDisabled();
+    await userEvent
+      .setup()
+      .type(screen.getByLabelText(en.SettingsPage.aiModelLabel), "my-server-model");
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.SettingsPage.aiTextSave }));
+    await screen.findByText(en.SettingsPage.aiTextSaved);
+    expect(dirty).toHaveBeenLastCalledWith(false);
+  });
   it("saves provider and model together with a revision, independently of credentials", async () => {
     install();
     const changed = vi.fn();

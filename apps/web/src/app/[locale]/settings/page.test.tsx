@@ -274,6 +274,17 @@ describe("Settings — Appearance", () => {
  * whole suite green.
  */
 describe("Settings — Language", () => {
+  it("asks before discarding an unsaved text model when the language is switched", async () => {
+    installApi([], { credentials: [googleKey] });
+    await renderSettings();
+    const user = userEvent.setup();
+    await screen.findByLabelText(en.SettingsPage.aiTextProvider);
+    await user.click(screen.getByText(en.SettingsPage.aiTextModelOptions));
+    await user.type(screen.getByLabelText(en.SettingsPage.aiModelLabel), "my-model");
+    await user.click(screen.getByRole("tab", { name: "Español" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(routerMock.replace).not.toHaveBeenCalled();
+  });
   it("mounts the language switcher on the settings screen", async () => {
     await renderSettings();
 
@@ -309,6 +320,72 @@ describe("Settings — Language", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("Settings — explicit provider modes", () => {
+  it("saves account JSON as a typed Vertex mode and never as an API key", async () => {
+    const calls: Call[] = [];
+    installApi(calls);
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), "vertex");
+    await user.selectOptions(
+      screen.getByLabelText(en.SettingsPage.aiVertexMode),
+      "service_account",
+    );
+    expect(screen.getByLabelText(en.SettingsPage.aiVertexProject)).toBeVisible();
+    await user.type(screen.getByLabelText(en.SettingsPage.aiVertexProject), "fixture-project");
+    const account = {
+      type: "service_account",
+      project_id: "fixture-project",
+      private_key_id: "fixture-id",
+      private_key: "fixture-private-key",
+      client_email: "fixture@fixture-project.iam.gserviceaccount.com",
+      token_uri: "https://oauth2.googleapis.com/token",
+    };
+    const secret = screen.getByLabelText(en.SettingsPage.aiVertexAccountJSON);
+    expect(secret).toHaveAttribute("type", "password");
+    await user.click(secret);
+    await user.paste(JSON.stringify(account));
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      provider: "vertex",
+      authMode: "service_account",
+      project: "fixture-project",
+      location: "global",
+      serviceAccount: account,
+    });
+    expect(
+      aiCredentialUpsertSchema.parse(calls.find((call) => call.method === "PUT")?.body),
+    ).toEqual(calls.find((call) => call.method === "PUT")?.body);
+    expect(screen.queryByDisplayValue(JSON.stringify(account))).not.toBeInTheDocument();
+  });
+
+  it("saves a compatible base URL alongside its key without inventing a model", async () => {
+    const calls: Call[] = [];
+    installApi(calls);
+    await renderSettings();
+    const user = userEvent.setup();
+    await user.selectOptions(
+      screen.getByLabelText(en.SettingsPage.aiProviderLabel),
+      "openai_compatible",
+    );
+    const endpoint = screen.getByLabelText(en.SettingsPage.aiCompatibleEndpoint);
+    expect(endpoint).toBeVisible();
+    await user.type(endpoint, "https://llm.example/v1");
+    await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "fixture-key");
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")?.body).toEqual({
+      provider: "openai_compatible",
+      baseURL: "https://llm.example/v1",
+      apiKey: "fixture-key",
+    });
+    expect(
+      aiCredentialUpsertSchema.parse(calls.find((call) => call.method === "PUT")?.body),
+    ).toEqual(calls.find((call) => call.method === "PUT")?.body);
   });
 });
 

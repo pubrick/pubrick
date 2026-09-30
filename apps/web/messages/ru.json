@@ -1361,7 +1361,21 @@
     "aiTextReload": "Обновить",
     "aiTestModel": "Модель проверки: {model}",
     "aiTestFailConfigurationChanged": "Ключ изменился до начала запроса. Проверьте настройки и повторите попытку.",
-    "aiTextModelOptions": "Параметры модели"
+    "aiTextModelOptions": "Параметры модели",
+    "aiCompatibleEndpoint": "Базовый URL API (обязательно)",
+    "aiCompatibleHint": "Публичный HTTPS API, совместимый с OpenAI Chat Completions. Выберите провайдера и укажите его модель в разделе генерации текста. Потоковые ответы не поддерживаются.",
+    "aiVertexMode": "Авторизация Vertex",
+    "aiVertexExpress": "API-ключ Express",
+    "aiVertexAccount": "Сервисный аккаунт",
+    "aiVertexProject": "ID проекта Google Cloud (обязательно)",
+    "aiVertexLocation": "Регион",
+    "aiVertexExpressHint": "Используйте ключ Vertex Express. Префикс ключа не определяет способ авторизации.",
+    "aiVertexAccountHint": "Вставьте стандартный JSON сервисного аккаунта целиком в поле секрета. Используется только этот аккаунт; учётные данные сервера не используются.",
+    "aiVertexAccountJSON": "JSON сервисного аккаунта (обязательно)",
+    "aiVertexProxy": "URL прокси Vertex",
+    "aiVertexProxyReplace": "Оставьте без изменений или вставьте новый прокси",
+    "aiVertexProxyHint": "Необязательно. Используется только для этого ключа Vertex, включая OAuth. Очистка изменённого поля удалит сохранённый прокси. URL шифруется и после сохранения не показывается.",
+    "aiTextModelRequired": "Провайдер сохранён. Укажите ID его модели ниже, чтобы включить генерацию текста."
   },
   "SearchSettings": {
     "title": "Поисковый API",

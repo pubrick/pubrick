@@ -91,7 +91,10 @@ export function aiTextSettingsView(state: AiSelectionState): AiTextSettings {
     model,
     revision,
     modelId: provider ? (model ?? DEFAULT_TEXT_MODELS[provider]) : null,
-    configured: provider !== null && state.credentials.some((row) => row.provider === provider),
+    configured:
+      provider !== null &&
+      (model ?? DEFAULT_TEXT_MODELS[provider]) !== null &&
+      state.credentials.some((row) => row.provider === provider),
   };
 }
 
@@ -100,9 +103,14 @@ export function snapshotAiTextSelection(state: AiSelectionState): AiTextSnapshot
   if (!provider) return undefined;
   const credential = state.credentials.find((row) => row.provider === provider);
   if (!credential) throw new AiTextSelectionChangedError();
+  const modelId = model ?? DEFAULT_TEXT_MODELS[provider];
+  if (!modelId)
+    throw new AiTextSelectionChangedError(
+      "Set a model ID in text generation Settings, then retry.",
+    );
   return {
     provider,
-    modelId: model ?? DEFAULT_TEXT_MODELS[provider],
+    modelId,
     credentialId: credential.id,
     credentialRevision: credential.revision,
     settingsRevision: revision,

@@ -17,31 +17,114 @@ import type { CostSummary } from "../cost-display.js";
  * on save), or one the column allows and no factory can build (a 500 on the
  * first call). Neither is expressible from one list.
  */
-export const AI_PROVIDERS = ["google", "openrouter", "openai", "anthropic", "deepseek"] as const;
+export const API_KEY_PROVIDERS = [
+  "google",
+  "openrouter",
+  "openai",
+  "anthropic",
+  "deepseek",
+] as const;
+export const AI_PROVIDERS = [...API_KEY_PROVIDERS, "vertex", "openai_compatible"] as const;
 export type AiProviderId = (typeof AI_PROVIDERS)[number];
 
 export const aiProviderSchema = z.enum(AI_PROVIDERS);
 
-/**
- * Saving a key. `PUT` rather than `POST`: an org has at most one key per
- * provider (a unique index says so), so a second save replaces the first
- * instead of creating a duplicate the user cannot tell apart.
- *
- * `defaultModel` is optional because the column is nullable and null has a
- * meaning — "use the provider's built-in default", the branch
- * `resolveModel` implements. Requiring a value here would make that branch
- * unreachable and force the UI to hardcode a model id that lives in
- * `@pubrick/ai`. An empty string is rejected rather than silently coerced:
- * the caller omits the field.
+/** Locations verified against the native Vertex SDK and Gemini catalog. */
+export const VERTEX_LOCATIONS = ["global", "us", "eu"] as const;
+export const vertexLocationSchema = z.enum(VERTEX_LOCATIONS);
+const projectSchema = z.string().regex(/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/);
+export const vertexServiceAccountSchema = z
+  .object({
+    type: z.literal("service_account"),
+    project_id: projectSchema,
+    private_key_id: z.string().min(1).max(200),
+    private_key: z.string().min(1).max(16384),
+    client_email: z
+      .string()
+      .regex(/^[a-zA-Z0-9._-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$/)
+      .max(320),
+    client_id: z.string().max(200).optional(),
+    auth_uri: z.literal("https://accounts.google.com/o/oauth2/auth").optional(),
+    token_uri: z.literal("https://oauth2.googleapis.com/token"),
+    auth_provider_x509_cert_url: z.literal("https://www.googleapis.com/oauth2/v1/certs").optional(),
+    client_x509_cert_url: z.string().url().max(1024).optional(),
+    universe_domain: z.literal("googleapis.com").optional(),
+  })
+  .strict();
+export type VertexServiceAccount = z.infer<typeof vertexServiceAccountSchema>;
+
+/** DNS/public-IP validation is performed separately on save and every socket. */
+export const compatibleBaseURLSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine((value) => {
+    if (!/^https:\/\/[^/?#\\]+(?:\/[a-zA-Z0-9_./~-]*)?$/.test(value)) return false;
+    try {
+      const url = new URL(value);
+      return (
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash &&
+        !value.split("/").some((part) => part === "." || part === "..")
+      );
+    } catch {
+      return false;
+    }
+  }, "Use an HTTPS base URL without credentials, query, fragment or ambiguous path");
+
+const defaultModelSchema = z.string().trim().min(1).max(200).optional();
+const apiKeySchema = z
+  .string()
+  .min(8)
+  .max(4096)
+  .refine((key) => !/[\r\n\0]/.test(key), "API keys must not contain control characters");
+const proxyURLSchema = z.string().min(1).max(4096).nullable().optional();
+const nativeCredentialUpsertSchema = z
+  .object({
+    provider: z.enum(API_KEY_PROVIDERS),
+    apiKey: apiKeySchema,
+    defaultModel: defaultModelSchema,
+  })
+  .strict();
+const vertexExpressUpsertSchema = z
+  .object({
+    provider: z.literal("vertex"),
+    authMode: z.literal("express"),
+    apiKey: apiKeySchema,
+    proxyUrl: proxyURLSchema,
+    defaultModel: defaultModelSchema,
+  })
+  .strict();
+const vertexAccountUpsertSchema = z
+  .object({
+    provider: z.literal("vertex"),
+    authMode: z.literal("service_account"),
+    project: projectSchema,
+    location: vertexLocationSchema,
+    serviceAccount: vertexServiceAccountSchema,
+    proxyUrl: proxyURLSchema,
+    defaultModel: defaultModelSchema,
+  })
+  .strict();
+const compatibleUpsertSchema = z
+  .object({
+    provider: z.literal("openai_compatible"),
+    apiKey: apiKeySchema,
+    baseURL: compatibleBaseURLSchema,
+    defaultModel: defaultModelSchema,
+  })
+  .strict();
+/** PUT replaces the provider's single credential. Legacy per-key model metadata
+ * remains optional; custom APIs have no implicit model and use text Settings.
  */
-export const aiCredentialUpsertSchema = z.object({
-  provider: aiProviderSchema,
-  // Lower bound catches a pasted-empty or truncated key before it becomes a
-  // provider 401 the user reads as "my key is wrong". Upper bound matches the
-  // channel-credential cap, so one field cannot be used to store a document.
-  apiKey: z.string().min(8).max(4096),
-  defaultModel: z.string().min(1).max(200).optional(),
-});
+export const aiCredentialUpsertSchema = z.union([
+  nativeCredentialUpsertSchema,
+  vertexExpressUpsertSchema,
+  vertexAccountUpsertSchema,
+  compatibleUpsertSchema,
+]);
 export type AiCredentialUpsert = z.infer<typeof aiCredentialUpsertSchema>;
 
 /** A Google proxy is saved separately so rotating the API key cannot clear it. */
@@ -135,6 +218,24 @@ export function parseStoredAiCredential(plaintext: unknown): StoredAiCredential 
   return parsed.data;
 }
 
+/** Provider identity comes from the tenant-scoped row, never from its secret blob. */
+export function parseProviderAiCredential(provider: AiProviderId, plaintext: unknown) {
+  const blob = typeof plaintext === "object" && plaintext !== null ? plaintext : {};
+  if (provider !== "vertex" && provider !== "openai_compatible")
+    return { provider, ...parseStoredAiCredential(plaintext) };
+  const parsed = (
+    provider === "vertex"
+      ? z.union([vertexExpressUpsertSchema, vertexAccountUpsertSchema])
+      : compatibleUpsertSchema
+  ).safeParse({ ...blob, provider });
+  if (!parsed.success)
+    throw new MalformedStoredAiCredentialError(
+      "Stored AI credentials do not match their explicit provider mode. Save them again.",
+    );
+  return parsed.data;
+}
+export type ProviderAiCredential = ReturnType<typeof parseProviderAiCredential>;
+
 /**
  * What every credential endpoint returns.
  *
@@ -148,6 +249,10 @@ export type AiCredentialPublic = {
   defaultModel: string | null;
   updatedAt: string;
   proxyConfigured: boolean;
+  authMode?: "express" | "service_account";
+  project?: string;
+  location?: z.infer<typeof vertexLocationSchema>;
+  baseURL?: string;
 };
 
 /**
