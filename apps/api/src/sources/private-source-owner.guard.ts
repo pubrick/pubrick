@@ -17,12 +17,11 @@ export class PrivateSourceOwnerGuard implements CanActivate {
     const userId = request.session?.user?.id;
     if (!orgId || !userId)
       throw forbidden("private_source_owner_required", "Organization owner or admin required");
-    const [member] = await db
+    const memberships = await db
       .select({ role: schema.member.role })
       .from(schema.member)
-      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
-      .limit(1);
-    if (!isOrganizationManager(member?.role))
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+    if (!memberships.some((membership) => isOrganizationManager(membership.role)))
       throw forbidden("private_source_owner_required", "Organization owner or admin required");
     request.privateSourceActorId = userId;
     return true;

@@ -392,13 +392,13 @@ export class TelegramLoginRepository implements OnModuleInit, OnModuleDestroy {
     orgId: string,
     actorId: string,
   ) {
-    const [member] = await tx
+    const memberships = await tx
       .select({ role: schema.member.role })
       .from(schema.member)
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorId)))
-      .for("update")
-      .limit(1);
-    if (!isOrganizationManager(member?.role))
+      .orderBy(schema.member.id)
+      .for("update");
+    if (!memberships.some((membership) => isOrganizationManager(membership.role)))
       throw forbidden("private_source_owner_required", "Organization owner or admin required");
   }
 

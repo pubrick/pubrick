@@ -19,7 +19,7 @@ export class ApiKeysManagerGuard implements CanActivate {
     if (!request.orgId || !request.session?.user?.id) {
       throw new ForbiddenException("Organization owner or admin required");
     }
-    const [membership] = await db
+    const memberships = await db
       .select({ role: schema.member.role })
       .from(schema.member)
       .where(
@@ -27,9 +27,8 @@ export class ApiKeysManagerGuard implements CanActivate {
           eq(schema.member.organizationId, request.orgId),
           eq(schema.member.userId, request.session.user.id),
         ),
-      )
-      .limit(1);
-    if (!isOrganizationManager(membership?.role)) {
+      );
+    if (!memberships.some((membership) => isOrganizationManager(membership.role))) {
       throw new ForbiddenException("Organization owner or admin required");
     }
     return true;

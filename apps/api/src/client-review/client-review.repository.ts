@@ -219,12 +219,11 @@ export class ClientReviewRepository {
   constructor(private readonly media: MediaRepository) {}
 
   private async requireOwner(orgId: string, userId: string) {
-    const [member] = await db
+    const memberships = await db
       .select({ role: schema.member.role })
       .from(schema.member)
-      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
-      .limit(1);
-    if (!isOrganizationManager(member?.role)) {
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+    if (!memberships.some((membership) => isOrganizationManager(membership.role))) {
       throw forbidden("client_review_role_required", "Organization owner or admin required");
     }
   }
