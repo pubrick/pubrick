@@ -30,7 +30,9 @@ export function WorkspaceSwitcher({ activeId }: { activeId: string | null }) {
         const result = await authClient.organization.list();
         if (!live) return;
         if (result.error || !result.data) throw new Error("list failed");
-        setWorkspaces(result.data.map(({ id, name }) => ({ id, name })));
+        const memberships = result.data.map(({ id, name }) => ({ id, name }));
+        setWorkspaces(memberships);
+        setSelected((previous) => (memberships.some(({ id }) => id === previous) ? previous : ""));
       } catch {
         if (live) setError(t("workspaceLoadFailed"));
       }
@@ -40,25 +42,31 @@ export function WorkspaceSwitcher({ activeId }: { activeId: string | null }) {
       live = false;
     };
   }, [retry, t]);
+  // A native select otherwise visually picks the first option while React's
+  // value can still be an active organization whose membership was removed.
+  const selectedId = workspaces?.some(({ id }) => id === selected) ? selected : "";
   async function switchWorkspace() {
-    if (
-      busy ||
-      !selected ||
-      selected === activeId ||
-      !workspaces?.some(({ id }) => id === selected)
-    )
-      return;
+    if (busy || !selectedId || selectedId === activeId) return;
     setBusy(true);
     setError(null);
+    let result: Awaited<ReturnType<typeof authClient.organization.setActive>>;
     try {
-      const result = await authClient.organization.setActive({ organizationId: selected });
-      if (result.error) throw new Error("switch failed");
-      // Full navigation discards all previous tenant component state and caches.
-      navigateToWorkspace(locale);
+      result = await authClient.organization.setActive({ organizationId: selectedId });
     } catch {
+      // The server may already have committed the cookie/session change.
+      // Read it through a new document rather than retaining old tenant state.
+      navigateToWorkspace(locale);
+      return;
+    }
+    const status = result?.error?.status;
+    if (status && status >= 400 && status < 500 && status !== 408 && status !== 499) {
       setError(t("workspaceSwitchFailed"));
       setBusy(false);
+      return;
     }
+    // Success, 5xx, unknown responses and timeouts all need the authoritative
+    // session. Full navigation discards previous tenant component/router state.
+    navigateToWorkspace(locale);
   }
   return (
     <div className="mt-4 space-y-2">
@@ -68,14 +76,14 @@ export function WorkspaceSwitcher({ activeId }: { activeId: string | null }) {
           <div className="min-w-0 flex-1">
             <Select
               label={t("workspaceTitle")}
-              value={selected}
+              value={selectedId}
               disabled={busy}
               onChange={(event) => {
                 setSelected(event.target.value);
                 setError(null);
               }}
             >
-              {!selected && <option value="">{t("workspaceSelect")}</option>}
+              {!selectedId && <option value="">{t("workspaceSelect")}</option>}
               {workspaces.map(({ id, name }) => (
                 <option key={id} value={id}>
                   {name}
@@ -85,7 +93,7 @@ export function WorkspaceSwitcher({ activeId }: { activeId: string | null }) {
           </div>
           <Button
             variant="secondary"
-            disabled={busy || !selected || selected === activeId}
+            disabled={busy || !selectedId || selectedId === activeId}
             onClick={() => void switchWorkspace()}
           >
             {t(busy ? "workspaceSwitching" : "workspaceSwitch")}

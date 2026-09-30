@@ -1176,7 +1176,7 @@
     "workspaceSwitch": "Switch",
     "workspaceSwitching": "Switching…",
     "workspaceLoadFailed": "Your workspaces could not be loaded.",
-    "workspaceSwitchFailed": "Could not switch workspaces. Your current workspace is unchanged.",
+    "workspaceSwitchFailed": "Could not switch workspaces. Please try again.",
     "workspaceRetry": "Retry",
     "workspaceNoOrg": "No organization",
     "aiTitle": "AI provider",

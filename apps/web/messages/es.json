@@ -1176,7 +1176,7 @@
     "workspaceSwitch": "Cambiar",
     "workspaceSwitching": "Cambiando…",
     "workspaceLoadFailed": "No se pudieron cargar tus espacios de trabajo.",
-    "workspaceSwitchFailed": "No se pudo cambiar de espacio de trabajo. El espacio actual no ha cambiado.",
+    "workspaceSwitchFailed": "No se pudo cambiar de espacio de trabajo. Vuelve a intentarlo.",
     "workspaceRetry": "Reintentar",
     "workspaceNoOrg": "Sin organización",
     "aiTitle": "Proveedor de IA",

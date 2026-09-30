@@ -1176,7 +1176,7 @@
     "workspaceSwitch": "Переключить",
     "workspaceSwitching": "Переключение…",
     "workspaceLoadFailed": "Не удалось загрузить рабочие пространства.",
-    "workspaceSwitchFailed": "Не удалось переключить рабочее пространство. Текущее пространство не изменилось.",
+    "workspaceSwitchFailed": "Не удалось переключить рабочее пространство. Попробуйте ещё раз.",
     "workspaceRetry": "Повторить",
     "workspaceNoOrg": "Нет организации",
     "aiTitle": "ИИ-провайдер",
