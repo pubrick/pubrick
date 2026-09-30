@@ -102,7 +102,10 @@ describe("VC.ru portable article package", () => {
     vi.stubGlobal(
       "Blob",
       class extends NativeBlob {
-        constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+        constructor(
+          parts: NonNullable<ConstructorParameters<typeof NodeBlob>[0]>,
+          options?: ConstructorParameters<typeof NodeBlob>[1],
+        ) {
           if (
             parts.some(
               (part) => ArrayBuffer.isView(part) && part.buffer instanceof SharedArrayBuffer,

@@ -120,5 +120,7 @@ export async function buildVcPackage(
 
 /** Prepare an archive for the browser download boundary. */
 export function vcPackageBlob(payload: Uint8Array): Blob {
-  return new Blob([payload], { type: "application/zip" });
+  // Blob cannot accept SharedArrayBuffer-backed views. Copy only the view
+  // bytes into an owned ArrayBuffer, retaining offsets and archive fidelity.
+  return new Blob([Uint8Array.from(payload).buffer], { type: "application/zip" });
 }
