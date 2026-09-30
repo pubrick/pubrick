@@ -58,11 +58,9 @@ describe("SMTP delivery attempt boundary", () => {
   it("loads fresh authoritative ownership before every retry and retains a stable Message-ID", async () => {
     const smtp = capture();
     const mail = createSmtpMailTransport(config, { identity, now: () => now });
-    const resolve = vi
-      .fn()
-      .mockResolvedValue({
-        user: { id: payload.userId, email: payload.recipient, emailVerified: true },
-      });
+    const resolve = vi.fn().mockResolvedValue({
+      user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+    });
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "sent" });
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "sent" });
     expect(resolve).toHaveBeenCalledTimes(2);
