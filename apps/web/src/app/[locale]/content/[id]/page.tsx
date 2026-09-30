@@ -75,7 +75,7 @@ import { PostCostReceipt } from "./post-cost-receipt";
 import { RichMasterEditor } from "./rich-master-editor";
 import { hasRichApiSupport, richDocumentFromPlainText } from "./rich-master-flow";
 import { SourceStrip } from "./source-strip";
-import { buildVcPackage } from "./vc-package";
+import { buildVcPackage, vcPackageBlob } from "./vc-package";
 import { VersionHistory } from "./version-history";
 
 type Channel = { id: string; platform: string; name: string };
@@ -1455,7 +1455,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         coverMediaId: latest.coverMediaId,
         images: state.images,
       });
-      const url = URL.createObjectURL(new Blob([payload], { type: "application/zip" }));
+      const url = URL.createObjectURL(vcPackageBlob(payload));
       try {
         const link = document.createElement("a");
         link.href = url;

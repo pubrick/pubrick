@@ -117,3 +117,8 @@ export async function buildVcPackage(
   files["README.txt"] = strToU8(guide);
   return zipSync(files, { level: 0 });
 }
+
+/** Prepare an archive for the browser download boundary. */
+export function vcPackageBlob(payload: Uint8Array): Blob {
+  return new Blob([payload], { type: "application/zip" });
+}

@@ -1,7 +1,10 @@
+import { Blob as NodeBlob } from "node:buffer";
 import type { ContentImageDto } from "@pubrick/shared";
 import { strFromU8, unzipSync } from "fflate";
-import { describe, expect, it, vi } from "vitest";
-import { buildVcPackage, vcArticleHtml } from "./vc-package";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildVcPackage, vcArticleHtml, vcPackageBlob } from "./vc-package";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const images: ContentImageDto[] = [
   {
@@ -89,6 +92,36 @@ describe("VC.ru portable article package", () => {
       "after paragraph 1 in the main article",
     );
     expect(strFromU8(files["README.txt"] ?? new Uint8Array())).toContain("alignment: right");
+  });
+
+  it("downloads complete ZIP bytes even when the archive view has shared backing storage", async () => {
+    const archive = await buildVcPackage({ ...article, images: [] });
+    const shared = new Uint8Array(new SharedArrayBuffer(archive.length + 4));
+    shared.set(archive, 2);
+    const NativeBlob = NodeBlob;
+    vi.stubGlobal(
+      "Blob",
+      class extends NativeBlob {
+        constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+          if (
+            parts.some(
+              (part) => ArrayBuffer.isView(part) && part.buffer instanceof SharedArrayBuffer,
+            )
+          )
+            throw new TypeError("Shared buffers are not BlobPart values");
+          super(parts, options);
+        }
+      },
+    );
+    const blob = vcPackageBlob(shared.subarray(2, archive.length + 2));
+    expect(blob.type).toBe("application/zip");
+    const downloaded = new Uint8Array(await blob.arrayBuffer());
+    expect(downloaded).toEqual(archive);
+    const files = unzipSync(downloaded);
+    expect(strFromU8(files["article.html"] ?? new Uint8Array())).toContain("<!doctype html>");
+    expect(strFromU8(files["README.txt"] ?? new Uint8Array())).toContain(
+      "VC.ru manual publishing package",
+    );
   });
 
   it("includes the saved cover and fetches it once when also used inline", async () => {
