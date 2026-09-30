@@ -12,6 +12,7 @@ import {
   IMAGE_MODEL,
   imageCostUsd,
   KNOWLEDGE_EMBEDDING_MODEL,
+  preflightError,
   RESEARCHER,
   type RunStepContext,
   redactSecrets,
@@ -40,6 +41,7 @@ import {
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
 import { z } from "zod";
+import { googleCallArguments, withWorkerAiCall } from "../hosted-ai-call";
 import {
   type ClaimedRun,
   type FenceOutcome,
@@ -529,13 +531,16 @@ export class GenerateService {
               let result: Awaited<ReturnType<typeof embedKnowledgeText>> | undefined;
               try {
                 const proxyUrl = await this.repo.googleProxy?.(run.orgId);
-                result = await embedKnowledgeText(
-                  key,
-                  topic,
-                  "RETRIEVAL_QUERY",
-                  ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+                result = await withWorkerAiCall(run.orgId, "embedding", (signal) =>
+                  embedKnowledgeText(
+                    key,
+                    topic,
+                    "RETRIEVAL_QUERY",
+                    ...googleCallArguments(proxyUrl, signal),
+                  ),
                 );
               } catch (error) {
+                if (preflightError(error)) throw error;
                 await recordEmbeddingUsage({
                   provider: "google",
                   modelId: KNOWLEDGE_EMBEDDING_MODEL,
@@ -746,7 +751,15 @@ export class GenerateService {
                 "The image should illustrate this draft without text, logos, or watermarks. " +
                 `Draft subject:\n<draft>\n${edited.body.slice(0, 1600)}\n</draft>`;
               const proxyUrl = await this.repo.googleProxy?.(run.orgId);
-              const result = await this.imageCaller.call(googleKey, prompt, undefined, proxyUrl);
+              const result = await withWorkerAiCall(run.orgId, "image", (signal) =>
+                this.imageCaller.call(
+                  googleKey,
+                  prompt,
+                  undefined,
+                  proxyUrl,
+                  ...(signal ? ([signal] as [AbortSignal]) : []),
+                ),
+              );
               const cost = imageCostUsd(result.usage);
               const record: UsageRecord = {
                 provider: "google",
@@ -830,7 +843,15 @@ export class GenerateService {
                   `Article context:\n<draft>\n${edited.body.slice(0, 1000)}\n</draft>\n` +
                   `Passage to illustrate:\n<passage>\n${text.slice(0, 1000)}\n</passage>`;
                 const proxyUrl = await this.repo.googleProxy?.(run.orgId);
-                const result = await this.imageCaller.call(googleKey, prompt, undefined, proxyUrl);
+                const result = await withWorkerAiCall(run.orgId, "image", (signal) =>
+                  this.imageCaller.call(
+                    googleKey,
+                    prompt,
+                    undefined,
+                    proxyUrl,
+                    ...(signal ? ([signal] as [AbortSignal]) : []),
+                  ),
+                );
                 const cost = imageCostUsd(result.usage);
                 const record: UsageRecord = {
                   provider: "google",

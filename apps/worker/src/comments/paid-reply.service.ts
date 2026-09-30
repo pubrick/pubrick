@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { generatePaidReply } from "@pubrick/ai";
 import type { PaidReplyAnalysisJob } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
+import { scopedGoogleFetch, withWorkerAiCall } from "../hosted-ai-call";
 import { PaidReplyRepository } from "./paid-reply.repository";
 
 @Injectable()
@@ -18,6 +19,12 @@ export class PaidReplyService {
   }
 
   async handle(job: PaidReplyAnalysisJob): Promise<void> {
+    // Acquire before the one-call claim. A local refusal must neither consume
+    // that fence nor create a fabricated "unrecorded spend" marker.
+    await withWorkerAiCall(job.orgId, "text", (signal) => this.dispatch(job, signal));
+  }
+
+  private async dispatch(job: PaidReplyAnalysisJob, signal?: AbortSignal): Promise<void> {
     const claim = await this.replies.claim(job);
     if (!claim) return;
     let metered = false;
@@ -29,7 +36,7 @@ export class PaidReplyService {
           await this.replies.recordUsage(job, usage);
           metered = true;
         },
-        undefined,
+        scopedGoogleFetch(signal, claim.proxyUrl),
         claim.proxyUrl,
       );
       await this.replies.finish(job, result);

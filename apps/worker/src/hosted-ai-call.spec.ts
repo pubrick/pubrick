@@ -1,8 +1,21 @@
-import { ProviderPreflightError, ProviderPreflightTransientError } from "@pubrick/ai";
+import {
+  googleProxyFetch,
+  ProviderPreflightError,
+  ProviderPreflightTransientError,
+} from "@pubrick/ai";
 import { AiCallAdmissionError, withHostedAiCall } from "@pubrick/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { googleCallArguments, hostedAiCallScope, withWorkerAiCall } from "./hosted-ai-call";
+import {
+  googleCallArguments,
+  hostedAiCallScope,
+  scopedGoogleFetch,
+  withWorkerAiCall,
+} from "./hosted-ai-call";
 
+vi.mock("@pubrick/ai", async (original) => ({
+  ...(await original<typeof import("@pubrick/ai")>()),
+  googleProxyFetch: vi.fn(),
+}));
 vi.mock("./db", () => ({ db: {}, pool: {} }));
 vi.mock("@pubrick/db", async (original) => ({
   ...(await original<typeof import("@pubrick/db")>()),
@@ -83,6 +96,23 @@ describe("worker physical AI admission", () => {
     const failure = new Error("HTTP connection closed");
     vi.mocked(withHostedAiCall).mockRejectedValueOnce(failure);
     await expect(withWorkerAiCall("org_worker", "image", vi.fn())).rejects.toBe(failure);
+  });
+
+  it("combines a paid-reply timeout with scoped cancellation and preserves its proxy", async () => {
+    const scoped = new AbortController();
+    const timeout = new AbortController();
+    vi.mocked(googleProxyFetch).mockResolvedValueOnce(new Response("fixture"));
+    const fetcher = scopedGoogleFetch(scoped.signal, "http://proxy.example:8080");
+    await fetcher?.("https://generativelanguage.googleapis.com/v1beta/models/fixture:countTokens", {
+      signal: timeout.signal,
+      method: "POST",
+    });
+    const forwarded = vi.mocked(googleProxyFetch).mock.calls.at(-1)?.[1]?.signal;
+    expect(forwarded?.aborted).toBe(false);
+    scoped.abort(new Error("lease expired"));
+    expect(forwarded?.aborted).toBe(true);
+    expect(vi.mocked(googleProxyFetch).mock.calls.at(-1)?.[2]).toBe("http://proxy.example:8080");
+    expect(scopedGoogleFetch()).toBeUndefined();
   });
 
   it("keeps self-hosted calls independent of hosted identity and leases", async () => {

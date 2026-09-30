@@ -7,6 +7,7 @@ import {
   generateStructured,
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,
+  preflightError,
   redactSecrets,
   resolveModel,
   runFailureOf,
@@ -24,6 +25,7 @@ import {
 import type { PgBoss } from "pg-boss";
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
+import { googleCallArguments, withWorkerAiCall } from "../hosted-ai-call";
 import { RelevanceRepository } from "./relevance.repository";
 
 const verdictSchema = z.object({
@@ -241,13 +243,16 @@ export class RelevanceService {
       let result: Awaited<ReturnType<Embedder>> | undefined;
       try {
         const proxyUrl = await this.repo.googleProxy?.(job.orgId);
-        result = await this.embedText(
-          googleKey,
-          `${input.title.slice(0, 500)}\n\n${input.summary.slice(0, 1500)}`,
-          "RETRIEVAL_DOCUMENT",
-          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+        result = await withWorkerAiCall(job.orgId, "embedding", (signal) =>
+          this.embedText(
+            googleKey,
+            `${input.title.slice(0, 500)}\n\n${input.summary.slice(0, 1500)}`,
+            "RETRIEVAL_DOCUMENT",
+            ...googleCallArguments(proxyUrl, signal),
+          ),
         );
       } catch (error) {
+        if (preflightError(error)) throw error;
         try {
           await this.repo.recordEmbeddingUsage(
             job.orgId,

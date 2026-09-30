@@ -69,6 +69,7 @@ import { fromDrizzle, type PgBoss } from "pg-boss";
 import sharp from "sharp";
 import { db, pool } from "../db";
 import { env } from "../env";
+import { hostedAiCallScope } from "../hosted-ai-call";
 import { enqueueNotification } from "../notifications/notifications.outbox";
 import { holdOrganization } from "../organization-lock";
 import { digest, receiptDigest, type TemplateSnapshot } from "./template-snapshot";
@@ -963,7 +964,11 @@ export class GenerateRepository {
       credential = credentialFromStored(
         row.provider,
         decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY),
-        { defaultModel: pinned.modelId, admitCall: () => admitAiTextCall(orgId, db, pinned) },
+        {
+          defaultModel: pinned.modelId,
+          admitCall: () => admitAiTextCall(orgId, db, pinned),
+          callScope: hostedAiCallScope(orgId),
+        },
       );
     } catch (error) {
       // Two events, one code, two sentences. Both are deterministic — the same

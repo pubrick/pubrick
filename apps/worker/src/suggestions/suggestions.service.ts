@@ -4,6 +4,7 @@ import {
   callOutcomeOf,
   embedKnowledgeBatch,
   generateStructured,
+  preflightError,
   redactSecrets,
   resolveModel,
   runFailureOf,
@@ -16,6 +17,7 @@ import {
 } from "@pubrick/shared";
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
+import { googleCallArguments, withWorkerAiCall } from "../hosted-ai-call";
 import {
   BLOCKED_TOPIC_EMBEDDING_CALL_LIMIT,
   type BlockedTopicSnapshot,
@@ -244,12 +246,15 @@ export class SuggestionsService {
         let batch: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
         try {
           const proxyUrl = await this.repo.googleProxy?.(job.orgId);
-          batch = await this.embedBatch(
-            embeddingKey,
-            texts.slice(offset, offset + 10),
-            ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+          batch = await withWorkerAiCall(job.orgId, "embedding", (signal) =>
+            this.embedBatch(
+              embeddingKey,
+              texts.slice(offset, offset + 10),
+              ...googleCallArguments(proxyUrl, signal),
+            ),
           );
         } catch (error) {
+          if (preflightError(error)) throw error;
           try {
             await this.repo.recordEmbeddingUsage(
               job.orgId,

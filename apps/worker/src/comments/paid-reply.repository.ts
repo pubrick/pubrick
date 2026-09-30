@@ -22,6 +22,7 @@ import { fromDrizzle, type PgBoss } from "pg-boss";
 import { z } from "zod";
 import { db } from "../db";
 import { env } from "../env";
+import { scopedGoogleFetch, withWorkerAiCall } from "../hosted-ai-call";
 
 type Tx = PaidReplyTransaction;
 type Kind = "source_comment" | "publication_comment";
@@ -331,11 +332,13 @@ export class PaidReplyRepository {
       let allowance: number;
       try {
         request = buildPaidReplyRequest(snapshot);
-        ({ allowance } = await countPaidReplyTokens(
-          request,
-          google.apiKey,
-          undefined,
-          google.proxyUrl,
+        ({ allowance } = await withWorkerAiCall(target.orgId, "probe", (signal) =>
+          countPaidReplyTokens(
+            request,
+            google.apiKey,
+            scopedGoogleFetch(signal, google.proxyUrl),
+            google.proxyUrl,
+          ),
         ));
       } catch (error) {
         await this.finishHandoff(

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { callOutcomeOf, embedKnowledgeBatch } from "@pubrick/ai";
+import { callOutcomeOf, embedKnowledgeBatch, preflightError } from "@pubrick/ai";
+import { googleCallArguments, withWorkerAiCall } from "../hosted-ai-call";
 import { KnowledgeAutoIndexRepository } from "./knowledge-auto-index.repository";
 
 @Injectable()
@@ -36,12 +37,15 @@ export class KnowledgeAutoIndexService {
       let result: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
       try {
         const proxyUrl = await this.repo.googleProxy?.(orgId);
-        result = await embedKnowledgeBatch(
-          key,
-          selected.map((entry) => `${entry.title}\n\n${entry.content}`),
-          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+        result = await withWorkerAiCall(orgId, "embedding", (signal) =>
+          embedKnowledgeBatch(
+            key,
+            selected.map((entry) => `${entry.title}\n\n${entry.content}`),
+            ...googleCallArguments(proxyUrl, signal),
+          ),
         );
       } catch (error) {
+        if (preflightError(error)) throw error;
         await this.repo.recordUsage(
           orgId,
           0,
