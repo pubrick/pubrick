@@ -130,10 +130,30 @@ it("keeps a completed checkout with a delayed subscription relationship pending"
 });
 
 it("preserves subscription retry metadata when a same-minute receipt is already refused", async () => {
-  const sdk = new FixtureBillingDriver({ accountId: identity.accountId, origin: "http://localhost:31300", prices: [{ identity, priceId: plan.priceId, productId: "prod_test", active: true, currency: "eur", unitAmount: 1000, interval: "month", intervalCount: 1 }] });
+  const sdk = new FixtureBillingDriver({
+    accountId: identity.accountId,
+    origin: "http://localhost:31300",
+    prices: [
+      {
+        identity,
+        priceId: plan.priceId,
+        productId: "prod_test",
+        active: true,
+        currency: "eur",
+        unitAmount: 1000,
+        interval: "month",
+        intervalCount: 1,
+      },
+    ],
+  });
   const catalog = new BillingCatalog(sdk, [plan]);
   await catalog.initialize();
-  const row = { id: "stored_subscription", subscriptionId: "sub_refused", reconcileAttempts: 2, nextReconcileAt: new Date() };
+  const row = {
+    id: "stored_subscription",
+    subscriptionId: "sub_refused",
+    reconcileAttempts: 2,
+    nextReconcileAt: new Date(),
+  };
   const repository = {
     due: vi.fn().mockResolvedValue({ receipts: [], attempts: [], cleanup: [] }),
     periodicSubscriptionIds: vi.fn().mockResolvedValue([row]),
@@ -142,6 +162,11 @@ it("preserves subscription retry metadata when a same-minute receipt is already 
     outcome: vi.fn().mockResolvedValue({ kind: "deferred", code: "not_found" }),
     finishSubscriptionAttempt: vi.fn(),
   };
-  await new BillingService(sdk, catalog, repository as unknown as BillingRepository, "http://localhost:31300").sweep();
+  await new BillingService(
+    sdk,
+    catalog,
+    repository as unknown as BillingRepository,
+    "http://localhost:31300",
+  ).sweep();
   expect(repository.finishSubscriptionAttempt).toHaveBeenCalledWith(row, "not_found");
 });

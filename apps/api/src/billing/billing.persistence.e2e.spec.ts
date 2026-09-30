@@ -289,23 +289,21 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     const now = clock.getTime();
     const suffix = randomUUID().replaceAll("-", "");
     const healthy = `sub_healthy_${suffix}`;
-    await db
-      .insert(schema.billingSubscriptions)
-      .values(
-        Array.from({ length: 26 }, (_, index) => ({
-          orgId: tenant.orgId,
-          ...identity,
-          customerId: "cus_page",
-          subscriptionId: index === 25 ? healthy : `sub_failed_${suffix}_${index}`,
-          status: "canceled",
-          priceId: plan.priceId,
-          planVersionId: storedPlan.id,
-          periodStart: new Date(now),
-          periodEnd: new Date(now + 3600000),
-          cancelAtPeriodEnd: false,
-          nextReconcileAt: new Date(now - 3600000 + index * 1000),
-        })),
-      );
+    await db.insert(schema.billingSubscriptions).values(
+      Array.from({ length: 26 }, (_, index) => ({
+        orgId: tenant.orgId,
+        ...identity,
+        customerId: "cus_page",
+        subscriptionId: index === 25 ? healthy : `sub_failed_${suffix}_${index}`,
+        status: "canceled",
+        priceId: plan.priceId,
+        planVersionId: storedPlan.id,
+        periodStart: new Date(now),
+        periodEnd: new Date(now + 3600000),
+        cancelAtPeriodEnd: false,
+        nextReconcileAt: new Date(now - 3600000 + index * 1000),
+      })),
+    );
     const pageDriver = new FixtureBillingDriver({
       accountId: identity.accountId,
       origin: "http://localhost:31300",
@@ -326,8 +324,80 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     const service = new BillingService(pageDriver, catalog, repository, "http://localhost:31300");
     await service.sweep();
     expect(retrieve.mock.calls.some(([id]) => id === healthy)).toBe(false);
+    const failures = await db
+      .select({
+        attempts: schema.billingSubscriptions.reconcileAttempts,
+        error: schema.billingSubscriptions.lastReconcileError,
+        next: schema.billingSubscriptions.nextReconcileAt,
+      })
+      .from(schema.billingSubscriptions)
+      .where(eq(schema.billingSubscriptions.orgId, tenant.orgId));
+    const attempted = failures.filter((row) => row.attempts > 0);
+    expect(attempted).toHaveLength(25);
+    expect(
+      attempted.every(
+        (row) => row.attempts === 1 && row.error === "not_found" && row.next.getTime() > now,
+      ),
+    ).toBe(true);
     await service.sweep();
     expect(retrieve.mock.calls.some(([id]) => id === healthy)).toBe(true);
+  });
+  it("rejects unsupported persisted billing identities and subscription states", async () => {
+    const tenant = await org();
+    const [storedPlan] = await db
+      .select({ id: schema.billingPlanVersions.id })
+      .from(schema.billingPlanVersions)
+      .where(eq(schema.billingPlanVersions.accountId, identity.accountId));
+    if (!storedPlan) throw new Error("fixture");
+    const subscription = {
+      orgId: tenant.orgId,
+      ...identity,
+      customerId: "cus_constraint",
+      subscriptionId: "sub_constraint",
+      priceId: plan.priceId,
+      planVersionId: storedPlan.id,
+      periodStart: clock,
+      periodEnd: new Date(clock.getTime() + 3600000),
+      cancelAtPeriodEnd: false,
+    };
+    await expect(
+      db
+        .insert(schema.billingSubscriptions)
+        .values({ ...subscription, status: "unknown_future_status" }),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .insert(schema.billingSubscriptions)
+        .values({ ...subscription, status: "active", environment: "live" }),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .insert(schema.billingSubscriptions)
+        .values({ ...subscription, status: "active", provider: "unknown_provider" }),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .insert(schema.billingReceipts)
+        .values({
+          ...identity,
+          eventId: "evt_constraint",
+          kind: "subscription.changed",
+          resourceId: "sub_constraint",
+          status: "unknown_future_status",
+        }),
+    ).rejects.toThrow();
+    await expect(
+      db
+        .insert(schema.billingCleanup)
+        .values({
+          ...identity,
+          orgId: tenant.orgId,
+          kind: "subscription",
+          resourceId: "sub_constraint",
+          idempotencyKey: "constraint",
+          status: "unknown_future_status",
+        }),
+    ).rejects.toThrow();
   });
   it("closes permanent/exhausted receipt retries and keeps cleanup obligations visible", async () => {
     const id = await repository.receive({

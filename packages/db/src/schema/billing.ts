@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   boolean,
   check,
@@ -21,6 +22,10 @@ const identity = () => ({
   environment: text("environment").notNull(),
   accountId: text("account_id").notNull(),
 });
+const identityChecks = (name: string, t: { provider: AnyPgColumn; environment: AnyPgColumn }) => [
+  check(`${name}_provider_check`, sql`${t.provider} IN ('stripe','fixture')`),
+  check(`${name}_environment_check`, sql`${t.environment} = 'sandbox'`),
+];
 const times = () => ({
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -53,6 +58,7 @@ export const billingPlanVersions = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_plan_versions", t),
     uniqueIndex("billing_plan_version_identity_idx").on(
       t.provider,
       t.environment,
@@ -85,6 +91,7 @@ export const billingAccounts = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_accounts", t),
     uniqueIndex("billing_customer_identity_idx").on(
       t.provider,
       t.environment,
@@ -122,6 +129,7 @@ export const billingSubscriptions = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_subscriptions", t),
     uniqueIndex("billing_subscription_identity_idx").on(
       t.provider,
       t.environment,
@@ -135,6 +143,10 @@ export const billingSubscriptions = pgTable(
       sql`${t.reconcileAttempts} BETWEEN 0 AND 12`,
     ),
     check("billing_subscription_revision_nonnegative", sql`${t.revision} >= 0`),
+    check(
+      "billing_subscription_status_check",
+      sql`${t.status} IN ('active','trialing','past_due','unpaid','canceled','incomplete','incomplete_expired','paused')`,
+    ),
   ],
 );
 export const organizationBillingState = pgTable(
@@ -181,6 +193,7 @@ export const billingCheckoutAttempts = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_checkout_attempts", t),
     uniqueIndex("billing_checkout_unresolved_org_idx")
       .on(t.orgId)
       .where(sql`${t.status} IN ('pending','ready','operator_action')`),
@@ -216,6 +229,7 @@ export const billingReceipts = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_receipts", t),
     check("billing_receipt_attempts_check", sql`${t.attempts} BETWEEN 0 AND 12`),
     uniqueIndex("billing_receipt_event_identity_idx").on(
       t.provider,
@@ -252,6 +266,7 @@ export const billingCleanup = pgTable(
     ...times(),
   },
   (t) => [
+    ...identityChecks("billing_cleanup", t),
     check("billing_cleanup_attempts_check", sql`${t.attempts} BETWEEN 0 AND 12`),
     uniqueIndex("billing_cleanup_resource_identity_idx").on(
       t.provider,

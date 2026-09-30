@@ -59,11 +59,16 @@ export type BillingMapping = Readonly<{
   customerId: string;
   deleted: boolean;
 }>;
+export type ReceiptProcessingResult =
+  | Readonly<{ kind: "complete" }>
+  | Readonly<{ kind: "deferred"; code: BillingErrorCode | BillingCoreCode }>;
 export interface ReceiptStore {
   /** Commit a unique provider/environment/account/event receipt before returning its ID. */
   receive(event: VerifiedEvent): Promise<string>;
   /** Claim a bounded processing lease in a short committed transaction, never hold locks during I/O. */
   claim(id: string): Promise<ReceiptClaim | null>;
+  /** A failed/busy durable receipt must never be mistaken for successful reconciliation. */
+  outcome?(id: string): Promise<ReceiptProcessingResult>;
   /** Privileged provider-scoped lookup through persisted mappings, never metadata/email. */
   mapping(
     identity: BillingIdentity,
@@ -103,4 +108,29 @@ export function sameIdentity(a: BillingIdentity, b: BillingIdentity): boolean {
   return (
     a.provider === b.provider && a.environment === b.environment && a.accountId === b.accountId
   );
+}
+
+/** Durable rows may come from an older release; only closed codes cross the domain boundary. */
+export function receiptErrorCode(value: string | null): BillingErrorCode | BillingCoreCode {
+  const codes: readonly (BillingErrorCode | BillingCoreCode)[] = [
+    "configuration",
+    "invalid_request",
+    "invalid_signature",
+    "environment_mismatch",
+    "unsupported_account",
+    "unsupported_event",
+    "invalid_response",
+    "authentication",
+    "rate_limited",
+    "timeout",
+    "unavailable",
+    "not_found",
+    "idempotency_conflict",
+    "not_ready",
+    "invalid_plan",
+    "invalid_attempt",
+    "identity_mismatch",
+    "retry_required",
+  ];
+  return codes.find((code) => code === value) ?? "retry_required";
 }

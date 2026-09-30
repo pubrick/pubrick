@@ -5,7 +5,7 @@ import {
   type VerifiedEvent,
 } from "@pubrick/billing";
 import type { BillingCatalog } from "./catalog-core";
-import type { ReceiptStore } from "./ports";
+import type { ReceiptProcessingResult, ReceiptStore } from "./ports";
 import { BillingCoreError, sameIdentity } from "./ports";
 
 type Relationships = {
@@ -26,10 +26,10 @@ export class ReconciliationCore {
     if (!sameIdentity(event.identity, identity)) throw new BillingCoreError("identity_mismatch");
     return this.store.receive(event);
   }
-  async process(id: string): Promise<void> {
+  async process(id: string): Promise<ReceiptProcessingResult> {
     const identity = this.catalog.identity;
     const claim = await this.store.claim(id);
-    if (!claim) return;
+    if (!claim) return this.store.outcome?.(id) ?? { kind: "deferred", code: "retry_required" };
     try {
       if (!sameIdentity(claim.event.identity, identity))
         throw new BillingCoreError("identity_mismatch");
@@ -39,7 +39,7 @@ export class ReconciliationCore {
           throw new BillingCoreError("identity_mismatch");
         if (!relationships.subscriptionId) {
           await this.store.ignored(claim, "pending_relationship");
-          return;
+          return { kind: "deferred", code: "retry_required" };
         }
         const mapping = await this.store.mapping(
           identity,
@@ -50,7 +50,7 @@ export class ReconciliationCore {
           if (mapping?.deleted)
             await this.store.deletedObligation?.(mapping, relationships.subscriptionId);
           await this.store.ignored(claim, mapping ? "deleted" : "nonowned");
-          return;
+          return { kind: "complete" };
         }
         if (!sameIdentity(mapping.identity, identity))
           throw new BillingCoreError("identity_mismatch");
@@ -64,7 +64,7 @@ export class ReconciliationCore {
           throw new BillingCoreError("identity_mismatch");
         const plan = this.catalog.forPrice(snapshot.priceId);
         const applied = await this.store.apply(mapping.orgId, claim, mapping, snapshot, plan);
-        if (applied === "applied" || applied === "deleted") return;
+        if (applied === "applied" || applied === "deleted") return { kind: "complete" };
         // A competing reconcile committed: read mapping and fetch provider facts again.
       }
       throw new BillingCoreError("retry_required");

@@ -84,8 +84,8 @@ export class BillingService {
                 kind: "checkout.completed",
                 resourceId: checkout.checkoutId,
               });
-              await this.reconcile.process(id);
-              await this.repository.bumpAttempt(row.id, true);
+              const result = await this.reconcile.process(id);
+              if (result.kind === "complete") await this.repository.bumpAttempt(row.id, true);
             } else await this.repository.bumpAttempt(row.id, checkout.status === "expired");
           } else {
             const attempt = await this.repository.claimAttempt(row.id);
@@ -104,7 +104,8 @@ export class BillingService {
             kind: "subscription.changed",
             resourceId: row.subscriptionId,
           });
-          await this.reconcile.process(id);
+          const result = await this.reconcile.process(id);
+          if (result.kind === "deferred") code = result.code;
         } catch (error) {
           code =
             error instanceof BillingError || error instanceof BillingCoreError

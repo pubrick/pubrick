@@ -33,9 +33,10 @@ import type {
   CheckoutAttempt,
   CheckoutStore,
   ReceiptClaim,
+  ReceiptProcessingResult,
   ReceiptStore,
 } from "./ports";
-import { BillingCoreError, sameIdentity } from "./ports";
+import { BillingCoreError, receiptErrorCode, sameIdentity } from "./ports";
 
 type Database = ReturnType<typeof createDb>["db"];
 type AttemptRow = typeof schema.billingCheckoutAttempts.$inferSelect;
@@ -494,6 +495,22 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       );
     if (!existing) throw new BillingCoreError("retry_required");
     return existing.id;
+  }
+  async outcome(id: string): Promise<ReceiptProcessingResult> {
+    const [row] = await this.db
+      .select({
+        status: schema.billingReceipts.status,
+        errorCode: schema.billingReceipts.errorCode,
+      })
+      .from(schema.billingReceipts)
+      .where(
+        and(
+          eq(schema.billingReceipts.id, id),
+          identityWhere(schema.billingReceipts, this.identity),
+        ),
+      );
+    if (row?.status === "complete" || row?.status === "ignored") return { kind: "complete" };
+    return { kind: "deferred", code: receiptErrorCode(row?.errorCode ?? null) };
   }
   async claim(id: string): Promise<ReceiptClaim | null> {
     return this.db.transaction(async (tx) => {
