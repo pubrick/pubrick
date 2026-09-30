@@ -78,10 +78,59 @@ media directory and disposable database. No GitHub Actions workflow was dispatch
 ## Remaining acceptance
 
 Hosted controller/module composition now binds seat checks, durable invitation
-mail and deletion tombstones. It remains unregistered until resource/concurrency
-admission covers every writer and physical model call. The hosted user journey
+mail and deletion tombstones. It remains unregistered while transaction-bound request authority and hosted
+acceptance are integrated. Resource/concurrency admission is covered by the next
+verified milestone below. The hosted user journey
 and full deletion cleanup acceptance remain integration work. Initial trials are disabled. Seller details, domain, plans,
 prices and a real payment sandbox account are operator inputs, not inferred
 product values. No live paid checkout is advertised by the fixture adapter.
 A real versioned release artifact and live commercial launch remain separate
 acceptance gates.
+
+
+## Resource, physical dispatch and deletion milestone
+
+The next integrated package covers every production brand/channel/media writer,
+including normalized worker images and crops; all three pipeline admission paths;
+and each physical text, image, embedding, token-count and credential-probe request.
+Model retries acquire separate durable leases and pass cancellation to the actual
+transport. Local capacity refusals create neither provider calls nor phantom usage
+reservations. Independent review identified and fixed the manual token-count and
+brand-import paths that initially bypassed these scopes.
+
+Deletion now stages immutable asset ownership proof in the same transaction as
+metadata removal. A bounded worker performs canonical-path unlink, retries failed
+storage operations, fences stale acknowledgements and preserves live assets.
+Missing storage roots retry rather than falsely completing deletion. Organization
+cascade retains the cleanup obligation; these operational rows and dispatch leases
+are explicitly excluded from workspace exports.
+
+Fresh migration 0123 adds cleanup work and renames five equivalent CHECK constraints.
+Constraint renames retain their predicates and validated state. Earlier migrations
+were not rewritten. The enum migration scanner transfers only already established
+proof when interpreting a rename, and billing/dispatch columns now expose the same
+closed sets in TypeScript and PostgreSQL.
+
+### Local verification
+
+The integration build/type gate reached 23 of 24 successful tasks; its remaining
+API fixture type errors were corrected and the affected API typecheck then passed.
+Earlier attempts exposed literal widening, an unsupported refusal code, positional
+native-call tuple types and invalid test fixture shapes. Those failures were fixed,
+not skipped or counted as passes. The current production sources build and typecheck.
+
+Built-package focused runs passed **91 AI**, **55 API** and **39 worker** tests.
+PostgreSQL admission/clock/schema checks passed **56 tests**. Native API cleanup,
+resource, queue and billing persistence checks passed **36 tests** after correcting
+the fixture builders behind nine cases that violated existing media/channel constraints. On a separate empty
+database, native worker cleanup and scheduled admission passed **13 tests**. These
+counts describe separate runs; some helper assertions intentionally overlap.
+No live LLM, email, payment, publication or GitHub Actions dispatch was used.
+
+### Next integration
+
+Hosted runtime activation, transaction-bound request authority, legacy membership
+role union and the hosted browser journey are being prepared separately. The
+completed package does not by itself establish hosted beta acceptance. The fixture
+billing driver never represents a real paid checkout, and initial trials remain
+disabled. Versioned public release and commercial launch remain acceptance gates.

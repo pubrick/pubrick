@@ -463,14 +463,12 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .update(schema.member)
       .set({ role: "author" })
       .where(eq(schema.member.id, oldest.id));
-    await connection.db
-      .insert(schema.member)
-      .values({
-        id: randomUUID(),
-        organizationId: orgId,
-        userId: owner.userId,
-        role: "owner,author",
-      });
+    await connection.db.insert(schema.member).values({
+      id: randomUUID(),
+      organizationId: orgId,
+      userId: owner.userId,
+      role: "owner,author",
+    });
     const invitation = await repo.invite(orgId, owner, {
       email: recipient.email,
       role: "owner",
