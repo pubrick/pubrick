@@ -373,4 +373,13 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       expect(await mutationOutcome).toEqual({ ok: true });
     }
   });
+  it("does not undercount a legacy invitation whose email matches a different member account",async()=>{
+    limit=10;const owner=await account();const recipient=await account();const orgId=await workspace(owner);
+    await connection.db.update(schema.user).set({email:recipient.email.toUpperCase()}).where(eq(schema.user.id,owner.userId));
+    const id=randomUUID();await connection.db.insert(schema.invitation).values({id,organizationId:orgId,email:recipient.email,role:"member",status:"pending",expiresAt:new Date(Date.now()+60000),inviterId:owner.userId});
+    limit=1;await expect(repository().accept(orgId,recipient,id)).rejects.toThrow("seat_limit");
+    expect(await connection.db.select({id:schema.member.id}).from(schema.member).where(and(eq(schema.member.organizationId,orgId),eq(schema.member.userId,recipient.userId)))).toHaveLength(0);
+    limit=10;
+  });
+
 });
