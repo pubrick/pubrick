@@ -10,10 +10,12 @@ documents when they disagree. The current execution priorities are in
 Text generation supports Google, OpenRouter and direct OpenAI, Anthropic and
 DeepSeek keys through the maintained AI SDK adapters. See [LLM providers](llm-providers.md)
 for provider/model selection behavior, unknown-cost reporting and Google-only
-features. This does not yet include Vertex authentication or arbitrary compatible
-API endpoints. [Hosted identity](hosted-identity.md) adds explicit email ownership
-and recovery in a separately configured development mode; paid subscriptions and
-hosted resource admission are not implemented by that slice.
+features. Vertex authentication and guarded public OpenAI-compatible endpoints
+are implemented on the integration branch; provider/model capabilities remain
+explicit. [Hosted identity](hosted-identity.md) covers email ownership and recovery.
+The [platform integration record](reviews/2026-09-30-hosted-platform.md) describes
+sandbox subscriptions, durable mail, resource quotas and physical-call admission;
+these development capabilities do not establish a live commercial service.
 
 | Reference area | Pubrick today | Next meaningful gap |
 |---|---|---|

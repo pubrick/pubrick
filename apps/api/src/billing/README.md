@@ -3,9 +3,10 @@
 Pubrick owns the catalog, entitlement revisions, tenant ownership, attempts and
 receipts. `@pubrick/billing` owns only maintained SDK transport and normalized
 provider facts. This slice includes migration 0119 and constrained controllers,
-but **does not enable SaaS** until application registration, actual raw-byte
-middleware verification, all growth admissions and transactional hosted deletion
-are integrated by the application owner.
+and is registered by the validated hosted application runtime. Raw-byte middleware,
+resource/queue/physical-call admission and transactional hosted deletion are
+integrated. This is sandbox BYOK infrastructure; real payment sandbox acceptance
+and operator launch configuration are still required before offering a paid SaaS.
 
 ## Catalog and entitlement
 

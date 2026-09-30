@@ -4,8 +4,9 @@ This slice implements verified email ownership and recovery. Hosted application
 startup now also binds the validated billing and atomic workspace admission modules;
 this remains a sandbox development stage, **not a complete live subscription service**. Do not announce a paid SaaS or expose this stage as
 an unlimited public service. Billing admission, trial/organization admission,
-quotas, reconciliation, public legal/support policies and hosted operations remain
-requirements in [the hosted beta design](plans/hosted-beta.md). The billing slice
+quotas and reconciliation are implemented on the integration branch. External
+payment sandbox verification, public legal/support policies and hosted operations
+remain launch requirements in [the hosted beta design](plans/hosted-beta.md). The billing slice
 must refuse missing hosted billing configuration before public deployment.
 
 ## Modes

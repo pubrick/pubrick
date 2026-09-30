@@ -1,6 +1,8 @@
 # Hosted beta design
 
-Status: draft for adversarial review; not an implemented SaaS offering.
+Status: implementation in integration; not a launched SaaS offering.
+See the [verification record](../reviews/2026-09-30-hosted-platform.md) for
+completed gates and remaining acceptance.
 Updated: 2026-09-30.
 
 ## Product and initial funding
@@ -26,8 +28,9 @@ selling entity or publish a fictional live purchase flow.
   Self-hosted without billing configuration remains fully usable.
 - Hosted registration must explicitly use the open registration policy; the
   self-hosted first-account bootstrap closes registration after the first user.
-  Open hosted registration also requires verified account ownership and abuse
-  controls before live beta; current manual invitations do not verify email.
+  Open hosted registration requires verified account ownership and abuse
+  controls. The hosted registration and invitation paths now require verified
+  email ownership; durable mail delivery is retried independently of requests.
 - An organization owns its subscription; an authenticated owner/admin may manage
   checkout and the customer portal. Users may belong to multiple organizations.
   Never derive billing ownership from an email address alone.
