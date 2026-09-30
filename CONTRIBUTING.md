@@ -28,6 +28,19 @@ fix needs the affected checks; repeat the full gate only if the fix changes a
 shared contract or leaves a concrete integration risk. Let one CI run verify
 the final PR head instead of pushing every intermediate commit to trigger CI.
 
+## Production browser journeys
+
+[Browser testing](docs/browser-testing.md) runs a disposable PostgreSQL instance
+and the compiled API/Next standalone application. It refuses occupied dedicated
+ports and never reuses a developer's live stack. Run it locally for changes to
+authentication, rewrites, workspace navigation, or release packaging. This tier
+is kept out of routine CI until its cost and stability justify adding it.
+
+Run heavyweight builds and integration gates sequentially on a shared host;
+parallel checkouts isolate files/databases, but not available CPU and memory.
+Use focused TypeScript checks before booting a full browser stack so fixture
+errors do not require another cold production build.
+
 ## Bug-fix protocol
 
 1. Write a failing test that reproduces the bug. Commit it first.

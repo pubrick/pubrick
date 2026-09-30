@@ -3,7 +3,12 @@
 ## Requirements
 
 - Docker with Compose v2
-- 1 GB RAM minimum for the skeleton; Postgres data lives in the `pgdata` volume
+- Disk capacity for PostgreSQL (`pgdata`), uploaded media (`media`) and backups
+- Memory/CPU capacity for the expected workload; production sizing has not yet
+  been benchmarked. Building images locally also needs capacity for the toolchain.
+
+For digest-pinned prebuilt images, see [Versioned image releases](releases.md).
+For consistent snapshots and paused recovery, see [Backup and restore](backup-restore.md).
 
 ## Install
 
