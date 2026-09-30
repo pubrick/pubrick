@@ -62,7 +62,7 @@ export async function youtubeFetch(
   });
   if (!response.body) return response;
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
+  const chunks: ArrayBuffer[] = [];
   let total = 0;
   try {
     while (true) {
@@ -70,7 +70,9 @@ export async function youtubeFetch(
       if (done) break;
       total += value.byteLength;
       if (total > MAX_YOUTUBE_RESPONSE_BYTES) throw new Error("Transcript response too large");
-      chunks.push(value);
+      // Own the bytes before constructing a Blob: a stream may yield a view
+      // backed by SharedArrayBuffer, which is not an accepted BlobPart.
+      chunks.push(Uint8Array.from(value).buffer);
     }
   } finally {
     await reader.cancel().catch(() => undefined);
