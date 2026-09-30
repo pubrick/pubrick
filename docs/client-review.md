@@ -6,7 +6,8 @@ link, and copies it immediately. The link is shown once. Send it through a
 channel you trust; anyone who has it can submit the guest decision.
 
 The guest page shows the saved master copy, channel versions, and selected
-cover. It records **Approve draft** or **Request changes** (with a required
+cover or video, plus inline illustrations with their saved positions, alternative
+text, and captions. It records **Approve draft** or **Request changes** (with a required
 comment). This does not publish or schedule the draft. Workspace members can
 see the decision and comment on the draft page; the editor can refresh that
 status after the client responds. Only a workspace member can take the final
@@ -18,11 +19,12 @@ publication action.
   plaintext token. It expires after 72 hours by default, can be revoked by an
   owner or admin, and can be replaced with a new link.
 - Approval applies to the exact saved master, channel texts, channel selection,
-  and cover shown to the guest. A change to that material closes the link and
-  calls for a new review. Changing inline image slots also closes the link,
-  conservatively, even though the guest page currently previews only the
-  selected cover. The workspace editor must review inline images before
-  internal approval. Local unsaved edits are not part of the preview.
+  cover/video and inline illustrations shown to the guest. A change to that
+  material closes the link and calls for a new review. Inline image bytes are
+  served only through the same live review capability; other workspace media
+  cannot be retrieved through it. The workspace editor must still resolve
+  image placements marked for review before internal approval. Local unsaved
+  edits are not part of the preview.
 - An open link holds back internal approval. A client approval permits the
   usual internal review gate; a request for changes does not. A recorded
   approval stays valid after the link expires while the saved draft is
