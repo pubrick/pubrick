@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 
 // Isolated pure-core tier: no API boot, database, SMTP or network.
-const root = fileURLToPath(new URL("../../../../", import.meta.url));
+const root = fileURLToPath(new URL("../../", import.meta.url));
 export default {
   root,
   resolve: {

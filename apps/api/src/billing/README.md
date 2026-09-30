@@ -83,7 +83,7 @@ After installing the billing package's dependencies:
 
 ```sh
 pnpm --filter @pubrick/billing exec vitest run \
-  --config ../../apps/api/src/billing/vitest.config.mts --reporter=dot
+  --config ../../apps/api/vitest.billing.config.mts --reporter=dot
 ```
 
 The isolated config aliases billing source, runs only these pure contracts and
