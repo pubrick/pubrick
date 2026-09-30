@@ -26,9 +26,6 @@ importers:
 
   apps/api:
     dependencies:
-      '@pubrick/mail':
-        specifier: workspace:*
-        version: link:../../packages/mail
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -53,6 +50,9 @@ importers:
       '@pubrick/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@pubrick/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
       '@pubrick/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -204,7 +204,7 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
   apps/web:
     dependencies:
@@ -299,9 +299,6 @@ importers:
 
   apps/worker:
     dependencies:
-      '@pubrick/mail':
-        specifier: workspace:*
-        version: link:../../packages/mail
       '@inquirer/password':
         specifier: ^4.0.23
         version: 4.0.23(@types/node@22.20.1)
@@ -314,12 +311,18 @@ importers:
       '@pubrick/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@pubrick/billing':
+        specifier: workspace:*
+        version: link:../../packages/billing
       '@pubrick/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@pubrick/integrations':
         specifier: workspace:*
         version: link:../../packages/integrations
+      '@pubrick/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
       '@pubrick/search':
         specifier: workspace:*
         version: link:../../packages/search
@@ -445,6 +448,9 @@ importers:
       stripe:
         specifier: 22.6.2
         version: 22.6.2(@types/node@22.20.1)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^22.15.30
@@ -454,7 +460,7 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
   packages/db:
     dependencies:
@@ -508,12 +514,12 @@ importers:
 
   packages/mail:
     dependencies:
-      jose:
-        specifier: ^6.2.10
-        version: 6.2.10
       '@pubrick/shared':
         specifier: workspace:*
         version: link:../shared
+      jose:
+        specifier: ^6.2.10
+        version: 6.2.10
       nodemailer:
         specifier: ^10.0.13
         version: 10.0.13
