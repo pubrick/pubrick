@@ -281,11 +281,14 @@ async function attempt<T>(
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
       // Responses defaults to retaining responses. Pubrick stores its own history;
       // every physical call (including repair) is stateless at the provider.
+      // Shared schemas permit omitted adapter/editor fields. OpenAI strict mode
+      // requires every field, so use non-strict schema guidance and keep local
+      // Zod validation/repair authoritative instead of changing domain outputs.
       ...(args.provider === "openai"
         ? {
             providerOptions: {
               ...args.providerOptions,
-              openai: { ...args.providerOptions?.openai, store: false },
+              openai: { ...args.providerOptions?.openai, strictJsonSchema: false, store: false },
             },
           }
         : args.providerOptions === undefined

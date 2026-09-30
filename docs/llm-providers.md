@@ -30,6 +30,12 @@ physical request, including a schema-repair request or a failed retry, uses the
 existing usage recorder. Generation keeps its per-call run fence. Unknown costs
 remain unknown rather than being displayed as zero.
 
+OpenAI requests use non-strict JSON-schema guidance because the shared adapter
+and editor schemas allow omitted fields. Strict OpenAI schemas require every
+field to be present; Pubrick keeps its existing optional-field semantics and
+validates each result locally, repairing invalid output once. This is not a
+claim of native strict schema enforcement.
+
 DeepSeek structured generation uses JSON-object output with schema instructions
 and server validation/repair; it is not a claim of native strict JSON-schema
 output for every DeepSeek model. A schema failure after repair produces the same
@@ -66,6 +72,7 @@ rules. Prices and subscription fees are separate concerns.
 - [AI SDK OpenAI adapter](https://ai-sdk.dev/providers/ai-sdk-providers/openai)
 - [AI SDK Anthropic adapter](https://ai-sdk.dev/providers/ai-sdk-providers/anthropic)
 - [AI SDK DeepSeek adapter](https://ai-sdk.dev/providers/ai-sdk-providers/deepseek)
+- [OpenAI structured-output schema requirements](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [OpenAI GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
 - [Claude model catalog](https://platform.claude.com/docs/en/models/overview)
 - [DeepSeek model identifiers](https://api-docs.deepseek.com/)
