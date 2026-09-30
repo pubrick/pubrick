@@ -291,4 +291,18 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       "invitation_unavailable",
     );
   });
+  it("does not reveal recipient owner capacity to an invalid session", async () => {
+    limit = 10;
+    const owner = await account();
+    const recipient = await account();
+    const orgId = await workspace(owner);
+    await workspace(recipient);
+    await expect(
+      repository(1, 10).invite(
+        orgId,
+        { userId: owner.userId, sessionId: randomUUID() },
+        { email: recipient.email, role: "owner", locale: "en" },
+      ),
+    ).rejects.toThrow("unauthenticated");
+  });
 });
