@@ -4,6 +4,7 @@ import { z } from "zod";
 import { runFailureOf } from "./classify.js";
 import { generateStructured } from "./generate.js";
 import { DEFAULT_MODELS, probeThinkingOptions, resolveModel } from "./provider.js";
+import { adapterFor } from "./steps/adapter.js";
 import type { UsageRecord } from "./usage.js";
 
 const fixtures = [
@@ -127,6 +128,55 @@ describe("direct BYOK providers", () => {
       }
     });
   }
+
+  it("OpenAI adapts a real channel schema with optional fields without strict-schema rejection", async () => {
+    const records: UsageRecord[] = [];
+    const fetch = vi.fn(async (_url: unknown, request?: RequestInit) => {
+      const body = JSON.parse(String(request?.body));
+      const format = body.text.format;
+      // Google/OpenRouter schemas allow omission. OpenAI strict outputs instead
+      // require every property; emulate its documented HTTP 400 contract.
+      if (
+        format.strict &&
+        Object.keys(format.schema.properties).some((key) => !format.schema.required.includes(key))
+      )
+        return new Response(
+          JSON.stringify({
+            error: { message: "All properties must be required", type: "invalid_request_error" },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      return new Response(JSON.stringify(reply("openai", '{"body":"Adapted post"}')), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const output = await adapterFor({
+      id: "channel-fixture",
+      name: "Updates",
+      platform: "telegram",
+    }).run(
+      {
+        brand: { name: "Example", voice: null, audience: null, contentLanguage: "en" },
+        model: resolveModel({ provider: "openai", apiKey: "sk-fixture" }),
+        provider: "openai",
+        maxRetries: 0,
+        onUsage: (record) => {
+          records.push(record);
+        },
+      },
+      { body: "Original editorial draft" },
+    );
+    expect(output).toEqual({ body: "Adapted post" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+    expect(body.text.format.schema.properties.body.maxLength).toBeGreaterThan(0);
+    expect(body.text.format.schema.required).toEqual(["body"]);
+    expect(body.text.format.strict).toBe(false);
+    expect(body.store).toBe(false);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ status: "ok", provider: "openai", costUsd: null });
+  });
 
   it.each(fixtures)("$provider meters schema repair separately", async ({ provider }) => {
     const records: UsageRecord[] = [];
