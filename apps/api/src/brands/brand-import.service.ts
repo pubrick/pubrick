@@ -1,5 +1,10 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
-import { resolveModel, type UsageRecord } from "@pubrick/ai";
+import { HttpException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  ProviderPreflightTransientError,
+  preflightError,
+  resolveModel,
+  type UsageRecord,
+} from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { type BrandImportApply, type BrandImportRequest, toLedgerCostUsd } from "@pubrick/shared";
 import { and, eq, gt, sql } from "drizzle-orm";
@@ -7,6 +12,7 @@ import { guardedFetchText, isGuardedFetchError } from "guarded-fetch";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, tooManyRequests } from "../api-error";
 import { db } from "../db";
+import { hostedAiCallScope, throwHostedAiRefusal } from "../hosted-ai-call";
 import { BrandImportCaller } from "./brand-import.caller";
 import { websiteMaterial } from "./brand-import.extract";
 import { BrandsRepository, brandImportProfileHash } from "./brands.repository";
@@ -79,41 +85,64 @@ export class BrandImportService {
     // Lock the org only for the reservation. The model call runs after commit.
     // A reservation counts even if the process dies after dispatch; retries are
     // disabled, so one request can make at most one physical call.
-    const reservationId = await db.transaction(async (tx) => {
-      await tx
-        .select({ id: schema.organization.id })
-        .from(schema.organization)
-        .where(eq(schema.organization.id, orgId))
-        .for("no key update");
-      const [{ count } = { count: 0 }] = await tx
-        .select({ count: sql<number>`count(*)::int` })
-        .from(schema.usageLedger)
-        .where(
-          and(
-            eq(schema.usageLedger.orgId, orgId),
-            eq(schema.usageLedger.step, IMPORT_STEP),
-            gt(schema.usageLedger.createdAt, sql`now() - interval '1 hour'`),
-          ),
-        );
-      if (count >= MAX_IMPORTS_PER_HOUR) {
-        throw tooManyRequests("brand_import_limit_reached", "Three imports per hour are allowed");
-      }
-      const [row] = await tx
-        .insert(schema.usageLedger)
-        .values({
-          orgId,
-          step: IMPORT_STEP,
-          provider: "google",
-          modelId: resolveModel(credential).modelId,
-          costSource: "unknown",
-          status: "errored",
-          outcome: "unknown",
-          keyOwnership: "byok",
-        })
-        .returning({ id: schema.usageLedger.id });
-      if (!row) throw new Error("Brand import reservation was not inserted");
-      return row.id;
-    });
+    const reserve = () =>
+      db.transaction(async (tx) => {
+        await tx
+          .select({ id: schema.organization.id })
+          .from(schema.organization)
+          .where(eq(schema.organization.id, orgId))
+          .for("no key update");
+        const [{ count } = { count: 0 }] = await tx
+          .select({ count: sql<number>`count(*)::int` })
+          .from(schema.usageLedger)
+          .where(
+            and(
+              eq(schema.usageLedger.orgId, orgId),
+              eq(schema.usageLedger.step, IMPORT_STEP),
+              gt(schema.usageLedger.createdAt, sql`now() - interval '1 hour'`),
+            ),
+          );
+        if (count >= MAX_IMPORTS_PER_HOUR) {
+          throw tooManyRequests("brand_import_limit_reached", "Three imports per hour are allowed");
+        }
+        const [row] = await tx
+          .insert(schema.usageLedger)
+          .values({
+            orgId,
+            step: IMPORT_STEP,
+            provider: "google",
+            modelId: resolveModel(credential).modelId,
+            costSource: "unknown",
+            status: "errored",
+            outcome: "unknown",
+            keyOwnership: "byok",
+          })
+          .returning({ id: schema.usageLedger.id });
+        if (!row) throw new Error("Brand import reservation was not inserted");
+        return row.id;
+      });
+    let reservationId: string | undefined;
+    const scope = hostedAiCallScope(orgId);
+    if (scope) {
+      credential = {
+        ...credential,
+        callScope: (execute, incoming) =>
+          scope(async (signal) => {
+            // This is inside the physical SDK call: retries acquire their own
+            // permit and reservation. No row locks survive the committed reserve.
+            try {
+              reservationId = await reserve();
+            } catch (error) {
+              const refusal = new ProviderPreflightTransientError(
+                "Brand import reservation unavailable",
+              );
+              refusal.cause = error;
+              throw refusal;
+            }
+            return execute(signal);
+          }, incoming),
+      };
+    } else reservationId = await reserve();
     let meteringFailed = false;
     try {
       const suggestion = await this.caller.suggest({
@@ -121,6 +150,7 @@ export class BrandImportService {
         url: request.url,
         material,
         onUsage: async (record: UsageRecord) => {
+          if (!reservationId) throw new Error("Brand import dispatch was not reserved");
           const [updated] = await db
             .update(schema.usageLedger)
             .set({
@@ -153,7 +183,10 @@ export class BrandImportService {
         expectedProfileHash: brandImportProfileHash(brand),
         suggestion,
       };
-    } catch {
+    } catch (error) {
+      throwHostedAiRefusal(error);
+      const local = preflightError(error);
+      if (local?.cause instanceof HttpException) throw local.cause;
       // Never return unmetered model output or raw provider errors (which may
       // contain the BYOK key). The unknown reservation stays in the ledger.
       throw badRequest("brand_import_failed", "Brand suggestions could not be generated");

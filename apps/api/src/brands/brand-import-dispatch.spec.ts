@@ -82,13 +82,11 @@ const suggestion = {
 function fixture() {
   const brands = { get: vi.fn().mockResolvedValue({ id: "brand", name: "Coffee" }) };
   const credentials = {
-    getDecrypted: vi
-      .fn()
-      .mockResolvedValue({
-        provider: "google",
-        apiKey: "fixture",
-        defaultModel: "gemini-3.8-flash",
-      }),
+    getDecrypted: vi.fn().mockResolvedValue({
+      provider: "google",
+      apiKey: "fixture",
+      defaultModel: "gemini-3.8-flash",
+    }),
   };
   const fetch = vi.fn(async () => {
     mocks.sequence.push("http");
