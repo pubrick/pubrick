@@ -86,11 +86,39 @@ configured ingress limits. Configure `TRUSTED_PROXIES` only for the actual ingre
 proxies; do not trust caller-supplied forwarding headers indiscriminately. A
 verification email proves mailbox control, not a user's legal identity.
 
-Mail submissions are best-effort in memory, not a durable outbox. Restart or
-shutdown can discard queued submissions; graceful shutdown cancels waiting tasks
-and waits for active bounded transport requests. Users can resend confirmation or
-recovery links. Durable encrypted mail delivery and operational retry monitoring
-are required by the future hosted operations slice.
+Authentication mail is an encrypted pg-boss outbox. API callbacks await committed
+queue admission; only the worker opens SMTP connections. A neutral response
+means the request was handled, not that a message was delivered. If enqueue is
+unavailable, sanitized admission diagnostics are logged and users can retry or
+resend. Better Auth account, invitation and recovery-token writes occur before
+mail callbacks; they are not rolled back when the outbox is unavailable.
+
+The queue allows at most four attempts, with bounded backoff and four concurrent
+SMTP jobs across all worker replicas. Every attempt checks current ownership,
+exact recovery-token existence/expiry, invitation status and the signed link's
+expiry. Verification/reset links last at most one hour; invitations at most 48
+hours. Changing email, consuming a reset token or deleting a workspace prevents
+obsolete delivery. Queue data contains only ciphertext; logs and job outcomes
+contain closed codes and job IDs. Failed mail is never automatically resent from
+the dead-letter queue. Operators repair SMTP and users request fresh links.
+
+Queue admission serializes a retained-row count and insertion under one database
+transaction lock. Admission refuses at 1,000 retained main/dead-letter rows.
+Automatic dead-letter copies can temporarily amplify storage to at most twice
+this limit; this is not an exact 1,000-row storage cap. Main waiting jobs are
+retained at most 48 hours, terminal rows one hour; dead letters one hour. pg-boss
+maintenance removes expired rows. Deadline checks independently prevent sending
+expired links before maintenance runs.
+
+Graceful API shutdown closes admission before draining committed writes; worker
+shutdown waits for pg-boss jobs before closing SMTP. Restores retain encrypted
+jobs and keep workers stopped until the operator explicitly resumes them.
+Jobs restored under another origin, deployment mode or token-signing secret are
+skipped. Preserve encryption-key history while retained jobs/snapshots need it.
+
+SMTP has at-least-once uncertainty: acceptance followed by a lost connection or
+worker crash can cause a retry. Stable Message-ID helps identify retries but does
+not guarantee recipient deduplication. This does not establish SaaS readiness.
 
 SMTP availability and deliverability are operator dependencies. An SMTP outage
 leaves users unable to verify/recover; no fallback silently grants access. For an

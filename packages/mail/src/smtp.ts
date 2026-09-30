@@ -126,8 +126,8 @@ export function createSmtpMailTransport(
       let snapshot: MailOwnershipSnapshot;
       try {
         snapshot = await resolveOwnership(payload);
-      } catch {
-        throw new AuthMailError("unavailable");
+      } catch (error) {
+        throw error instanceof AuthMailError ? error : new AuthMailError("unavailable");
       }
       const eligibility = deliveryEligibility(payload, options.identity, now(), snapshot);
       if (eligibility !== "eligible") return { status: "skipped", reason: eligibility };

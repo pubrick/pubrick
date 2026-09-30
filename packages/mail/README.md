@@ -1,7 +1,7 @@
 # Authentication mail boundary
 
 `@pubrick/mail` is a server-only transport and encrypted payload contract. This
-package is not yet connected to the API, worker or a durable outbox. Importing it
+package is connected to the API outbox and worker consumer. Importing it
 starts no queue, opens no SMTP connection and requires no environment variables.
 Self-hosted installations retain their existing no-mail flow.
 
@@ -10,8 +10,7 @@ Self-hosted installations retain their existing no-mail flow.
 Nodemailer 10 owns SMTP, MIME, authentication and TLS negotiation. Zod owns strict
 payload/configuration parsing. Pubrick's existing `encryptJson` / `decryptJson`
 owns the authenticated encryption envelope and key ring; no second crypto format,
-SMTP protocol, retry loop or queue is introduced. Later integration will use the
-existing pg-boss rather than an in-memory queue or new datastore.
+SMTP protocol, retry loop or queue is introduced. The application uses existing pg-boss rather than an in-memory queue or new datastore.
 
 ## Payload and current ownership
 
@@ -27,8 +26,7 @@ secret fingerprint. A restored job from another domain, mode or token-signing
 secret is skipped. This is an instance binding, not billing authorization.
 
 Verification and reset mail deadlines are at most one hour after creation;
-invitation mail at most 48 hours. Future API integration must explicitly share
-these constants with Better Auth's verification/reset expiry configuration.
+invitation mail at most 48 hours. The API explicitly shares these constants with Better Auth's verification/reset expiry configuration.
 The token library remains responsible for actual verification and consumption.
 A queued mail deadline never extends token validity.
 
@@ -46,10 +44,10 @@ A successful previous attempt never caches ownership for a later retry.
 
 The transport requires authenticated implicit TLS or STARTTLS with normal
 certificate validation. Plaintext is allowed only for explicitly selected
-`runtime: "test"` and a loopback host; production is the default. File/URL content
+nonproduction runtime and a loopback host; production is the default. File/URL content
 access and SDK logging are disabled. The four product locales are supported.
 
-## Delivery policy for future integration
+## Delivery policy
 
 The API must await durable enqueue rather than SMTP, and return consistent generic
 results on queue admission failure. It must not claim delivered mail from an
@@ -80,5 +78,6 @@ pnpm --filter @pubrick/mail build
 Pure contracts test encryption/key rotation, invalid/cross-instance/stale payloads,
 current ownership, deadlines, stable IDs and sanitized transport failures with
 an isolated SDK mock. They make no network requests and use synthetic secrets.
-Existing API transport tests separately exercise a real loopback SMTP capture;
-queue restart/recovery/consumer tests belong to the integration slice.
+API hosted tests exercise a real loopback SMTP capture through the worker,
+consumer restart, encrypted admission capacity and separate-pool token/invitation
+commit visibility. See [hosted operations](../../docs/hosted-identity.md) for limits.

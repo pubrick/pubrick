@@ -1,8 +1,8 @@
 import nodemailer from "nodemailer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  type AuthMailPayload,
   AuthMailError,
+  type AuthMailPayload,
   createMailIdentity,
   createSmtpMailTransport,
   type MailOwnershipSnapshot,
@@ -49,9 +49,14 @@ function capture() {
 }
 afterEach(() => vi.restoreAllMocks());
 describe("SMTP delivery attempt boundary", () => {
-  it("preserves closed invalid-token ownership failures so the worker discards obsolete mail",async()=>{
-    const smtp=capture();const mail=createSmtpMailTransport(config,{identity,now:()=>now});
-    await expect(mail.deliver(payload,async()=>{throw new AuthMailError("invalid_payload");})).rejects.toMatchObject({code:"invalid_payload",message:"invalid_payload"});
+  it("preserves closed invalid-token ownership failures so the worker discards obsolete mail", async () => {
+    const smtp = capture();
+    const mail = createSmtpMailTransport(config, { identity, now: () => now });
+    await expect(
+      mail.deliver(payload, async () => {
+        throw new AuthMailError("invalid_payload");
+      }),
+    ).rejects.toMatchObject({ code: "invalid_payload", message: "invalid_payload" });
     expect(smtp.sendMail).not.toHaveBeenCalled();
   });
   it("never calls SMTP for a consumed or deleted reset token", async () => {
