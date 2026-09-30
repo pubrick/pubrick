@@ -60,7 +60,7 @@ export function withWorkerAiCall<T>(
 export function googleCallArguments(
   proxyUrl?: string,
   signal?: AbortSignal,
-): [] | [string] | [string | undefined, AbortSignal] {
+): [proxyUrl?: string, signal?: AbortSignal] {
   return signal ? [proxyUrl, signal] : proxyUrl ? [proxyUrl] : [];
 }
 
