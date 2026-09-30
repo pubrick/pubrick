@@ -24,6 +24,21 @@ function command(cmd, args) {
   const result = spawnSync(cmd, args, { env, stdio: "inherit" });
   if (result.status !== 0) throw new Error(`${cmd} failed (${result.status})`);
 }
+async function runBrowserJourney() {
+  // SMTP and fixture HTTP listeners share this process. A synchronous child
+  // would block their event loop and deadlock verification mail/control calls.
+  const child = start(
+    "pnpm",
+    ["exec", "playwright", "test", "--config=scripts/e2e/playwright.config.ts"],
+    ".",
+  );
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`Playwright failed (${code})`)),
+    );
+  });
+}
 async function requireFreePort(value) {
   const server = createServer();
   await new Promise((resolve, reject) => {
@@ -228,7 +243,7 @@ try {
   env.NODE_ENV = "production";
   const web = start(process.execPath, ["server.js"], standalone);
   await ready(`${origin}/en/login`, web);
-  command("pnpm", ["exec", "playwright", "test", "--config=scripts/e2e/playwright.config.ts"]);
+  await runBrowserJourney();
   if (worker.exitCode !== null) throw new Error("Compiled worker exited during journey");
 } catch (error) {
   console.error(error);
