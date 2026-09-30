@@ -418,12 +418,13 @@ export type RunListState = (typeof RUN_LIST_STATES)[number];
  *   connection, a run input this worker cannot execute, a bug. The generic
  *   member on purpose, so an unrecognised failure degrades to "we do not know"
  *   rather than to a sentence that guesses.
- * - `invalid_key` — the provider rejected the key (401/403).
+ * - `invalid_key` — the provider rejected authentication (401 or an explicit local auth failure).
  * - `model_not_found` — the provider does not know the configured model (404).
  * - `no_api_key` — the org has no AI key stored at all.
  * - `no_structured_output` — the model answered, twice, with something that is
  *   not the structure the step requires.
- * - `provider_refused` — any other refusal that carries an HTTP status.
+ * - `provider_refused` — a permission/access refusal (403), or another HTTP refusal
+ *   that does not establish rejected credentials or an unknown model.
  * - `rate_limited` — a retryable provider error. Written WITHOUT a terminal
  *   status while the job keeps retrying, so the strip can say why a run is
  *   taking so long.

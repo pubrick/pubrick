@@ -271,7 +271,7 @@ export function classifyProbeFailure(
     if (classified.name === "TransientError") return "rate_limited";
 
     const status = (classified as { code?: number }).code;
-    if (status === 401 || status === 403) return "invalid_key";
+    if (status === 401) return "invalid_key";
     if (status === 404) return "model_not_found";
     if (status !== undefined) return "refused";
   }

@@ -66,7 +66,7 @@ class WorkspaceJWT extends JWT {
         "status" in error.response
           ? error.response.status
           : undefined;
-      if (status === 400 || status === 401 || status === 403)
+      if (status === 400 || status === 401)
         throw new ProviderPreflightError(
           "Vertex service-account authorization was rejected",
           "invalid_key",

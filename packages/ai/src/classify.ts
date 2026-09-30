@@ -66,7 +66,7 @@ export type AbortCause = "timeout" | "caller";
  * `LoadAPIKeyError`, a provider 401. Retrying those spends money to fail again.
  *
  * The status → code mapping is deliberately the SAME one `classifyProbeFailure`
- * makes for the Test button (401/403 invalid, 404 unknown model, anything else
+ * makes for the Test button (401 invalid, 403 refused, 404 unknown model, anything else
  * with a status refused), so a key that fails a run and a key that fails the
  * Test are described to the user in the same words.
  */
@@ -152,7 +152,7 @@ export function classifyAiError(
       // is therefore taken by the arm above — a connect failure is told as a
       // retryable one ("rate-limiting or temporarily unavailable", which is
       // what it is and it IS retried), never as a refusal. The default here is
-      // for the statuses that exist and are not 401/403/404.
+      // for the statuses that exist and are not 401/404.
       codeForStatus(cause.statusCode),
     );
   }
@@ -164,7 +164,9 @@ export function classifyAiError(
 }
 
 function codeForStatus(statusCode: number | undefined): RunFailure {
-  if (statusCode === 401 || statusCode === 403) return "invalid_key";
+  // 403 can mean a valid credential lacks project/model/resource permission.
+  // Without explicit authentication evidence, neither validity claim is justified.
+  if (statusCode === 401) return "invalid_key";
   if (statusCode === 404) return "model_not_found";
   return "provider_refused";
 }

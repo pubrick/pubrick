@@ -25,6 +25,12 @@ Gemini Developer API key. Compatible APIs support nonstreaming text requests.
 
 ## What is supported
 
+Pubrick supports text generation with structured-output validation. It does not
+execute tools/function calls for any provider, even if an underlying vendor model
+or SDK supports them. A tool-call response cannot complete the text pipeline and
+is reported as unsupported structured output. Provider support also does not
+add audio, video, realtime, or generic multimodal workflows.
+
 All seven providers use the same draft generation, adaptation, revision and
 structured-output validation pipeline. The AI SDK's maintained adapters implement
 the vendor protocols; Pubrick does not maintain competing HTTP clients. Every
@@ -72,6 +78,19 @@ The existing **Test** button remains on each provider credential row. Its displa
 model is the workspace model for the selected provider, otherwise the credential's
 legacy/default model. A model change invalidates the displayed verdict. Saving
 text settings uses a revision check: stale concurrent writes ask the user to reload.
+
+## Permission failures
+
+HTTP 401 is reported as rejected authentication. HTTP 403 is a provider refusal:
+it may indicate missing project/resource/model permission rather than an invalid
+key, and does not establish that the key was accepted either. Review the chosen
+model, account permissions and project configuration before replacing credentials.
+For Vertex, successful OAuth followed by a model permission refusal retains its
+failed model receipt with unknown cost; an OAuth refusal before model dispatch
+creates no model receipt.
+
+Google documents [Vertex HTTP 403 as insufficient permission](https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/api-errors)
+and [Gemini HTTP 403 as insufficient resource permission](https://ai.google.dev/gemini-api/docs/troubleshooting).
 
 ## Vertex and compatible APIs
 

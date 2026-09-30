@@ -179,7 +179,7 @@ describe("workspace Vertex BYOK", () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
       provider: "vertex",
-      outcome: "errored",
+      outcome: "refused",
       costUsd: null,
       costSource: "unknown",
     });
