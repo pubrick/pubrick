@@ -182,3 +182,22 @@ Branch pointers are shared across worktrees. Creating "a fresh branch" with
 `main`; the commits survived only in the reflog. Rule: `-B` only for a name
 that does not exist (`git branch --list` first); to start from `main` on a new
 line, pick a new name.
+
+## 2026-09-30 — fixture IDs must reserve seeded ownership relationships
+
+The billing fixture initially allocated checkout and customer IDs from the
+number of newly created attempts. A seeded checkout could therefore be returned
+for a different customer; a seeded customer referenced by a subscription could
+also be allocated to a new organization. Both failures were reproduced before
+fixing allocation. Reserve seeded IDs and all referenced relationship IDs as
+well as prior allocations. Keep retries stable, and test ownership facts after
+allocation rather than checking only that the returned ID has a valid prefix.
+
+## 2026-09-30 — bound database file concurrency before increasing hook limits
+
+An integrated gate exhausted four migration setup hooks with unbounded DB file
+workers. The full 128-test tier passed serially with the same timeouts. Database
+specs independently acquire the migration advisory lock and compete for the
+same PostgreSQL; CPU-parallel imports add another startup cost. Keep this tier's
+file concurrency bounded and preserve the actual interleaving inside its
+concurrency tests. A longer hook timeout does not remove resource contention.
