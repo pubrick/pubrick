@@ -2,6 +2,8 @@ export type { FixtureBillingConfig } from "./fixture.js";
 export { FixtureBillingDriver } from "./fixture.js";
 export type { StripeSandboxConfig } from "./stripe.js";
 export { StripeSandboxDriver } from "./stripe.js";
+export type { TenantQuotaEnvironment, TenantQuotaMode } from "./tenant-quota-config.js";
+export { resolveTenantQuotaMode, TenantQuotaConfigurationError } from "./tenant-quota-config.js";
 export type {
   BillingDriver,
   BillingErrorCode,
