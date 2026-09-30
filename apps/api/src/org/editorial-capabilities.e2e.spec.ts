@@ -364,6 +364,8 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
       .expect(200);
     await manager.agent.get("/api/ai-credentials").expect(200);
     await manager.agent.get(`/api/brands/${brandId}/access`).expect(200);
+    await manager.agent.get(`/api/brands/${brandId}/autopilot/operations`).expect(200);
+    await manager.agent.get("/api/sources/telegram-login").expect(200);
     await db
       .update(schema.member)
       .set({ role: "owner,admin" })
