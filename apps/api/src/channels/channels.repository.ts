@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { schema, withTenantResourceAdmission } from "@pubrick/db";
 import { getPublisher, type VerifyResult } from "@pubrick/integrations";
 import {
   type ChannelCreate,
@@ -10,6 +10,7 @@ import {
   isManualPlatform,
   isOutstandingAdaptation,
   isUnreadableCiphertext,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   rewrapJson,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
@@ -18,6 +19,7 @@ import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
+import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 
 // Explicit allowlist: `credentialsEncrypted` is a column on this table, and a
 // bare `select()` anywhere below would ship it. Nothing here is a secret, and
@@ -126,23 +128,33 @@ export class ChannelsRepository {
       }
       credentialsEncrypted = encryptJson(data.credentials, env.APP_ENCRYPTION_KEY);
     }
-    const brand = await db
-      .select({ id: schema.brands.id })
-      .from(schema.brands)
-      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
-      .limit(1);
-    if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
-    const rows = await db
-      .insert(schema.channels)
-      .values({
+    return withQuotaErrors(() =>
+      withTenantResourceAdmission(
         orgId,
-        brandId: data.brandId,
-        platform: data.platform,
-        name: data.name,
-        credentialsEncrypted,
-      })
-      .returning(PUBLIC_COLUMNS);
-    return rows[0];
+        db,
+        tenantQuotaMode(),
+        { resource: "channels", additional: 1 },
+        async (tx) => {
+          const brand = await tx
+            .select({ id: schema.brands.id })
+            .from(schema.brands)
+            .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+            .limit(1);
+          if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
+          const rows = await tx
+            .insert(schema.channels)
+            .values({
+              orgId,
+              brandId: data.brandId,
+              platform: data.platform,
+              name: data.name,
+              credentialsEncrypted,
+            })
+            .returning(PUBLIC_COLUMNS);
+          return rows[0];
+        },
+      ),
+    );
   }
 
   /**
@@ -271,7 +283,12 @@ export class ChannelsRepository {
    * — external id, link, time — outlives the channel it went to.
    */
   async delete(orgId: string, id: string) {
+    const mode = tenantQuotaMode();
     await db.transaction(async (tx) => {
+      if (mode.mode === "hosted")
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+        );
       await this.requireChannel(tx, orgId, id);
       const doomed = await tx
         .select({

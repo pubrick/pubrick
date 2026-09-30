@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { schema, withTenantResourceAdmission } from "@pubrick/db";
+import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 import { hasCompleteMp4Boxes } from "./mp4-validation";
 
 export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -128,20 +130,30 @@ export class MediaRepository {
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, normalized, { flag: "wx", mode: 0o600 });
     try {
-      const rows = await db
-        .insert(schema.mediaAssets)
-        .values({
-          id,
+      return await withQuotaErrors(() =>
+        withTenantResourceAdmission(
           orgId,
-          brandId,
-          name: path.basename(file.originalname).slice(0, 200) || "Image",
-          mimeType: "image/jpeg",
-          width,
-          height,
-          byteSize: normalized.length,
-        })
-        .returning(COLUMNS);
-      return rows[0];
+          db,
+          tenantQuotaMode(),
+          { resource: "mediaBytes", additional: normalized.length },
+          async (tx) => {
+            const rows = await tx
+              .insert(schema.mediaAssets)
+              .values({
+                id,
+                orgId,
+                brandId,
+                name: path.basename(file.originalname).slice(0, 200) || "Image",
+                mimeType: "image/jpeg",
+                width,
+                height,
+                byteSize: normalized.length,
+              })
+              .returning(COLUMNS);
+            return rows[0];
+          },
+        ),
+      );
     } catch (error) {
       await unlink(target).catch(() => undefined);
       throw error;
@@ -170,21 +182,31 @@ export class MediaRepository {
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(target, file.buffer, { flag: "wx", mode: 0o600 });
     try {
-      const rows = await db
-        .insert(schema.mediaAssets)
-        .values({
-          id,
+      return await withQuotaErrors(() =>
+        withTenantResourceAdmission(
           orgId,
-          brandId,
-          name: path.basename(file.originalname).slice(0, 200) || "Video",
-          kind: "video",
-          mimeType: "video/mp4",
-          width: null,
-          height: null,
-          byteSize: file.buffer.length,
-        })
-        .returning(COLUMNS);
-      return rows[0];
+          db,
+          tenantQuotaMode(),
+          { resource: "mediaBytes", additional: file.buffer.length },
+          async (tx) => {
+            const rows = await tx
+              .insert(schema.mediaAssets)
+              .values({
+                id,
+                orgId,
+                brandId,
+                name: path.basename(file.originalname).slice(0, 200) || "Video",
+                kind: "video",
+                mimeType: "video/mp4",
+                width: null,
+                height: null,
+                byteSize: file.buffer.length,
+              })
+              .returning(COLUMNS);
+            return rows[0];
+          },
+        ),
+      );
     } catch (error) {
       await unlink(target).catch(() => undefined);
       throw error;
@@ -359,10 +381,17 @@ export class MediaRepository {
     }
     let rows: { id: string }[];
     try {
-      rows = await db
-        .delete(schema.mediaAssets)
-        .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
-        .returning({ id: schema.mediaAssets.id });
+      const mode = tenantQuotaMode();
+      rows = await db.transaction(async (tx) => {
+        if (mode.mode === "hosted")
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+          );
+        return tx
+          .delete(schema.mediaAssets)
+          .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
+          .returning({ id: schema.mediaAssets.id });
+      });
     } catch (error) {
       // A concurrent attachment may land after the prechecks; the foreign key
       // is the final authority and must remain an actionable 409.

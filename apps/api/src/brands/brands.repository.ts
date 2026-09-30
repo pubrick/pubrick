@@ -1,20 +1,22 @@
 import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { schema, withTenantResourceAdmission } from "@pubrick/db";
 import {
   type BrandCreate,
   type BrandImportApply,
   type BrandUpdate,
   isLiveRunStatus,
   isOutstandingAdaptation,
+  RUN_ADMISSION_LOCK_NAMESPACE,
 } from "@pubrick/shared";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { mediaPath } from "../media/media.repository";
 import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
+import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 
 // Explicit allowlist: new columns (secrets included) must be opted in, never
 // leaked by a `select()` that silently widens when the schema grows.
@@ -93,11 +95,21 @@ export class BrandsRepository {
   }
 
   async create(orgId: string, data: BrandCreate) {
-    const rows = await db
-      .insert(schema.brands)
-      .values({ ...data, orgId })
-      .returning(PUBLIC_COLUMNS);
-    return rows[0];
+    return withQuotaErrors(() =>
+      withTenantResourceAdmission(
+        orgId,
+        db,
+        tenantQuotaMode(),
+        { resource: "brands", additional: 1 },
+        async (tx) => {
+          const rows = await tx
+            .insert(schema.brands)
+            .values({ ...data, orgId })
+            .returning(PUBLIC_COLUMNS);
+          return rows[0];
+        },
+      ),
+    );
   }
 
   async update(orgId: string, id: string, data: BrandUpdate) {
@@ -234,7 +246,12 @@ export class BrandsRepository {
    * and everything the cascade will destroy is then a fixed set.
    */
   async delete(orgId: string, id: string) {
+    const mode = tenantQuotaMode();
     const mediaIds = await db.transaction(async (tx) => {
+      if (mode.mode === "hosted")
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+        );
       const brand = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
