@@ -172,6 +172,10 @@ describe("brand settings for editorial roles", () => {
         "href",
         "/en/brands/b1/topics",
       );
+      expect(screen.getByRole("link", { name: en.Brands.autopilotLink })).toHaveAttribute(
+        "href",
+        "/en/brands/b1/autopilot",
+      );
       for (const label of [
         en.Channels.add,
         en.Channels.test,
