@@ -594,6 +594,7 @@ export class RunsRepository {
       orgId,
       parseRunCreate.transform({
         brandId: row.brandId,
+        title: stored.title,
         contentType: stored.contentType,
         generateCover: stored.generateCover,
         generateInlineImages: stored.generateInlineImages,
