@@ -1,6 +1,46 @@
 import { expect, it, vi } from "vitest";
 import { FixtureBillingDriver, StripeSandboxDriver } from "./index.js";
 
+it("allocates fixture checkout IDs without reusing another customer's seeded checkout", async () => {
+  const identity = {
+    provider: "fixture" as const,
+    environment: "sandbox" as const,
+    accountId: "fixture_test",
+  };
+  const driver = new FixtureBillingDriver({
+    accountId: "fixture_test",
+    origin: "http://localhost:31300",
+    checkouts: [
+      {
+        identity,
+        checkoutId: "cs_fixture_1",
+        customerId: "cus_customerA",
+        subscriptionId: "sub_customerA",
+        status: "complete",
+        paymentStatus: "paid",
+      },
+    ],
+  });
+  const request = {
+    customerId: "cus_customerB",
+    priceId: "price_server",
+    successUrl: "http://localhost:31300",
+    cancelUrl: "http://localhost:31300",
+    idempotencyKey: "checkout:B",
+  };
+  const created = await driver.createCheckout(request);
+  expect(created.id).not.toBe("cs_fixture_1");
+  expect(await driver.retrieveCheckout(created.id)).toMatchObject({
+    customerId: "cus_customerB",
+    subscriptionId: null,
+  });
+  expect(await driver.retrieveCheckout("cs_fixture_1")).toMatchObject({
+    customerId: "cus_customerA",
+    subscriptionId: "sub_customerA",
+  });
+  expect(await driver.createCheckout(request)).toEqual(created);
+});
+
 const identity = {
   provider: "stripe" as const,
   environment: "sandbox" as const,
