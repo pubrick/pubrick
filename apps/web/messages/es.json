@@ -10,7 +10,7 @@
     "genericError": "Algo salió mal. Inténtalo de nuevo.",
     "originMismatch": "Ha abierto {opened}, pero el PUBLIC_ORIGIN de esta instancia es {configured}. Las cookies de sesión solo se emiten para PUBLIC_ORIGIN: ponga en .env la dirección que escribe en el navegador y reinicie, o abra {configured}.",
     "verificationTitle": "Revisa tu correo",
-    "verificationSent": "Si esta dirección puede continuar, se ha enviado un enlace de confirmación a {email}.",
+    "verificationSent": "Busca un enlace de confirmación en {email}. Si no llega, solicita otro enlace.",
     "verificationHint": "Confirma tu correo antes de iniciar sesión. Revisa spam si no llega el mensaje.",
     "verificationResent": "Si se puede enviar un nuevo enlace, revisa tu correo.",
     "resendVerification": "Reenviar",

@@ -10,7 +10,7 @@
     "genericError": "Something went wrong. Please try again.",
     "originMismatch": "You opened {opened} but this instance's PUBLIC_ORIGIN is {configured}. Sign-in cookies are issued for PUBLIC_ORIGIN only — set PUBLIC_ORIGIN in .env to the address you type in the browser and restart, or open {configured} instead.",
     "verificationTitle": "Check your email",
-    "verificationSent": "If this address can continue, a confirmation link has been sent to {email}.",
+    "verificationSent": "Check {email} for a confirmation link. If it does not arrive, request another link.",
     "verificationHint": "Confirm your email before signing in. Check your spam folder if the message does not arrive.",
     "verificationResent": "If a new link can be sent, check your email.",
     "resendVerification": "Resend",
