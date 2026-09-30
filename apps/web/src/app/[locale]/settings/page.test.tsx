@@ -1325,6 +1325,10 @@ describe("Settings — People", () => {
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+    expect(screen.getByText(en.SettingsPage.peopleInviteBody)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Invitation email queued; you can also copy the link."),
+    ).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
     await user.click(
       within(screen.getByRole("dialog")).getByRole("button", {
@@ -1740,6 +1744,15 @@ it("routes hosted invitations through admission with the actual selected workspa
   await renderSettings();
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+  expect(
+    screen.getByText(
+      "Pubrick will queue an invitation email. You can also copy a link after creating the invitation.",
+    ),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(en.SettingsPage.peopleInviteBody)).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("Invitation email queued; you can also copy the link."),
+  ).not.toBeInTheDocument();
   await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
   await user.click(
     within(screen.getByRole("dialog")).getByRole("button", { name: en.SettingsPage.peopleInvite }),
@@ -1755,5 +1768,41 @@ it("routes hosted invitations through admission with the actual selected workspa
       }),
     }),
   );
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Invitation email queued; you can also copy the link.",
+  );
   expect(mockAuthClient.organization.inviteMember).not.toHaveBeenCalled();
+});
+
+it("does not claim an invitation email was queued when hosted admission rejects", async () => {
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: true,
+    passwordRecoveryEnabled: true,
+    deploymentMode: "hosted",
+    billingEnabled: true,
+    billingTestMode: true,
+    ready: true,
+    failed: false,
+    retry: vi.fn(),
+  });
+  const fallback = mockApi.getMockImplementation();
+  mockApi.mockImplementation(async (path, init) => {
+    if (path === "/api/hosted-admission/invite") throw new Error("Unavailable");
+    return fallback?.(path, init);
+  });
+  await renderSettings();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: en.SettingsPage.peopleInvite }));
+  await user.type(screen.getByLabelText(en.SettingsPage.peopleEmailLabel), "carol@example.com");
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: en.SettingsPage.peopleInvite }),
+  );
+  await screen.findByRole("alert");
+  expect(
+    screen.queryByText("Invitation email queued; you can also copy the link."),
+  ).not.toBeInTheDocument();
+  expect(screen.getByLabelText(en.SettingsPage.peopleEmailLabel)).toHaveValue("carol@example.com");
+  expect(
+    screen.queryByRole("button", { name: en.SettingsPage.peopleCopy }),
+  ).not.toBeInTheDocument();
 });
