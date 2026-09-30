@@ -50,6 +50,7 @@ const ZONED_TABLES = [
   "content_versions",
   "feed_entries",
   "media_assets",
+  "media_cleanup_work",
 ] as const;
 
 /**
@@ -281,6 +282,10 @@ describe("timestamps carry their zone", () => {
       "content_versions.created_at",
       "feed_entries.published_at",
       "media_assets.created_at",
+      "media_cleanup_work.completed_at",
+      "media_cleanup_work.created_at",
+      "media_cleanup_work.lease_until",
+      "media_cleanup_work.next_attempt_at",
       // 0017's, and born zoned: it records the moment a person settled a
       // delivery, written by the api's `now()` and read back beside the
       // receipt's own `created_at`, so the two clocks 0014 separated meet on

@@ -182,6 +182,10 @@ const ZONED_COLUMNS = [
   "manual_topic_plan_attempts.created_at",
   "manual_topic_plan_attempts.started_at",
   "media_assets.created_at",
+  "media_cleanup_work.completed_at",
+  "media_cleanup_work.created_at",
+  "media_cleanup_work.lease_until",
+  "media_cleanup_work.next_attempt_at",
   "memorable_dates.created_at",
   "memorable_dates.updated_at",
   "news_comment_analyses.created_at",
@@ -600,11 +604,11 @@ const NON_ENUM_CHECKS = [
   "ai_credentials_revision_check",
   // 0119: durable billing uses closed states, identity scopes and bounded retry counts.
   "billing_subscription_reconcile_attempts_check",
-  "billing_subscription_status_check",
-  "billing_checkout_status_check",
+  "billing_subscriptions_status_check",
+  "billing_checkout_attempts_status_check",
   "billing_receipt_attempts_check",
-  "billing_receipt_kind_check",
-  "billing_receipt_status_check",
+  "billing_receipts_kind_check",
+  "billing_receipts_status_check",
   "billing_cleanup_attempts_check",
   "billing_cleanup_kind_check",
   "billing_cleanup_status_check",
@@ -620,6 +624,16 @@ const NON_ENUM_CHECKS = [
   "billing_receipts_environment_check",
   "billing_cleanup_provider_check",
   "billing_cleanup_environment_check",
+  // 0122: transient physical-call leases add kind and fixed lease-deadline checks.
+  "hosted_ai_call_leases_kind_check",
+  "hosted_ai_call_deadline_check",
+  // 0123: durable file deletion proof survives its tenant; native cleanup tests prove states and fencing.
+  "media_cleanup_work_kind_check",
+  "media_cleanup_work_state_check",
+  "media_cleanup_work_last_error_check",
+  "media_cleanup_work_attempts_check",
+  "media_cleanup_work_lease_check",
+  "media_cleanup_work_completed_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
