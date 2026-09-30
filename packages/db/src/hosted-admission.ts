@@ -392,13 +392,25 @@ export class HostedAdmissionRepository {
       if (!existing.length && hasRole(acceptedRole, "owner"))
         await this.assertOwnerCapacity(tx, actor.userId, orgId);
       const seats = await this.seats(tx, orgId, now);
-      // Pending email is already reserved. Accept converts it, never adds a second seat.
+      // Usually converts the one pending reservation. Legacy case-variant user
+      // accounts may share a canonical email, so recompute the actual post-accept
+      // occupancy instead of assuming that a reservation always existed.
+      const postAcceptMembers = existing.length
+        ? seats.members
+        : [...seats.members, { userId: actor.userId, email: account.email }];
+      const postAcceptPending = seats.pending.filter(
+        (email) => canonicalEmail(email) !== canonicalEmail(account.email),
+      );
+      const additionalSeats = Math.max(
+        0,
+        admissionSeats(postAcceptMembers, postAcceptPending) - seats.occupied,
+      );
       await this.ports.authorizeGrowth(tx, {
         orgId,
         userId: actor.userId,
         operation: "accept",
         occupiedSeats: seats.occupied,
-        additionalSeats: 0,
+        additionalSeats,
       });
       const memberId = existing[0]?.id ?? randomUUID();
       if (!existing.length)

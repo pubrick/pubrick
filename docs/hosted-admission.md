@@ -53,8 +53,10 @@ Injected database-only ports must use this exact Drizzle transaction:
 
 - `authorizeGrowth` locks and validates the central entitlement/seat authority.
   Create receives a new organization and one owner seat. Invite receives distinct
-  occupied seats and zero or one additional seat. Accept converts a reservation
-  and receives zero additional seats. The port owns billing policy.
+  occupied seats and zero or one additional seat. Accept normally converts a reservation
+  with zero additional seats. A legacy case-variant account with a canonical
+  email already represented by a different member has no separate reservation;
+  acceptance must admit its actual additional account seat instead. The port owns billing policy.
 - `enqueueInvitation` inserts the encrypted durable pg-boss event atomically with
   the invitation, including backlog admission. It receives the committed-to-be
   invitation ID, organization, recipient, role, expiry, inviter and validated
