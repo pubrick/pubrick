@@ -36,11 +36,11 @@ function snapshot(data: Record<string, Record<string, unknown>[]> = {}): ExportS
     rows: (policy) => rows(data[policy.key] ?? []),
   };
 }
-function repository(value: ExportSnapshot): WorkspaceExportRepository {
+function repository(value: ExportSnapshot): Pick<WorkspaceExportRepository, "withSnapshot"> {
   // The archive unit tier replaces database ownership with the supplied snapshot.
   return {
     withSnapshot: async (_orgId, _userId, _signal, consume) => consume(value),
-  } as WorkspaceExportRepository;
+  } as Pick<WorkspaceExportRepository, "withSnapshot">;
 }
 function capture() {
   const bytes: Buffer[] = [];
@@ -121,7 +121,7 @@ describe("portable workspace archive", () => {
         committed = true;
         return result;
       },
-    } as WorkspaceExportRepository;
+    } as Pick<WorkspaceExportRepository, "withSnapshot">;
     const sink = capture();
     await new WorkspaceExportService(staged).stream(
       "tenant-one",
@@ -142,7 +142,7 @@ describe("portable workspace archive", () => {
         await consume(value);
         throw new Error("Snapshot commit failed");
       },
-    } as WorkspaceExportRepository;
+    } as Pick<WorkspaceExportRepository, "withSnapshot">;
     const start = vi.fn(() => capture().writable);
     await expect(
       new WorkspaceExportService(failing).stream(
@@ -207,7 +207,7 @@ describe("portable workspace archive", () => {
       withSnapshot: async () => {
         throw new Error("Forbidden");
       },
-    } as unknown as WorkspaceExportRepository;
+    } as unknown as Pick<WorkspaceExportRepository, "withSnapshot">;
     await expect(
       new WorkspaceExportService(repo).stream(
         "tenant-one",

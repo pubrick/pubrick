@@ -6,6 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 import {
   HttpException,
+  Inject,
   Injectable,
   type OnModuleDestroy,
   type OnModuleInit,
@@ -81,7 +82,10 @@ export class WorkspaceExportService implements OnModuleInit, OnModuleDestroy {
   // Bound connection and compression usage per API process. There is no
   // unbounded waiting list when several owners request large exports together.
   private readonly admitted = pLimit(2);
-  constructor(private readonly repository: WorkspaceExportRepository) {}
+  constructor(
+    @Inject(WorkspaceExportRepository)
+    private readonly repository: Pick<WorkspaceExportRepository, "withSnapshot">,
+  ) {}
 
   async stream(
     orgId: string,
