@@ -13,7 +13,8 @@ trusted instance configuration.
 1. Acquire `RUN_ADMISSION_LOCK_NAMESPACE` / `hashtext(orgId)` advisory.
 2. Acquire organization `FOR KEY SHARE` directly, without a weaker-lock upgrade.
 3. Read actual tenant usage: all brand rows, all channel rows, or the sum of
-   `media_assets.byte_size` across every brand and media kind.
+   live media bytes plus retained physical-deletion obligations across every brand
+   and media kind, using `getTenantMediaStorageUsage(orgId, tx)`.
 4. Call existing `authorizeBillingGrowth` inside the transaction, which locks the
    central billing state and verifies the configured operator identity.
 5. Run the database-only insertion callback in that same transaction.
@@ -28,7 +29,9 @@ fractional, missing or unsafe totals fail closed instead of losing precision.
 The callback may insert only the resource growth it declared. A different actual
 increase or insertion failure rolls back; billing refusal never invokes it.
 Uploads, generated images, covers, inline illustrations and crops all contribute
-to the same media sum. There is no resettable counter or backfill dependency.
+to the same media accounting. There is no resettable counter. Migration 0124 adds
+byte proofs to retained cleanup requests; unknown historical proofs require operator
+reconciliation before further hosted media growth.
 
 Self-hosted mode preserves existing behavior: it does not acquire hosted advisory
 or tenant locks, count usage, or query billing. It executes the insertion callback
@@ -47,20 +50,11 @@ and child locks. Otherwise a concurrent deletion can reduce the post-insert tota
 and produce a conservative `growth_mismatch` rollback. The helper safely refuses
 that race, but it does not claim a smooth workflow until deletions are coordinated.
 
-Current callsites requiring integration:
-
-- API `brands/brands.repository.ts:create` and
-  `channels/channels.repository.ts:create` currently insert without a shared
-  admission transaction. Channel brand ownership must be rechecked inside it.
-- API `media/media.repository.ts:uploadImage/uploadVideo` and worker
-  `generate/generate.repository.ts:saveGeneratedImage` currently write their
-  bounded normalized file first and then insert metadata. Wrap metadata insertion
-  and preserve file cleanup on every rollback or quota refusal.
-- API `content/content-images.repository.ts:crop` currently takes organization
-  `KEY SHARE`, content-item and media locks before decoding/writing its file.
-  Acquire the shared advisory at transaction entry before those locks; bounded
-  decoding/file preparation must move outside the locked transaction, followed
-  by authoritative revision/ownership revalidation and same-transaction insertion.
+Integrated write paths use the same hosted admission boundary: API brand and
+channel creation, image/video uploads, generated covers/inline images, crops, and
+worker generated images. Hosted brand/channel/media deletion acquires the shared
+advisory before tenant and child locks. Files are prepared outside the database
+insertion callback; transaction refusal preserves cleanup of the prepared file.
 
 Do not perform filesystem work, network calls, SDK calls or image decoding inside
 the insertion callback. Prepare a bounded private file first, derive actual bytes,
@@ -76,5 +70,33 @@ integer handling, self-hosted behavior, quota refusal, callback rollback and
 uncoordinated-delete refusal. Native interleavings and actual callback insertion
 remain an integration gate before enabling hosted limits in each writer path.
 
-This helper has no migration, no durable concurrent-job reservations and no LLM
-cost admission. It does not claim these independent limits are covered.
+The storage proof upgrade uses migration 0124. This helper does not independently
+admit queued jobs or physical model calls; their dedicated admission policies
+remain separate.
+
+## Storage deletion accounting and operational limits
+
+Deleting media removes library metadata immediately and retains its normalized
+byte size in the durable cleanup proof. Pending, leased and `operator_action`
+requests occupy the tenant's media quota until deletion is acknowledged. A retained
+proof that still has matching live metadata is counted only once. Completed
+proofs no longer occupy storage quota. Billing usage and resource admission use
+the same authoritative aggregate; cleanup completion can reduce occupied bytes
+while an insertion transaction runs, so insertion verifies the live-byte increase
+separately rather than requiring pending cleanup totals to remain unchanged.
+
+Historical incomplete proofs without byte sizes are not treated as zero. Hosted
+media growth refuses until the operator reconciles them; Settings displays an
+unknown media count with an explanation while preserving known subscription,
+plan, other counters and billing-management actions. Unexpected database errors
+remain errors. Deletion/cleanup, export and subscription management remain
+available regardless of paid growth access.
+
+This is metadata-backed tenant accounting, not a hard physical filesystem cap.
+A process crash after writing a prepared UUID file and before committing its
+metadata can leave a file without an asset or deletion-proof row. Normal refusal
+cleanup handles returned errors; it cannot run after a process crash. Flat UUID
+paths alone do not establish tenant ownership for those files. Operators must
+monitor free disk space and use filesystem-level limits, and reconcile orphaned
+files with all writers paused. Do not delete unreferenced files during active
+writes: an in-flight upload or generation may legitimately be preparing one.

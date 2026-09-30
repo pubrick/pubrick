@@ -1,3 +1,4 @@
+import type { BillingUsage } from "@pubrick/shared";
 import { api } from "./api";
 export type BillingLimits = {
   seats: number;
@@ -21,7 +22,7 @@ export type BillingStatus = {
   status: "unconfigured" | "pending" | "active" | "trial" | "expired" | "cancelled" | "past_due";
   plan: { id: string; version: number } | null;
   limits: BillingLimits | null;
-  usage: BillingLimits;
+  usage: BillingUsage;
   accessUntil: string | null;
   cancelAtPeriodEnd: boolean;
   canManage: boolean;

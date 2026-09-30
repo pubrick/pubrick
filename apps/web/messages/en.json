@@ -2734,6 +2734,8 @@
     "seats": "Seats",
     "brands": "Brands",
     "channels": "Channels",
+    "usageUnknown": "Unknown",
+    "storageUnknownHelp": "Contact the instance operator to reconcile media storage. Subscription management remains available.",
     "mediaBytes": "Media storage",
     "concurrentJobs": "Concurrent jobs",
     "bytes": "{value} MiB",

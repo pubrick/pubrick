@@ -2734,6 +2734,8 @@
     "seats": "Membros",
     "brands": "Marcas",
     "channels": "Canais",
+    "usageUnknown": "Desconhecido",
+    "storageUnknownHelp": "Contacte o administrador do servidor para verificar o armazenamento de multimédia. A gestão da subscrição continua disponível.",
     "mediaBytes": "Armazenamento de mídia",
     "concurrentJobs": "Tarefas simultâneas",
     "bytes": "{value} MiB",

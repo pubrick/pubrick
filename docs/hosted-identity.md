@@ -178,3 +178,14 @@ A local integration fixture can choose `BILLING_DRIVER=fixture` with an explicit
 and nonproduction API process. Production containers reject the fixture driver.
 Native ownership tests seed an active sandbox entitlement after creating an
 empty workspace; this is test setup, not payment settlement evidence.
+
+### Legacy SDK metadata limitation
+
+Pubrick's custom hosted lifecycle, billing and guarded resource routes combine
+roles across existing duplicate membership rows. The remaining allowed Better
+Auth name/slug update endpoint reads one membership row using the SDK adapter.
+An author row preceding a separate owner row can therefore receive a false 403
+on that metadata update; an ordinary single owner row works. Self-hosted raw SDK
+organization operations have the same adapter limitation. No legacy rows are
+removed automatically. This limitation does not authorize raw hosted lifecycle
+writers or widen member permissions.

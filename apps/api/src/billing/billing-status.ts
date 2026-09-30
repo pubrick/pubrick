@@ -1,3 +1,4 @@
+import type { BillingUsage } from "@pubrick/shared";
 import type { PlanDefinition } from "./catalog-core";
 
 type BillingLimits = PlanDefinition["limits"];
@@ -9,7 +10,7 @@ export type BillingStatus = {
   status: "unconfigured" | "pending" | "active" | "trial" | "expired" | "cancelled" | "past_due";
   plan: { id: string; version: string } | null;
   limits: BillingLimits | null;
-  usage: BillingLimits;
+  usage: BillingUsage;
   accessUntil: string | null;
   cancelAtPeriodEnd: boolean;
   canManage: boolean;
@@ -22,7 +23,7 @@ export type BillingStatusFacts = {
   subscriptionStatus: SubscriptionStatus | null;
   plan: BillingStatus["plan"];
   limits: BillingLimits | null;
-  usage: BillingLimits;
+  usage: BillingUsage;
   accessUntil: Date | null;
   cancelAtPeriodEnd: boolean;
   canManage: boolean;

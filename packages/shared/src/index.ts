@@ -49,6 +49,7 @@ export * from "./dto/ai-credentials.js";
 export * from "./dto/analytics.js";
 export * from "./dto/api-keys.js";
 export * from "./dto/autopilot.js";
+export * from "./dto/billing.js";
 export * from "./dto/brand-access.js";
 export * from "./dto/brands.js";
 export * from "./dto/calendar.js";

@@ -7,7 +7,13 @@ import type {
   VerifiedEvent,
 } from "@pubrick/billing";
 import type { createDb } from "@pubrick/db";
-import { type BillingTransaction, resolveBillingEntitlement, schema } from "@pubrick/db";
+import {
+  type BillingTransaction,
+  getTenantMediaStorageUsage,
+  MediaStorageUsageError,
+  resolveBillingEntitlement,
+  schema,
+} from "@pubrick/db";
 import { isOrganizationManager, RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
@@ -942,19 +948,33 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         .select({
           brands: sql<string>`(SELECT count(*) FROM ${schema.brands} WHERE ${schema.brands.orgId} = ${orgId})`,
           channels: sql<string>`(SELECT count(*) FROM ${schema.channels} WHERE ${schema.channels.orgId} = ${orgId})`,
-          mediaBytes: sql<string>`(SELECT coalesce(sum(${schema.mediaAssets.byteSize}), 0) FROM ${schema.mediaAssets} WHERE ${schema.mediaAssets.orgId} = ${orgId})`,
           concurrentJobs: sql<string>`(SELECT count(*) FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.orgId} = ${orgId} AND ${schema.pipelineRuns.status} IN ('queued','running'))`,
         })
         .from(schema.organization)
         .where(eq(schema.organization.id, orgId));
+      let mediaBytes: number | null;
+      try {
+        mediaBytes = await getTenantMediaStorageUsage(orgId, tx);
+      } catch (error) {
+        if (
+          !(error instanceof MediaStorageUsageError) ||
+          error.code !== "storage_reconciliation_required"
+        )
+          throw error;
+        mediaBytes = null;
+      }
       const counters = {
         seats: new Set(members.map((member) => member.userId)).size + reserved.size,
         brands: Number(usage?.brands ?? 0),
         channels: Number(usage?.channels ?? 0),
-        mediaBytes: Number(usage?.mediaBytes ?? 0),
+        mediaBytes,
         concurrentJobs: Number(usage?.concurrentJobs ?? 0),
       };
-      if (Object.values(counters).some((value) => !Number.isSafeInteger(value) || value < 0))
+      if (
+        Object.values(counters).some(
+          (value) => value !== null && (!Number.isSafeInteger(value) || value < 0),
+        )
+      )
         throw new BillingCoreError("retry_required");
       return {
         configured: scoped && entitlement.planId !== null,

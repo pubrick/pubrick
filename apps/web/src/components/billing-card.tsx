@@ -102,7 +102,8 @@ export function BillingCard({ orgId, testMode }: { orgId: string; testMode: bool
   }
   const manage = status?.plan !== null && status?.plan !== undefined;
   const selected = plans.find((plan) => plan.id === planId);
-  function metric(value: number, key: (typeof metrics)[number]) {
+  function metric(value: number | null, key: (typeof metrics)[number]) {
+    if (value === null) return t("usageUnknown");
     return key === "mediaBytes"
       ? t("bytes", {
           value: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
@@ -163,6 +164,11 @@ export function BillingCard({ orgId, testMode }: { orgId: string; testMode: bool
               </div>
             ))}
           </dl>
+          {status.usage.mediaBytes === null && (
+            <p role="status" className="text-sm text-fg-secondary">
+              {t("storageUnknownHelp")}
+            </p>
+          )}
           {status.canManage &&
             testMode &&
             (manage ? (
