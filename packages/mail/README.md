@@ -38,6 +38,10 @@ storage resolver** and rechecks the clock after that read. Current account ID an
 email must still match; already verified accounts do not get verification mail.
 Invitations must still belong to an existing organization, remain pending, target
 the same recipient and be unexpired. Missing/deleted/changed targets are skipped.
+For reset mail, the resolver must also fetch the exact Better Auth verification
+identifier returned by `resetMailVerificationIdentifier(payload)`. The record
+must still exist, belong to that user and be unexpired. Consuming the token
+deletes this record; a consumed or deleted reset link is never mailed.
 A successful previous attempt never caches ownership for a later retry.
 
 The transport requires authenticated implicit TLS or STARTTLS with normal

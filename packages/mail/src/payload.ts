@@ -91,6 +91,16 @@ const payloadSchema = z.discriminatedUnion("kind", [
 ]);
 export type AuthMailPayload = z.infer<typeof payloadSchema>;
 export type EncryptedAuthMail = Readonly<{ ciphertext: string }>;
+function resetToken(url: URL): string {
+  const token = decodeURIComponent(url.pathname.slice("/api/auth/reset-password/".length));
+  if (!/^[A-Za-z0-9_-]{1,512}$/.test(token)) throw new Error("reset token");
+  return token;
+}
+export function resetMailVerificationIdentifier(value: unknown): string {
+  const payload = validateAuthMail(value);
+  if (payload.kind !== "reset") throw new AuthMailError("invalid_payload");
+  return `reset-password:${resetToken(new URL(payload.link))}`;
+}
 export function validateAuthMail(value: unknown): AuthMailPayload {
   try {
     const data = payloadSchema.parse(value);
@@ -117,6 +127,7 @@ export function validateAuthMail(value: unknown): AuthMailPayload {
           : !/^\/api\/auth\/reset-password\/[^/]+$/.test(url.pathname)
       )
         throw new Error("link kind");
+      if (data.kind === "reset") resetToken(url);
       const callback = url.searchParams.get("callbackURL");
       if (callback && callback !== "/") {
         const target = new URL(callback, data.identity.origin);
@@ -167,8 +178,14 @@ export type InvitationMailSnapshot = Readonly<{
   expiresAt: number;
   organizationExists: boolean;
 }>;
+export type ResetVerificationSnapshot = Readonly<{
+  identifier: string;
+  userId: string;
+  expiresAt: number;
+}>;
 export type MailOwnershipSnapshot = Readonly<{
   user?: UserMailSnapshot | null;
+  resetVerification?: ResetVerificationSnapshot | null;
   invitation?: InvitationMailSnapshot | null;
 }>;
 export type DeliveryEligibility =
@@ -179,7 +196,8 @@ export type DeliveryEligibility =
   | "missing_target"
   | "recipient_changed"
   | "already_verified"
-  | "invitation_closed";
+  | "invitation_closed"
+  | "reset_token_invalid";
 export function deliveryEligibility(
   value: unknown,
   currentIdentity: MailIdentity,
@@ -218,6 +236,17 @@ export function deliveryEligibility(
     if (!user || user.id !== data.userId) return "missing_target";
     if (user.email.toLowerCase() !== data.recipient.toLowerCase()) return "recipient_changed";
     if (data.kind === "verify" && user.emailVerified) return "already_verified";
+    if (data.kind === "reset") {
+      const verification = snapshot.resetVerification;
+      if (
+        !verification ||
+        verification.identifier !== resetMailVerificationIdentifier(data) ||
+        verification.userId !== data.userId
+      )
+        return "reset_token_invalid";
+      if (!Number.isSafeInteger(verification.expiresAt) || verification.expiresAt <= now)
+        return "expired";
+    }
   }
   return "eligible";
 }
