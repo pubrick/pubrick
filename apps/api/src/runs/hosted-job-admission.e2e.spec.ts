@@ -62,23 +62,19 @@ describe.skipIf(!url)("native hosted API job admission", () => {
     const userId = randomUUID();
     const sessionId = randomUUID();
     userIds.push(userId);
-    await connection.db
-      .insert(schema.user)
-      .values({
-        id: userId,
-        name: "Verified owner",
-        email: `${userId}@example.test`,
-        emailVerified: true,
-      });
-    await connection.db
-      .insert(schema.session)
-      .values({
-        id: sessionId,
-        userId,
-        token: randomUUID(),
-        activeOrganizationId: orgId,
-        expiresAt: new Date(Date.now() + 3600000),
-      });
+    await connection.db.insert(schema.user).values({
+      id: userId,
+      name: "Verified owner",
+      email: `${userId}@example.test`,
+      emailVerified: true,
+    });
+    await connection.db.insert(schema.session).values({
+      id: sessionId,
+      userId,
+      token: randomUUID(),
+      activeOrganizationId: orgId,
+      expiresAt: new Date(Date.now() + 3600000),
+    });
     await connection.db
       .insert(schema.member)
       .values({ id: randomUUID(), organizationId: orgId, userId, role: "owner" });
