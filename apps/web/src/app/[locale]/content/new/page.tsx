@@ -47,6 +47,7 @@ const SOURCE_HELP_ID = "source-help";
 
 export default function NewContentPage() {
   const t = useTranslations("ContentNew");
+  const tb = useTranslations("Brands");
   // See the queue screen: the api's refusal codes are read from here, which is
   // what puts "this brand has no channels" and the run cap in four languages.
   const te = useTranslations("Errors");
@@ -474,7 +475,15 @@ export default function NewContentPage() {
             <p className="mb-2 text-sm font-medium text-fg-secondary">{t("channels")}</p>
             {!brandId && <p className="text-sm text-fg-tertiary">{t("selectBrandFirst")}</p>}
             {brandId && channels.length === 0 && (
-              <p className="text-sm text-fg-tertiary">{t("noChannels")}</p>
+              <div className="space-y-1 text-sm">
+                <p className="text-fg-tertiary">{t("noChannels")}</p>
+                <Link
+                  href={`/${locale}/brands/${brandId}#channels`}
+                  className="text-accent hover:underline"
+                >
+                  {tb("addChannelNext")}
+                </Link>
+              </div>
             )}
             {channels.length > 0 && (
               <ul className="flex flex-col divide-y divide-border-soft overflow-hidden rounded-control border border-border">

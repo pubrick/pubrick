@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import { Body, Controller, Get, Header, HttpCode, Param, Post, Req, Res } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Req,
+  Res,
+} from "@nestjs/common";
 import { type ClientReviewVerdictInput, clientReviewVerdictSchema } from "@pubrick/shared";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import type { Request, Response } from "express";
@@ -71,6 +82,24 @@ export class GuestClientReviewController {
     response.setHeader("X-Content-Type-Options", "nosniff");
     await limitGuest(token, request);
     const bytes = await this.reviews.cover(token);
+    response.setHeader("Content-Type", "image/jpeg");
+    response.setHeader("Content-Disposition", "inline");
+    response.send(bytes);
+  }
+
+  @Get("images/:slotId")
+  async inlineImage(
+    @Param("token") token: string,
+    @Param("slotId", ParseUUIDPipe) slotId: string,
+    @Req() request: Request,
+    @Res() response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader("X-Robots-Tag", "noindex, nofollow");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    limitGuest(token, request);
+    const bytes = await this.reviews.inlineImage(token, slotId);
     response.setHeader("Content-Type", "image/jpeg");
     response.setHeader("Content-Disposition", "inline");
     response.send(bytes);

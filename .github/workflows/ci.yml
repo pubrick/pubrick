@@ -66,6 +66,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm build
       - run: pnpm typecheck
+      - run: node --test scripts/*.test.mjs
       # --force: the `test` task is cacheable, and turbo's hash covers source and declared
       # env — never the state of the Postgres service the database tier talks to. A restored
       # cache (an actions/cache step, or remote caching) would replay "success" over a

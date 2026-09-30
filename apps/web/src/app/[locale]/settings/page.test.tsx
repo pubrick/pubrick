@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as theme from "@/lib/theme";
 import { routerMock } from "@/test/next-navigation.stub";
-import { render, screen, waitFor, within } from "@/test/render";
+import { act, render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../messages/en.json";
 import SettingsPage from "./page";
 
@@ -1499,4 +1499,53 @@ describe("Settings — public API management", () => {
       screen.queryByRole("link", { name: en.SettingsPage.telegramSourcesOpen }),
     ).not.toBeInTheDocument();
   });
+});
+
+it("drops an old key verdict after its credential is replaced", async () => {
+  let finish!: () => void;
+  const testGate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  installApi([], {
+    credentials: [googleKey],
+    testGate,
+    test: { ok: false, reason: "invalid_key" },
+  });
+  await renderSettings();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: en.SettingsPage.test }));
+  await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "replacement-key-12345678");
+  await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+  await screen.findByText(en.SettingsPage.aiKeySavedNotice);
+  await act(async () => {
+    finish();
+  });
+  expect(screen.queryByText(en.SettingsPage.aiTestFailGoogleKey)).not.toBeInTheDocument();
+});
+
+it("does not resurrect credentials from a load predating a key save", async () => {
+  let finish!: (rows: AiCredentialPublic[]) => void;
+  const staleLoad = new Promise<AiCredentialPublic[]>((resolve) => {
+    finish = resolve;
+  });
+  installApi([]);
+  const implementation = mockApi.getMockImplementation();
+  if (!implementation) throw new Error("Missing API test implementation");
+  let initial = true;
+  mockApi.mockImplementation((path, init) => {
+    if (initial && path === "/api/ai-credentials" && !init?.method) {
+      initial = false;
+      return staleLoad;
+    }
+    return implementation(path, init);
+  });
+  render(<SettingsPage />);
+  const user = userEvent.setup();
+  await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "replacement-key-12345678");
+  await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+  await screen.findByText(en.SettingsPage.aiKeySavedNotice);
+  await act(async () => {
+    finish([]);
+  });
+  expect(screen.getByRole("button", { name: en.SettingsPage.test })).toBeInTheDocument();
 });

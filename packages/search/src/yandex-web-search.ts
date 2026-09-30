@@ -47,15 +47,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function entries(value: unknown): unknown[] {
-  return value === undefined ? [] : Array.isArray(value) ? value : [value];
+/** fast-xml-parser's ordered arrays retain mixed text and inline highlights. */
+function elements(nodes: unknown, name: string): unknown[][] {
+  if (!Array.isArray(nodes)) return [];
+  return nodes.flatMap((node) => {
+    const children = asRecord(node)?.[name];
+    return Array.isArray(children) ? [children] : [];
+  });
 }
 
 function plainText(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value !== "object" || value === null) return "";
-  if (Array.isArray(value)) return value.map(plainText).filter(Boolean).join(" ");
-  return Object.values(value).map(plainText).filter(Boolean).join(" ");
+  if (Array.isArray(value)) return value.map(plainText).join("");
+  return Object.values(value).map(plainText).join("");
 }
 
 function compactText(value: unknown, limit: number): string {
@@ -78,36 +83,33 @@ export function parseYandexXml(xml: string): SearchHit[] {
   if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml) || XMLValidator.validate(xml) !== true) {
     throw responseError();
   }
-  let root: Record<string, unknown> | null;
+  let root: unknown;
   try {
-    root = asRecord(
-      new XMLParser({
-        ignoreAttributes: true,
-        parseTagValue: false,
-        processEntities: true,
-      }).parse(xml),
-    );
+    root = new XMLParser({
+      ignoreAttributes: true,
+      parseTagValue: false,
+      processEntities: true,
+      preserveOrder: true,
+      trimValues: false,
+    }).parse(xml);
   } catch {
     throw responseError();
   }
-  const response = asRecord(asRecord(root?.yandexsearch)?.response);
-  if (!response) throw responseError();
-  if (response.error !== undefined) throw responseError();
-  const results = asRecord(response.results);
+  const response = elements(elements(root, "yandexsearch")[0], "response")[0];
+  if (!response || elements(response, "error").length) throw responseError();
   const hits: SearchHit[] = [];
-  for (const groupingValue of entries(results?.grouping)) {
-    const grouping = asRecord(groupingValue);
-    for (const groupValue of entries(grouping?.group)) {
-      const group = asRecord(groupValue);
-      for (const docValue of entries(group?.doc)) {
-        const doc = asRecord(docValue);
-        if (!doc) continue;
-        const url = validWebUrl(doc.url);
-        const title = compactText(doc.title, 300);
-        if (!url || !title) continue;
-        const passages = asRecord(doc.passages);
-        hits.push({ title, url, snippet: compactText(passages?.passage, 500) });
-        if (hits.length === MAX_HITS) return hits;
+  for (const results of elements(response, "results")) {
+    for (const grouping of elements(results, "grouping")) {
+      for (const group of elements(grouping, "group")) {
+        for (const doc of elements(group, "doc")) {
+          const url = validWebUrl(plainText(elements(doc, "url")[0]));
+          const title = compactText(elements(doc, "title")[0], 300);
+          if (!url || !title) continue;
+          const passages = elements(doc, "passages").flatMap((entry) => elements(entry, "passage"));
+          const snippet = passages.map((entry) => plainText(entry)).join(" ");
+          hits.push({ title, url, snippet: compactText(snippet, 500) });
+          if (hits.length === MAX_HITS) return hits;
+        }
       }
     }
   }

@@ -10,6 +10,7 @@ import {
   commentAnalysisResultSchema,
   decryptJson,
   encryptJson,
+  isOrganizationManager,
   type NewsItemListQuery,
   type NewsRerankRequest,
   type NewsRerankResponse,
@@ -25,6 +26,7 @@ import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.reposi
 import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 import { requestManualPaidReplyAnalysis } from "../paid-replies/manual-analysis";
 import { QueueService } from "../queue/queue.service";
 
@@ -283,13 +285,14 @@ export class SourcesRepository {
     }
 
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [actor] = await tx
         .select({ role: schema.member.role })
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorId)))
         .for("update")
         .limit(1);
-      if (actor?.role !== "owner" && actor?.role !== "admin")
+      if (!isOrganizationManager(actor?.role))
         throw forbidden("private_source_owner_required", "Organization owner or admin required");
       const [account] = await tx
         .select({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted })
@@ -576,7 +579,7 @@ export class SourcesRepository {
           embedding: schema.newsItems.embedding,
           embeddingModel: schema.newsItems.embeddingModel,
           embeddingDimensions: schema.newsItems.embeddingDimensions,
-          createdAt: schema.newsItems.createdAt,
+          createdAt: sql<string>`to_char(${schema.newsItems.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
         })
         .from(schema.newsItems)
@@ -589,7 +592,7 @@ export class SourcesRepository {
             gte(schema.newsItems.createdAt, cutoff),
             ...(request.cursor
               ? [
-                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${new Date(request.cursor.createdAt)}, ${request.cursor.id}::uuid)`,
+                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${request.cursor.createdAt}::timestamptz, ${request.cursor.id}::uuid)`,
                 ]
               : []),
           ),
@@ -630,9 +633,7 @@ export class SourcesRepository {
         processed: page.length,
         changed,
         nextCursor:
-          candidates.length > 50 && last
-            ? { createdAt: last.createdAt.toISOString(), id: last.id }
-            : null,
+          candidates.length > 50 && last ? { createdAt: last.createdAt, id: last.id } : null,
       };
     });
   }

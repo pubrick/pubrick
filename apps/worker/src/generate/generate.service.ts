@@ -519,6 +519,13 @@ export class GenerateService {
             const key = indexed ? await this.repo.googleKnowledgeKey(run.orgId) : undefined;
             if (key && topic.trim()) {
               const started = Date.now();
+              const recordEmbeddingUsage = async (record: UsageRecord): Promise<void> => {
+                try {
+                  await ctx.onUsage(record, { step: "knowledge" });
+                } catch (error) {
+                  await this.recordUnrecordedCall(run.orgId, run.id, error, record);
+                }
+              };
               let result: Awaited<ReturnType<typeof embedKnowledgeText>> | undefined;
               try {
                 const proxyUrl = await this.repo.googleProxy?.(run.orgId);
@@ -529,45 +536,39 @@ export class GenerateService {
                   ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
                 );
               } catch (error) {
-                await ctx.onUsage(
-                  {
-                    provider: "google",
-                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
-                    attempt: 1,
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    cachedInputTokens: 0,
-                    reasoningTokens: 0,
-                    costUsd: null,
-                    costSource: "unknown",
-                    responseMs: Date.now() - started,
-                    status: "errored",
-                    outcome: callOutcomeOf(error),
-                  },
-                  { step: "knowledge" },
-                );
+                await recordEmbeddingUsage({
+                  provider: "google",
+                  modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                  attempt: 1,
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  reasoningTokens: 0,
+                  costUsd: null,
+                  costSource: "unknown",
+                  responseMs: Date.now() - started,
+                  status: "errored",
+                  outcome: callOutcomeOf(error),
+                });
                 this.logger.warn(
                   `Knowledge embedding unavailable for run ${run.id}; using text search`,
                 );
               }
               if (result) {
-                await ctx.onUsage(
-                  {
-                    provider: "google",
-                    modelId: KNOWLEDGE_EMBEDDING_MODEL,
-                    attempt: 1,
-                    inputTokens: result.tokens,
-                    outputTokens: 0,
-                    cachedInputTokens: 0,
-                    reasoningTokens: 0,
-                    costUsd: null,
-                    costSource: "unknown",
-                    responseMs: Date.now() - started,
-                    status: "ok",
-                    outcome: "completed",
-                  },
-                  { step: "knowledge" },
-                );
+                await recordEmbeddingUsage({
+                  provider: "google",
+                  modelId: KNOWLEDGE_EMBEDDING_MODEL,
+                  attempt: 1,
+                  inputTokens: result.tokens,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  reasoningTokens: 0,
+                  costUsd: null,
+                  costSource: "unknown",
+                  responseMs: Date.now() - started,
+                  status: "ok",
+                  outcome: "completed",
+                });
                 const similar = await this.repo.similarKnowledge(
                   run.orgId,
                   run.brandId,

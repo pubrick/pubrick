@@ -12,6 +12,7 @@ import type { ChannelComments } from "@pubrick/telegram";
 import { and, asc, eq, gte, isNull, lte, or, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type AutoJob = Extract<TelegramCommentsJob, { kind: "news_auto" }>;
@@ -285,6 +286,7 @@ export class CommentsRepository {
 
   /** Parent and target locks precede config, so opt-out and deletion cannot race the final write. */
   private async lockAuto(tx: Tx, job: AutoJob, url: string) {
+    if (!(await holdOrganization(tx, job.orgId))) return null;
     const [organization] = await tx
       .select({ id: schema.organization.id })
       .from(schema.organization)
@@ -916,6 +918,7 @@ export class CommentsRepository {
     privateFence?: PrivateCommentFence,
   ): Promise<void> {
     await db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return;
       const item = privateFence
         ? await this.currentPrivateItem(tx, orgId, itemId, itemUrl, privateFence)
         : (

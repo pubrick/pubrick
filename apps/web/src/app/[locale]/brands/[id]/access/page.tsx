@@ -1,5 +1,7 @@
 "use client";
 
+import { isOrganizationManager } from "@pubrick/shared";
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -21,7 +23,7 @@ type Member = {
 type Access = { members: Member[] };
 
 function isManager(member: Member): boolean {
-  return member.role === "owner" || member.role === "admin";
+  return isOrganizationManager(member.role);
 }
 
 export default function BrandAccessPage({ params }: { params: Promise<{ id: string }> }) {

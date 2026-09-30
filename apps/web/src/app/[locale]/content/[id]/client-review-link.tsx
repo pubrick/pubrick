@@ -1,5 +1,7 @@
 "use client";
 
+import { isOrganizationManager } from "@pubrick/shared";
+
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -41,7 +43,7 @@ export function ClientReviewLink({
   const member = organization?.members?.find(
     (entry) => entry.userId === session?.user.id || entry.user?.id === session?.user.id,
   );
-  const canManage = member?.role === "owner" || member?.role === "admin";
+  const canManage = isOrganizationManager(member?.role);
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

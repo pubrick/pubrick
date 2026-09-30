@@ -6,11 +6,14 @@ import type {
   ClientReviewGuest,
   ClientReviewStatus,
   ClientReviewVerdictInput,
+  ContentImageAlignment,
 } from "@pubrick/shared";
+import { isOrganizationManager } from "@pubrick/shared";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { badRequest, conflict, forbidden, gone, notFound } from "../api-error";
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
+import { holdOrganization } from "../organization-lock";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Reader = Tx | typeof db;
@@ -24,6 +27,14 @@ type ReviewSnapshot = {
   coverMediaId: string | null;
   videoMediaId: string | null;
   imagesRevision: number;
+  images: Array<{
+    id: string;
+    mediaId: string;
+    afterParagraph: number;
+    alt: string;
+    caption: string | null;
+    alignment: ContentImageAlignment;
+  }>;
   status: string;
   channels: Array<{
     adaptationId: string;
@@ -95,6 +106,23 @@ async function snapshotFor(
     .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)))
     .limit(1);
   if (!item) return null;
+  const images = await reader
+    .select({
+      id: schema.contentImageSlots.id,
+      mediaId: schema.contentImageSlots.mediaId,
+      afterParagraph: schema.contentImageSlots.afterParagraph,
+      alt: schema.contentImageSlots.alt,
+      caption: schema.contentImageSlots.caption,
+      alignment: schema.contentImageSlots.alignment,
+    })
+    .from(schema.contentImageSlots)
+    .where(
+      and(
+        eq(schema.contentImageSlots.orgId, orgId),
+        eq(schema.contentImageSlots.contentItemId, itemId),
+      ),
+    )
+    .orderBy(asc(schema.contentImageSlots.afterParagraph));
   const channels = await reader
     .select({
       adaptationId: schema.adaptations.id,
@@ -119,6 +147,7 @@ async function snapshotFor(
     coverMediaId: item.coverMediaId,
     videoMediaId: item.videoMediaId,
     imagesRevision: item.imagesRevision ?? 0,
+    images,
     status: item.status,
     channels: channels.map((row) => ({ ...row, body: row.body ?? item.body })),
   };
@@ -195,7 +224,7 @@ export class ClientReviewRepository {
       .from(schema.member)
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
       .limit(1);
-    if (member?.role !== "owner" && member?.role !== "admin") {
+    if (!isOrganizationManager(member?.role)) {
       throw forbidden("client_review_role_required", "Organization owner or admin required");
     }
   }
@@ -205,6 +234,7 @@ export class ClientReviewRepository {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + input.expiresInHours * 3_600_000);
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const snapshot = await lockItemForLink(tx, orgId, itemId);
       if (!OPEN_ITEM_STATUSES.has(snapshot.status) || snapshot.channels.length === 0) {
         throw conflict(
@@ -310,6 +340,7 @@ export class ClientReviewRepository {
         channels: snapshot.channels.map(({ name, platform, body }) => ({ name, platform, body })),
         coverUrl: snapshot.coverMediaId ? `/api/client-review/${token}/cover` : null,
         videoUrl: snapshot.videoMediaId ? `/api/client-review/${token}/video` : null,
+        images: snapshot.images.map(({ mediaId: _mediaId, ...image }) => image),
       },
       comment: link.comment,
       reviewedAt: link.reviewedAt?.toISOString() ?? null,
@@ -331,6 +362,26 @@ export class ClientReviewRepository {
       )
       .limit(1);
     if (!asset) throw notFound("client_review_link_invalid", "Cover not found");
+    return this.media.file(snapshot.orgId, asset.id);
+  }
+
+  async inlineImage(token: string, slotId: string): Promise<Buffer> {
+    const { snapshot } = await this.livePreview(token);
+    const slot = snapshot.images.find((image) => image.id === slotId);
+    if (!slot) throw notFound("client_review_link_invalid", "Image not found");
+    const [asset] = await db
+      .select({ id: schema.mediaAssets.id })
+      .from(schema.mediaAssets)
+      .where(
+        and(
+          eq(schema.mediaAssets.id, slot.mediaId),
+          eq(schema.mediaAssets.orgId, snapshot.orgId),
+          eq(schema.mediaAssets.brandId, snapshot.brandId),
+          eq(schema.mediaAssets.kind, "image"),
+        ),
+      )
+      .limit(1);
+    if (!asset) throw notFound("client_review_link_invalid", "Image not found");
     return this.media.file(snapshot.orgId, asset.id);
   }
 

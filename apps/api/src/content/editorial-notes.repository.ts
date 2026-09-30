@@ -5,6 +5,7 @@ import type { EditorialNoteCreate } from "@pubrick/shared";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 const noteColumns = {
   id: schema.editorialNotes.id,
@@ -22,6 +23,7 @@ function hashBody(body: string): string {
 export class EditorialNotesRepository {
   async create(orgId: string, itemId: string, createdBy: string, input: EditorialNoteCreate) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // The item lock serializes this snapshot with edits to the same body.
       const [item] = await tx
         .select({ body: schema.contentItems.body })

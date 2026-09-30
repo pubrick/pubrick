@@ -12,11 +12,13 @@ import {
   autopilotOperationsPageSchema,
   autopilotScanPageSchema,
   LIVE_RUN_STATUSES,
+  MANUAL_AUTOPILOT_QUEUE,
   manualTopicPlanAttemptSchema,
 } from "@pubrick/shared";
 import { type AnyColumn, and, asc, desc, eq, inArray, isNull, notExists, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 
 const CONFIG_COLUMNS = {
@@ -136,6 +138,7 @@ export class AutopilotRepository {
 
   async put(orgId: string, brandId: string, config: AutopilotConfig) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
@@ -382,6 +385,7 @@ export class AutopilotRepository {
 
   async planTopics(orgId: string, brandId: string) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // Serialize manual triggers and config changes for this brand. The
       // first-party config timestamp remains the durable cooldown marker even
       // after a fast worker completes its pass or the API process restarts.
@@ -512,6 +516,7 @@ export class AutopilotRepository {
   /** Brand-row lock serializes admission even when no config row exists yet. */
   async trigger(orgId: string, brandId: string): Promise<AutopilotManualAttempt> {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
@@ -529,6 +534,12 @@ export class AutopilotRepository {
             eq(schema.autopilotManualAttempts.brandId, brandId),
             inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
             sql`${schema.autopilotManualAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+            sql`not exists (
+              select 1 from pgboss.job as active_job
+              where active_job.name = ${MANUAL_AUTOPILOT_QUEUE}
+                and active_job.id = ${schema.autopilotManualAttempts.id}
+                and active_job.state in ('created', 'retry', 'active')
+            )`,
           ),
         );
       const [latest] = await tx

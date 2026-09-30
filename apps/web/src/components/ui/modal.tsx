@@ -62,6 +62,9 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
   const t = useTranslations("Ui");
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Callback updates must not tear down the focus trap during a keystroke.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -71,7 +74,7 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        onClose();
+        closeRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -115,7 +118,7 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
       document.removeEventListener("keydown", handleKeyDown);
       previouslyFocused?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

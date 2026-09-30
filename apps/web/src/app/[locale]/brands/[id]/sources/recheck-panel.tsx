@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  isOrganizationManager,
   type NewsRecheckBatch,
   type NewsRecheckPreview,
   newsRecheckRequestSchema,
@@ -27,7 +28,7 @@ export function RecheckPanel({ brandId, onFinished }: { brandId: string; onFinis
   const member = organization?.members?.find(
     (entry) => entry.userId === session?.user.id || entry.user?.id === session?.user.id,
   );
-  const canManage = member?.role === "owner" || member?.role === "admin";
+  const canManage = isOrganizationManager(member?.role);
   const [days, setDays] = useState(7);
   const [preview, setPreview] = useState<NewsRecheckPreview | null>(null);
   const [batch, setBatch] = useState<NewsRecheckBatch | null>(null);

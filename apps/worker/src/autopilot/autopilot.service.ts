@@ -4,15 +4,18 @@ import {
   AUTOPILOT_DECISIONS,
   GENERATE_QUEUE,
   LIVE_RUN_STATUSES,
+  MANUAL_AUTOPILOT_QUEUE,
   MAX_BRIEF_LENGTH,
   MAX_CONCURRENT_RUNS,
   type ManualAutopilotJob,
   RUN_ADMISSION_LOCK_NAMESPACE,
   type RunInput,
+  runInputSchema,
 } from "@pubrick/shared";
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { quietHour } from "./rules";
 
 const SCAN_LIMIT = 100;
@@ -86,6 +89,12 @@ export class AutopilotService {
         and(
           inArray(schema.autopilotManualAttempts.status, ["queued", "running"]),
           sql`${schema.autopilotManualAttempts.createdAt} < clock_timestamp() - interval '10 minutes'`,
+          sql`not exists (
+            select 1 from pgboss.job as active_job
+            where active_job.name = ${MANUAL_AUTOPILOT_QUEUE}
+              and active_job.id = ${schema.autopilotManualAttempts.id}
+              and active_job.state in ('created', 'retry', 'active')
+          )`,
         ),
       );
   }
@@ -167,6 +176,7 @@ export class AutopilotService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      if (!(await holdOrganization(tx, orgId))) return "disabled";
       if (scan) {
         const [existing] = await tx
           .select({ decision: schema.autopilotScanEvents.decision })
@@ -358,6 +368,9 @@ export class AutopilotService {
           id: schema.topics.id,
           title: schema.topics.title,
           description: schema.topics.description,
+          sourceUrl: schema.topics.sourceUrl,
+          contentType: schema.topics.contentType,
+          seoKeywords: schema.topics.seoKeywords,
         })
         .from(schema.topics)
         .leftJoin(
@@ -380,7 +393,17 @@ export class AutopilotService {
       if (!topic) return finish("no_approved_topic");
       const brief = `${topic.title}\n\n${topic.description}`.trim();
       if (brief.length > MAX_BRIEF_LENGTH) return finish("invalid_brief");
-      const input: RunInput = { kind: "brief", text: brief, channelIds: config.channelIds };
+      // The approved topic's format and attribution are the reviewed input,
+      // shared with manual topic generation and the calendar planner.
+      const input: RunInput = {
+        ...(topic.sourceUrl
+          ? { kind: "source" as const, text: null, material: brief, sourceUrl: topic.sourceUrl }
+          : { kind: "brief" as const, text: brief }),
+        channelIds: config.channelIds,
+        ...(topic.contentType !== "social_post" && { contentType: topic.contentType }),
+        ...(topic.seoKeywords.length && { seoKeywords: topic.seoKeywords }),
+      };
+      if (!runInputSchema.safeParse(input).success) return finish("invalid_brief");
       const inserted = await tx
         .insert(schema.pipelineRuns)
         .values({ orgId, brandId, topicId: topic.id, input })

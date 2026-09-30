@@ -115,6 +115,34 @@ describe.skipIf(!url)("manual Autopilot trigger API", () => {
     await first.agent.post(triggerUrl).expect(202);
   });
 
+  it.each(["created", "retry", "active"])(
+    "reuses a stale attempt while its queue job is %s",
+    async (state) => {
+      const actor = await owner();
+      const brand = await actor.agent
+        .post("/api/brands")
+        .send({ name: "Delayed check" })
+        .expect(201);
+      const triggerUrl = `/api/brands/${brand.body.id}/autopilot/trigger`;
+      const original = await actor.agent.post(triggerUrl).expect(202);
+      await db
+        .update(schema.autopilotManualAttempts)
+        .set({ createdAt: sql`clock_timestamp() - interval '11 minutes'` })
+        .where(eq(schema.autopilotManualAttempts.id, original.body.id));
+      await db.execute(
+        sql`UPDATE pgboss.job SET state = ${state}::pgboss.job_state WHERE name = 'autopilot-manual' AND id = ${original.body.id}::uuid`,
+      );
+      const repeated = await actor.agent.post(triggerUrl).expect(202);
+      expect(repeated.body.id).toBe(original.body.id);
+      expect(repeated.body.status).toBe("queued");
+      await db.execute(
+        sql`UPDATE pgboss.job SET state = 'cancelled' WHERE name = 'autopilot-manual' AND id = ${original.body.id}::uuid`,
+      );
+      const recovered = await actor.agent.post(triggerUrl).expect(202);
+      expect(recovered.body.id).not.toBe(original.body.id);
+    },
+  );
+
   it("rolls back attempt insertion when queue insertion fails", async () => {
     const actor = await owner();
     const brand = await actor.agent

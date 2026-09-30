@@ -17,6 +17,7 @@ import {
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 const SCAN_LIMIT = 100;
 
@@ -57,6 +58,7 @@ export class CalendarService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      if (!(await holdOrganization(tx, orgId))) return;
       const rows = await tx
         .select({
           id: schema.calendarSlots.id,

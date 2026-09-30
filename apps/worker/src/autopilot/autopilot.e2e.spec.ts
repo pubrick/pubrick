@@ -160,6 +160,87 @@ describe.skipIf(!url)("autopilot dispatch e2e", () => {
     expect(dispatches).toEqual([{ topicId: undated?.id }]);
   });
 
+  it.each([
+    {
+      contentType: "expert_article" as const,
+      sourceUrl: null,
+      seoKeywords: ["editorial strategy"],
+    },
+    {
+      contentType: "expert_article" as const,
+      sourceUrl: "https://example.org/source",
+      seoKeywords: ["editorial strategy"],
+    },
+    {
+      contentType: "product_update" as const,
+      sourceUrl: "https://example.org/release",
+      seoKeywords: [],
+    },
+  ])(
+    "preserves reviewed topic format, keywords and source: $contentType / $sourceUrl",
+    async (fields) => {
+      const [brand] = await db
+        .insert(schema.brands)
+        .values({ orgId, name: "Format topic" })
+        .returning({ id: schema.brands.id });
+      const newBrandId = brand?.id as string;
+      const [channel] = await db
+        .insert(schema.channels)
+        .values({
+          orgId,
+          brandId: newBrandId,
+          platform: "telegram",
+          name: "Format channel",
+          credentialsEncrypted: "test",
+        })
+        .returning({ id: schema.channels.id });
+      const newChannelId = channel?.id as string;
+      await db.insert(schema.autopilotConfigs).values({
+        orgId,
+        brandId: newBrandId,
+        enabled: true,
+        channelIds: [newChannelId],
+        timezone: "UTC",
+        startHour: 0,
+        quietStartHour: 0,
+        quietEndHour: 0,
+      });
+      const [topic] = await db
+        .insert(schema.topics)
+        .values({
+          orgId,
+          brandId: newBrandId,
+          status: "approved",
+          title: "Reviewed title",
+          description: "Reviewed material",
+          ...fields,
+        })
+        .returning({ id: schema.topics.id });
+      expect(await service.trigger(boss, orgId, newBrandId)).toBe("dispatched");
+      const [run] = await db
+        .select({ id: schema.pipelineRuns.id, input: schema.pipelineRuns.input })
+        .from(schema.pipelineRuns)
+        .where(eq(schema.pipelineRuns.topicId, topic?.id as string));
+      await db
+        .update(schema.pipelineRuns)
+        .set({ status: "succeeded" })
+        .where(eq(schema.pipelineRuns.id, run?.id as string));
+      expect(run?.input).toEqual({
+        ...(fields.sourceUrl
+          ? {
+              kind: "source",
+              text: null,
+              sourceUrl: fields.sourceUrl,
+              material: "Reviewed title\n\nReviewed material",
+            }
+          : { kind: "brief", text: "Reviewed title\n\nReviewed material" }),
+        channelIds: [newChannelId],
+        contentType: fields.contentType,
+        ...(fields.seoKeywords.length ? { seoKeywords: fields.seoKeywords } : {}),
+      });
+    },
+  );
+
   it("stops admission on the recorded budget and during quiet hours", async () => {
     const first = await db
       .select({ runId: schema.autopilotDispatches.runId })

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
+import { CONTENT_IMAGE_ALIGNMENTS } from "./content-images.js";
 import { hasNulByte } from "./text.js";
 
 export const CLIENT_REVIEW_VERDICTS = ["approved", "changes_requested"] as const;
@@ -58,6 +59,17 @@ export const clientReviewGuestSchema = z.object({
     channels: z.array(z.object({ name: z.string(), platform: z.string(), body: z.string() })),
     coverUrl: z.string().nullable(),
     videoUrl: z.string().nullable(),
+    images: z
+      .array(
+        z.object({
+          id: z.uuid(),
+          afterParagraph: z.number().int().min(0),
+          alt: z.string(),
+          caption: z.string().nullable(),
+          alignment: z.enum(CONTENT_IMAGE_ALIGNMENTS),
+        }),
+      )
+      .default([]),
   }),
   comment: z.string().nullable(),
   reviewedAt: z.iso.datetime().nullable(),

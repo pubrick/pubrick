@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  contentStatusSchema,
   createPublicContentClient,
   createPublicPublicationClient,
   loadConfig,
@@ -42,6 +43,23 @@ function jsonResponse(body: unknown, init: ResponseInit = {}) {
 }
 
 describe("public content API client", () => {
+  it("accepts archived content in lists, detail responses, and tool filters", async () => {
+    const archived = { ...summary, status: "archived" };
+    const fetcher = vi.fn<typeof fetch>(async (url) =>
+      String(url).includes(`/content/${id}`)
+        ? jsonResponse({ ...archived, body: "Archived body" })
+        : jsonResponse([summary, archived]),
+    );
+    const client = createPublicContentClient(
+      { baseUrl: validateBaseUrl("https://pubrick.example"), apiKey: key },
+      fetcher,
+    );
+
+    await expect(client.list()).resolves.toEqual({ items: [summary, archived], nextCursor: null });
+    await expect(client.get(id)).resolves.toEqual({ ...archived, body: "Archived body" });
+    expect(contentStatusSchema.parse("archived")).toBe("archived");
+  });
+
   it("sends only Bearer-authenticated GETs, carries the cursor, and strips unknown fields", async () => {
     const fetcher = vi.fn<typeof fetch>(async () =>
       jsonResponse([{ ...summary, internalNote: "do not expose" }], {

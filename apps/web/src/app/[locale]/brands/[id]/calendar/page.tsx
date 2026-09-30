@@ -5,6 +5,7 @@ import {
   COVER_SUPPORTED_PLATFORMS,
   type ContentType,
   contentTypeRequiresMaterial,
+  hasOrganizationRole,
   supportsInlineImages,
   type TopicDto,
 } from "@pubrick/shared";
@@ -92,8 +93,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canMutateCalendar = ["owner", "admin", "member", "editor"].includes(role ?? "");
-  const canManageMemorableDates = ["owner", "admin", "member"].includes(role ?? "");
+  const canMutateCalendar = hasOrganizationRole(role, ["owner", "admin", "member", "editor"]);
+  const canManageMemorableDates = hasOrganizationRole(role, ["owner", "admin", "member"]);
   const [month, setMonth] = useState(() => monthStart(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);

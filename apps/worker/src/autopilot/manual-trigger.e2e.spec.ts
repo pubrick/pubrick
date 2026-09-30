@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { schema } from "@pubrick/db";
-import { MAX_BRIEF_LENGTH, MAX_CONCURRENT_RUNS } from "@pubrick/shared";
+import { MANUAL_AUTOPILOT_QUEUE, MAX_BRIEF_LENGTH, MAX_CONCURRENT_RUNS } from "@pubrick/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { PgBoss } from "pg-boss";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -185,6 +185,30 @@ describe.skipIf(!url)("manual Autopilot decision history", () => {
       decision: "worker_failed",
     });
   });
+
+  it.each(["created", "retry", "active"])(
+    "preserves stale attempts whose queue job is %s",
+    async (state) => {
+      await boss.createQueue(MANUAL_AUTOPILOT_QUEUE);
+      const live = await attempt();
+      await boss.send(MANUAL_AUTOPILOT_QUEUE, live, { id: live.attemptId });
+      await db.execute(
+        sql`UPDATE pgboss.job SET state = ${state}::pgboss.job_state WHERE name = ${MANUAL_AUTOPILOT_QUEUE} AND id = ${live.attemptId}::uuid`,
+      );
+      await db
+        .update(schema.autopilotManualAttempts)
+        .set({ createdAt: sql`clock_timestamp() - interval '11 minutes'` })
+        .where(eq(schema.autopilotManualAttempts.id, live.attemptId));
+      await service.sweepManual();
+      expect(await result(live.attemptId)).toMatchObject({ status: "queued", decision: null });
+      await boss.cancel(MANUAL_AUTOPILOT_QUEUE, live.attemptId);
+      await service.sweepManual();
+      expect(await result(live.attemptId)).toMatchObject({
+        status: "failed",
+        decision: "worker_failed",
+      });
+    },
+  );
 
   it("records every admission refusal through the same manual decision transaction", async () => {
     const [brand] = await db

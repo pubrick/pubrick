@@ -3195,6 +3195,51 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
       outputTokens: { total: 60, text: 60, reasoning: 0 },
     };
 
+    it.each(["completed", "errored"] as const)(
+      "keeps generation and accounts for a lost %s knowledge embedding ledger row",
+      async (outcome) => {
+        const seeded = await seed({ channels: 1 });
+        await db.insert(schema.knowledgeEntries).values({
+          orgId: seeded.orgId,
+          brandId: seeded.brandId,
+          title: "Autumn menu",
+          content: "The autumn menu is ready for independent cafe owners.",
+          category: "product_info",
+          embedding: Array(768).fill(0.1),
+          embeddingModel: "gemini-embedding-001",
+          embeddingDimensions: 768,
+        });
+        const embedding = vi.spyOn(await import("@pubrick/ai"), "embedKnowledgeText");
+        if (outcome === "completed") {
+          embedding.mockResolvedValueOnce({ embedding: Array(768).fill(0.1), tokens: 10 });
+        } else {
+          embedding.mockRejectedValueOnce(new Error("Embedding unavailable"));
+        }
+        const repo = new Repository();
+        const recordUsage = repo.recordUsage.bind(repo);
+        vi.spyOn(repo, "recordUsage").mockImplementation((orgId, runId, attribution, record) => {
+          if (attribution.step === "knowledge") throw new Error("Knowledge ledger unavailable");
+          return recordUsage(orgId, runId, attribution, record);
+        });
+        try {
+          await serviceFor(scriptedModel(), repo).handle({
+            id: `job-lost-knowledge-ledger-${outcome}`,
+            data: { runId: seeded.runId, orgId: seeded.orgId },
+          });
+          expect(embedding).toHaveBeenCalledOnce();
+          const run = await runRow(seeded.runId);
+          expect(run?.status).toBe("succeeded");
+          expect(run?.unrecordedCalls).toBe(1);
+          expect(run?.steps.knowledge?.status).toBe("succeeded");
+          expect(await ledgerOf(seeded.orgId)).toHaveLength(5);
+          expect(await itemsOf(seeded.orgId)).toHaveLength(1);
+        } finally {
+          embedding.mockRestore();
+        }
+      },
+      30_000,
+    );
+
     it("counts the loss on the run, which outlives the step", async () => {
       const seeded = await seed({ channels: 1 });
       const script = scriptedModel({}, OVERFLOWING);

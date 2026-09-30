@@ -144,6 +144,37 @@ describe.skipIf(!url)("notification settings repository", () => {
     );
   });
 
+  it("keeps every history row sharing a PostgreSQL microsecond timestamp", async () => {
+    const orgId = `notify-precision-${randomUUID()}`;
+    await direct.db.insert(schema.organization).values({
+      id: orgId,
+      name: "Precision",
+      slug: orgId,
+      createdAt: new Date(),
+    });
+    try {
+      await direct.db.insert(schema.notificationEvents).values(
+        Array.from({ length: 23 }, () => ({
+          orgId,
+          event: "delivery_failed" as const,
+          subjectId: randomUUID(),
+          targetId: randomUUID(),
+          createdAt: sql`'2026-09-30T12:00:00.123456Z'::timestamptz`,
+        })),
+      );
+      const firstPage = await repo.history(orgId, {});
+      expect(firstPage.events).toHaveLength(20);
+      const secondPage = await repo.history(orgId, { cursor: firstPage.nextCursor as string });
+      expect(secondPage.events).toHaveLength(3);
+      expect(
+        new Set([...firstPage.events, ...secondPage.events].map((event) => event.id)).size,
+      ).toBe(23);
+      expect(secondPage.nextCursor).toBeNull();
+    } finally {
+      await direct.db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+    }
+  });
+
   it("counts every safe event, status and reason inside one half-open UTC window", async () => {
     const end = new Date("2030-01-31T12:00:00.000Z");
     const start = new Date("2030-01-24T12:00:00.000Z");

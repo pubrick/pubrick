@@ -8,6 +8,7 @@ import type {
 } from "@pubrick/shared";
 import {
   contentUpdateSchema,
+  hasOrganizationRole,
   isManualPlatform,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -303,9 +304,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canDecideDelivery = ["owner", "admin", "member", "editor"].includes(role ?? "");
-  const canManageDraft = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
-  const canManageFeed = ["owner", "admin", "member"].includes(role ?? "");
+  const canDecideDelivery = hasOrganizationRole(role, ["owner", "admin", "member", "editor"]);
+  const canManageDraft = hasOrganizationRole(role, [
+    "owner",
+    "admin",
+    "member",
+    "author",
+    "editor",
+  ]);
+  const canManageFeed = hasOrganizationRole(role, ["owner", "admin", "member"]);
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [channelsLoadedFor, setChannelsLoadedFor] = useState<string | null>(null);
@@ -314,6 +321,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [mediaVersion, setMediaVersion] = useState(0);
   const [channelsFailed, setChannelsFailed] = useState(false);
   const [bodyDraft, setBodyDraft] = useState("");
+  const [bodySaveBusy, setBodySaveBusy] = useState(false);
+  const [overrideSaveBusy, setOverrideSaveBusy] = useState<Record<string, boolean>>({});
   const [richDraft, setRichDraft] = useState<RichBody | null>(null);
   const [richMode, setRichMode] = useState(false);
   const [richError, setRichError] = useState<string | null>(null);
@@ -855,10 +864,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }, [refineBusy]);
 
   async function saveBody() {
+    if (bodySaveBusy) return;
     setActionError(null);
     // An invalid TipTap update leaves the last valid document in state. Never
     // persist that older document as though it were the editor's visible text.
     if (richSupported && richError !== null) return;
+    setBodySaveBusy(true);
     try {
       // Switching to the plain preview does not discard an unsaved rich edit.
       // A real plain-text edit clears richDraft in the textarea onChange below.
@@ -877,11 +888,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           setRichError(t("richEditor.invalid"));
           return;
         }
+        const submittedRichBody = parsed.data.richBody;
         const saved = await api<ContentItem>(`/api/content/${id}`, {
           method: "PATCH",
           body: JSON.stringify(parsed.data),
         });
-        setRichDraft(saved?.richBody ?? parsed.data.richBody);
+        setRichDraft((current) =>
+          JSON.stringify(current) === JSON.stringify(richDraft)
+            ? (saved?.richBody ?? submittedRichBody)
+            : current,
+        );
         setRichResetNotice(false);
         if (saved && hasRichApiSupport(saved)) {
           richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
@@ -894,14 +910,24 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         });
         if (saved && hasRichApiSupport(saved)) {
           richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
-          setRichDraft(saved.richBody ?? null);
+          setRichDraft((current) =>
+            JSON.stringify(current) === JSON.stringify(richDraft)
+              ? (saved.richBody ?? null)
+              : current,
+          );
           if (previousBody !== bodyDraft && item?.richBody) setRichResetNotice(true);
         }
-        if (!saved && previousBody !== bodyDraft) setRichDraft(null);
+        if (!saved && previousBody !== bodyDraft) {
+          setRichDraft((current) =>
+            JSON.stringify(current) === JSON.stringify(richDraft) ? null : current,
+          );
+        }
       }
       await reload();
     } catch (err) {
       handleError(err);
+    } finally {
+      setBodySaveBusy(false);
     }
   }
 
@@ -943,6 +969,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function saveOverride(adaptationId: string) {
+    if (overrideSaveBusy[adaptationId]) return;
+    setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: true }));
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
     const tagValue = tagDrafts[adaptationId] ?? "";
@@ -1003,6 +1031,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       ctaBaselines.current[adaptationId] = persisted.cta;
     } catch (err) {
       handleError(err);
+    } finally {
+      setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: false }));
     }
   }
 
@@ -2221,7 +2251,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             <Button
               variant="secondary"
               onClick={saveBody}
-              disabled={isArchived || (richSupported && richError !== null)}
+              disabled={isArchived || bodySaveBusy || (richSupported && richError !== null)}
             >
               {t("saveBody")}
             </Button>
@@ -2478,7 +2508,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 variant="secondary"
                 size="sm"
                 onClick={() => saveOverride(a.id)}
-                disabled={isArchived}
+                disabled={isArchived || overrideSaveBusy[a.id]}
               >
                 {t("saveOverride")}
               </Button>

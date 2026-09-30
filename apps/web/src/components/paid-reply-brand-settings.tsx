@@ -3,6 +3,7 @@
 import {
   type BrandPaidReplySettingsDto,
   formatUsd,
+  isOrganizationManager,
   type OrganizationPaidReplySettingsDto,
   type PAID_REPLY_BLOCK_REASONS,
 } from "@pubrick/shared";
@@ -41,8 +42,7 @@ export function PaidReplyBrandSettings({ brandId, kind }: { brandId: string; kin
   const { data: session } = authClient.useSession();
   const { data: organization } = authClient.useActiveOrganization();
   const canManage = organization?.members?.some(
-    (member) =>
-      member.user.id === session?.user?.id && (member.role === "owner" || member.role === "admin"),
+    (member) => member.user.id === session?.user?.id && isOrganizationManager(member.role),
   );
   const [settings, setSettings] = useState<BrandPaidReplySettingsDto | null>(null);
   const [orgSettings, setOrgSettings] = useState<OrganizationPaidReplySettingsDto | null>(null);

@@ -44,13 +44,19 @@ done
 docker compose up -d --wait postgres
 # Built from the same POSTGRES_* the compose file uses, so a .env with a real password
 # does not leave this script talking to a database that does not exist.
-export DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@localhost:5432/${POSTGRES_DB:-pubrick}}
+export DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-pubrick}}
+export WEB_PORT=${WEB_PORT:-3000}
+export API_PORT=${API_PORT:-3001}
+# Native apps need the same origin/port mapping Compose applies to containers.
+export BETTER_AUTH_URL=${BETTER_AUTH_URL:-$PUBLIC_ORIGIN}
+export WEB_ORIGIN=${WEB_ORIGIN:-$PUBLIC_ORIGIN}
+export API_INTERNAL_URL=${API_INTERNAL_URL:-http://localhost:$API_PORT}
 export MEDIA_STORAGE_DIR=${MEDIA_STORAGE_DIR:-"$PWD/.data/media"}
 pnpm install
 pnpm build
-echo "Starting api (:3001), worker, web (:3000). Ctrl-C stops all."
+echo "Starting api (:$API_PORT), worker, web (:$WEB_PORT). Ctrl-C stops all."
 trap 'kill 0' EXIT
 (cd apps/api && pnpm start) &
 (cd apps/worker && pnpm start) &
-(cd apps/web && pnpm exec next dev --port 3000) &
+(cd apps/web && pnpm exec next dev --port "$WEB_PORT") &
 wait

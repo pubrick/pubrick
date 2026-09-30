@@ -107,3 +107,20 @@ describe("memorable date refusals", () => {
     expect(screen.queryByText("Memorable date not found")).not.toBeInTheDocument();
   });
 });
+
+it("opens a blank Add form after cancelling an existing date edit", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(response(200, { timezone: "UTC", dates: [date] })),
+  );
+  render(<MemorableDates brandId={brandId} selectedDay={selectedDay} />, { locale: "es" });
+  await screen.findByText("Leap day");
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: es.CalendarMemorable.manage }));
+  await user.click(screen.getByRole("button", { name: es.CalendarMemorable.edit }));
+  expect(screen.getByLabelText(es.CalendarMemorable.name)).toHaveValue("Leap day");
+  await user.click(screen.getByRole("button", { name: es.CalendarMemorable.cancel }));
+  await user.click(screen.getByRole("button", { name: es.CalendarMemorable.manage }));
+  expect(screen.getByLabelText(es.CalendarMemorable.name)).toHaveValue("");
+  expect(screen.getByLabelText(es.CalendarMemorable.monthDay)).toHaveValue("");
+});

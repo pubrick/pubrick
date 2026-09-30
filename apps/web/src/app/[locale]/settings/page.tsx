@@ -9,6 +9,8 @@ import {
   type CostSummary,
   formatUsd,
   type GoogleProxyTestResult,
+  hasOrganizationRole,
+  isOrganizationManager,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
@@ -171,8 +173,8 @@ export default function SettingsPage() {
   const signOut = useSignOut();
   const members = organization?.members ?? [];
   const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
-  const canManageApiKeys = currentRole === "owner" || currentRole === "admin";
-  const canInvite = canManageApiKeys || currentRole === "member";
+  const canManageApiKeys = isOrganizationManager(currentRole);
+  const canInvite = canManageApiKeys || hasOrganizationRole(currentRole, ["member"]);
 
   const [pref, setPref] = useState<ThemePref>("system");
   // Stored pref is client-only state: reading it during the first render makes
@@ -207,6 +209,13 @@ export default function SettingsPage() {
   );
   const [proxyTestedDraft, setProxyTestedDraft] = useState(false);
   const proxyRevision = useRef(0);
+  // Probe verdicts belong to the credential and network route they tested.
+  const credentialRevisions = useRef<Partial<Record<AiProviderId, number>>>({});
+  const aiLoadRevision = useRef(0);
+  function invalidateCredential(id: AiProviderId) {
+    credentialRevisions.current[id] = (credentialRevisions.current[id] ?? 0) + 1;
+    aiLoadRevision.current += 1;
+  }
   const [aiError, setAiError] = useState<string | null>(null);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [keySaved, setKeySaved] = useState(false);
@@ -231,14 +240,23 @@ export default function SettingsPage() {
   );
 
   const loadAi = useCallback(() => {
-    api<AiCredentialPublic[]>("/api/ai-credentials").then(setCredentials).catch(handleAiError);
+    const revision = ++aiLoadRevision.current;
+    api<AiCredentialPublic[]>("/api/ai-credentials")
+      .then((rows) => {
+        if (revision === aiLoadRevision.current) setCredentials(rows);
+      })
+      .catch((err) => {
+        if (revision === aiLoadRevision.current) handleAiError(err);
+      });
     setSpendError(null);
     api<CostSummary>("/api/ai-credentials/spend")
       .then((summary) => {
+        if (revision !== aiLoadRevision.current) return;
         setSpend(summary);
         setSpendError(null);
       })
       .catch((err) => {
+        if (revision !== aiLoadRevision.current) return;
         if (err instanceof ApiError && err.noActiveOrg) return;
         // Back to "unknown", not to a stale figure: money on screen has to be
         // either current or absent.
@@ -276,6 +294,7 @@ export default function SettingsPage() {
         method: "PUT",
         body: JSON.stringify(body),
       });
+      invalidateCredential(provider);
       setCredentials((previous) => [
         ...(previous ?? []).filter((credential) => credential.provider !== saved.provider),
         saved,
@@ -310,6 +329,7 @@ export default function SettingsPage() {
         ...(previous ?? []).filter((credential) => credential.provider !== "google"),
         saved,
       ]);
+      invalidateCredential("google");
       setProxyUrl("");
       setProxyMessage(nextUrl === null ? "removed" : "saved");
       // A previous Test result described the old network route.
@@ -349,15 +369,18 @@ export default function SettingsPage() {
   }
 
   async function testKey(id: AiProviderId) {
+    const revision = credentialRevisions.current[id] ?? 0;
     setTestResults((prev) => ({ ...prev, [id]: "loading" }));
     try {
       const result = await api<AiCredentialTestResult>(`/api/ai-credentials/${id}/test`, {
         method: "POST",
       });
+      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
       setTestResults((prev) => ({ ...prev, [id]: result }));
       // The test was a real, billed call — the org's spend just moved.
       loadAi();
     } catch (err) {
+      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
       // A REQUEST that failed, not a verdict — see `TestState`. Stored under its
       // own shape so the sentence is rendered as a sentence.
       setTestResults((prev) => ({
@@ -390,7 +413,7 @@ export default function SettingsPage() {
   const [roleChange, setRoleChange] = useState<{
     id: string;
     email: string;
-    role: WorkspaceRole;
+    role: string;
   } | null>(null);
   const [nextRole, setNextRole] = useState<WorkspaceRole>("member");
   const [roleSaving, setRoleSaving] = useState(false);
@@ -498,6 +521,7 @@ export default function SettingsPage() {
     setPendingRemoval(null);
     try {
       await api(`/api/ai-credentials/${id}`, { method: "DELETE" });
+      invalidateCredential(id);
       setTestResults((prev) => ({ ...prev, [id]: undefined }));
       loadAi();
     } catch (err) {
@@ -979,20 +1003,26 @@ export default function SettingsPage() {
                         </span>
                         {" · "}
                         <span>
-                          {isWorkspaceRole(member.role)
-                            ? roleLabels[member.role]
-                            : member.role === "owner"
-                              ? t("peopleRoleOwner")
-                              : member.role}
+                          {member.role
+                            .split(",")
+                            .map((assigned) =>
+                              isWorkspaceRole(assigned)
+                                ? roleLabels[assigned]
+                                : assigned === "owner"
+                                  ? t("peopleRoleOwner")
+                                  : assigned,
+                            )
+                            .join(", ")}
                         </span>
                       </>
                     }
                     trailing={
                       canManageApiKeys &&
                       member.user.id !== session?.user?.id &&
-                      member.role !== "owner" &&
-                      (member.role !== "admin" || currentRole === "owner") &&
-                      isWorkspaceRole(member.role) ? (
+                      !hasOrganizationRole(member.role, ["owner"]) &&
+                      (!hasOrganizationRole(member.role, ["admin"]) ||
+                        hasOrganizationRole(currentRole, ["owner"])) &&
+                      hasOrganizationRole(member.role, WORKSPACE_ROLES) ? (
                         <Button
                           size="sm"
                           variant="secondary"
@@ -1000,9 +1030,13 @@ export default function SettingsPage() {
                             setRoleChange({
                               id: member.id,
                               email: member.user.email,
-                              role: member.role as WorkspaceRole,
+                              role: member.role,
                             });
-                            setNextRole(member.role as WorkspaceRole);
+                            setNextRole(
+                              WORKSPACE_ROLES.find((candidate) =>
+                                hasOrganizationRole(member.role, [candidate]),
+                              ) ?? "member",
+                            );
                             setRoleError(null);
                           }}
                         >

@@ -12,6 +12,7 @@ import { and, asc, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { notFound } from "../api-error";
 import { db, pool } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 
 const PUBLIC_COLUMNS = {
   id: schema.knowledgeEntries.id,
@@ -209,6 +210,7 @@ export class KnowledgeRepository {
   /** One atomic insert: a malformed row never creates a misleading partial import. */
   async import(orgId: string, data: KnowledgeImport) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)

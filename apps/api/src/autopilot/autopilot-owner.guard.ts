@@ -5,7 +5,8 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { isOrganizationManager } from "@pubrick/shared";
+import { and, eq } from "drizzle-orm";
 import { auth } from "../auth";
 import { db } from "../db";
 
@@ -23,17 +24,12 @@ export class AutopilotOwnerGuard implements CanActivate {
     const userId = request.session?.user.id;
     if (!orgId || !userId) throw new ForbiddenException("Organization owner or admin required");
     const rows = await db
-      .select({ id: schema.member.id })
+      .select({ role: schema.member.role })
       .from(schema.member)
-      .where(
-        and(
-          eq(schema.member.organizationId, orgId),
-          eq(schema.member.userId, userId),
-          inArray(schema.member.role, ["owner", "admin"]),
-        ),
-      )
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
       .limit(1);
-    if (!rows[0]) throw new ForbiddenException("Organization owner or admin required");
+    if (!isOrganizationManager(rows[0]?.role))
+      throw new ForbiddenException("Organization owner or admin required");
     return true;
   }
 }

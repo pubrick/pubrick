@@ -3,6 +3,7 @@
 import {
   type CommentAnalysisDto,
   type CommentAnalysisResult,
+  hasOrganizationRole,
   MAX_SOURCE_TEXT_LENGTH,
   type NewsCommentDto,
   type NewsItemDto,
@@ -80,8 +81,8 @@ export default function SourcesPage({ params }: { params: Promise<{ id: string }
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canManageSources = ["owner", "admin", "member"].includes(role ?? "");
-  const canEditStory = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
+  const canManageSources = hasOrganizationRole(role, ["owner", "admin", "member"]);
+  const canEditStory = hasOrganizationRole(role, ["owner", "admin", "member", "author", "editor"]);
   const [brand, setBrand] = useState<Brand | null>(null);
   const [sources, setSources] = useState<NewsSourceDto[] | null>(null);
   const [items, setItems] = useState<NewsItemDto[] | null>(null);

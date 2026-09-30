@@ -5091,3 +5091,103 @@ describe("VC.ru manual publication", () => {
     expect(results.getByText(/self reported; Pubrick did not ask VC.ru/)).toBeInTheDocument();
   });
 });
+
+it.each(["master", "adaptation"])(
+  "serializes %s saves while preserving a later typed draft",
+  async (kind) => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    let finish!: (value: unknown) => void;
+    const target = kind === "master" ? "/api/content/c1" : "/api/content/c1/adaptations/a1";
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "PATCH" && path === target)
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const save = screen.getByRole("button", {
+      name: kind === "master" ? en.Publish.saveBody : en.Publish.saveOverride,
+    });
+    const field =
+      kind === "master"
+        ? screen.getByRole("textbox", { name: en.Publish.bodyLabel })
+        : screen.getByPlaceholderText(en.Publish.overridePlaceholder);
+    fireEvent.change(field, { target: { value: "First saved text" } });
+    const user = userEvent.setup();
+    await user.click(save);
+    fireEvent.change(field, { target: { value: "Later typed text" } });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(calls.filter((call) => call.path === target && call.method === "PATCH")).toHaveLength(1);
+    await act(async () => {
+      finish(
+        kind === "master"
+          ? { ...served.current, body: "First saved text" }
+          : { ...served.current.adaptations[0], body: "First saved text" },
+      );
+    });
+    expect(field).toHaveValue("Later typed text");
+    expect(save).toBeEnabled();
+  },
+);
+
+it("retains later rich edits after a deferred save and uses the returned revision", async () => {
+  const served = { current: makeItem({ richBody: null, bodyRevision: 0 }) };
+  const calls: Call[] = [];
+  let finish!: () => void;
+  let saves = 0;
+  installBaseHandlers(served, calls, (path, method, init) => {
+    if (path !== "/api/content/c1" || method !== "PATCH") return undefined;
+    const payload = JSON.parse(String(init?.body)) as { body: string; richBody: RichBody };
+    const saved = {
+      ...served.current,
+      body: payload.body,
+      richBody: payload.richBody,
+      bodyRevision: ++saves,
+    };
+    if (saves === 1)
+      return new Promise((resolve) => {
+        finish = () => {
+          served.current = saved;
+          resolve(saved);
+        };
+      });
+    served.current = saved;
+    return saved;
+  });
+  await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: en.Publish.richEditor.formatMode }));
+  const editor = await screen.findByRole("textbox", { name: en.Publish.richEditor.label });
+  const paste = (text: string) =>
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+        types: ["text/plain"],
+      },
+    });
+  paste("First rich edit ");
+  const save = screen.getByRole("button", { name: en.Publish.saveBody });
+  await user.click(save);
+  paste("Later rich edit ");
+  const expectedBody = (
+    screen.getByRole("textbox", {
+      name: en.Publish.richEditor.channelPreview,
+    }) as HTMLTextAreaElement
+  ).value;
+  const firstPayload = JSON.parse(calls.find((call) => call.method === "PATCH")?.body ?? "{}");
+  expect(expectedBody).not.toBe(firstPayload.body);
+  await act(async () => finish());
+  await waitFor(() => expect(save).toBeEnabled());
+  await user.click(save);
+  const submitted = calls.filter((call) => call.method === "PATCH");
+  expect(submitted).toHaveLength(2);
+  expect(JSON.parse(submitted[1]?.body ?? "{}")).toMatchObject({
+    body: expectedBody,
+    expectedBody: firstPayload.body,
+    expectedBodyRevision: 1,
+  });
+  expect(JSON.parse(submitted[1]?.body ?? "{}").richBody).not.toEqual(firstPayload.richBody);
+});

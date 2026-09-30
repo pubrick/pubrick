@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
-import { renderAsync, screen, waitFor, within } from "@/test/render";
+import { act, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import es from "../../../../../../messages/es.json";
 import BrandAnalyticsPage from "./page";
@@ -721,4 +721,36 @@ describe("brand publication results", () => {
       es.Errors.publication_comments_refresh_cooldown,
     );
   });
+});
+
+it("keeps the selected period when older analytics finish later", async () => {
+  signedInSession();
+  let oldResolve!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input) => {
+      const url = String(input);
+      if (url === `/api/brands/${BRAND_ID}`) return response({ id: BRAND_ID, name: "Brand" });
+      if (url === `/api/analytics/brands/${BRAND_ID}?days=30`)
+        return new Promise<Response>((resolve) => {
+          oldResolve = resolve;
+        });
+      if (url === `/api/analytics/brands/${BRAND_ID}?days=7`)
+        return response({
+          ...telegramResults(),
+          days: 7,
+          posts: [{ ...telegramResults().posts[0], title: "Seven-day story" }],
+        });
+      return response({ enabled: false, updatedAt: null });
+    }),
+  );
+  await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("tab", { name: /7/ }));
+  expect(await screen.findByText("Seven-day story")).toBeInTheDocument();
+  await act(async () => {
+    oldResolve(response(telegramResults()));
+  });
+  expect(screen.getByText("Seven-day story")).toBeInTheDocument();
+  expect(screen.queryByText("Telegram story")).not.toBeInTheDocument();
 });

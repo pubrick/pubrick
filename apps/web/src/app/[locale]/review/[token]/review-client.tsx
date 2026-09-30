@@ -1,26 +1,14 @@
 "use client";
 
+import type { ClientReviewGuest } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { platformName } from "@/lib/platform";
 
-type ReviewStatus = "pending" | "approved" | "changes_requested";
-type GuestReview = {
-  status: ReviewStatus;
-  expiresAt: string;
-  preview: {
-    title: string;
-    body: string;
-    channels: { name: string; platform: string; body: string }[];
-    coverUrl: string | null;
-    videoUrl: string | null;
-  };
-  comment: string | null;
-  reviewedAt: string | null;
-};
+type GuestReview = ClientReviewGuest;
 type VerdictResult = Pick<GuestReview, "status" | "comment" | "reviewedAt">;
 
 export default function ClientReviewPage({ token }: { token: string }) {
@@ -118,9 +106,57 @@ export default function ClientReviewPage({ token }: { token: string }) {
             <h2 className="mt-3 text-xl font-semibold text-fg">
               {review.preview.title || t("untitled")}
             </h2>
-            <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
-              {review.preview.body}
-            </p>
+            {review.preview.images?.length ? (
+              <div className="mt-4 space-y-4">
+                {review.preview.body
+                  .split(/\n\s*\n/)
+                  .map((paragraph) => paragraph.trim())
+                  .filter(Boolean)
+                  .map((paragraph, position) => ({
+                    paragraph,
+                    position,
+                    key: `${position}:${paragraph}`,
+                  }))
+                  .map(({ paragraph, position, key }) => (
+                    <Fragment key={key}>
+                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
+                        {paragraph}
+                      </p>
+                      {review.preview.images
+                        .filter((image) => image.afterParagraph === position)
+                        .map((image) => (
+                          <figure
+                            key={image.id}
+                            className={
+                              image.alignment === "left"
+                                ? "mr-auto w-2/3"
+                                : image.alignment === "right"
+                                  ? "ml-auto w-2/3"
+                                  : "w-full"
+                            }
+                          >
+                            {/* biome-ignore lint/performance/noImgElement: this private capability must not enter the image optimizer cache */}
+                            <img
+                              src={`${endpoint}/images/${encodeURIComponent(image.id)}`}
+                              alt={image.alt}
+                              referrerPolicy="no-referrer"
+                              className="h-auto max-h-96 w-full rounded-control object-contain"
+                            />
+                            {image.caption && (
+                              <figcaption className="mt-2 whitespace-pre-wrap break-words text-sm text-fg-secondary">
+                                {image.caption}
+                              </figcaption>
+                            )}
+                          </figure>
+                        ))}
+                    </Fragment>
+                  ))}
+              </div>
+            ) : (
+              <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-relaxed text-fg">
+                {review.preview.body}
+              </p>
+            )}
             {review.preview.coverUrl && (
               // The URL is built locally from this capability, never from an external response.
               // biome-ignore lint/performance/noImgElement: the private API requires the bearer path; Next image optimization must not cache it

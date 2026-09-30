@@ -211,9 +211,13 @@ describe("brand settings for editorial roles", () => {
       expect(
         screen.getByRole("button", { name: en.Channels.autoMetricsEnable }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.profileEdit })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.voiceEdit })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: en.Brands.linksEdit })).toBeInTheDocument();
+      for (const name of [en.Brands.profileEdit, en.Brands.voiceEdit, en.Brands.linksEdit]) {
+        if (role === "member") {
+          expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+        } else {
+          expect(screen.getByRole("button", { name })).toBeInTheDocument();
+        }
+      }
       expect(screen.getByText(en.Feed.title)).toBeInTheDocument();
     },
   );
@@ -1476,4 +1480,19 @@ describe("BrandPage — the platform picker", () => {
       (select as HTMLSelectElement).value,
     );
   });
+});
+
+it("keeps legacy member channel controls but hides manager-only brand writes", async () => {
+  vi.stubGlobal("fetch", vi.fn());
+  installHandlers([{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }]);
+  vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+    data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+    isPending: false,
+  } as never);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await screen.findByText(en.Channels.health.unknown);
+  expect(screen.getByRole("button", { name: en.Channels.add })).toBeInTheDocument();
+  for (const label of [en.Brands.profileEdit, en.Brands.voiceEdit, en.Brands.linksEdit]) {
+    expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+  }
 });

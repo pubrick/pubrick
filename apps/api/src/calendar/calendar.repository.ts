@@ -11,6 +11,7 @@ import {
 import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 const SLOT_COLUMNS = {
   id: schema.calendarSlots.id,
@@ -117,6 +118,7 @@ export class CalendarRepository {
     if (data.topicId && data.brief !== undefined)
       throw badRequest("invalid_request", "A linked topic supplies its own brief");
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
@@ -197,6 +199,7 @@ export class CalendarRepository {
   /** Bulk planning is atomic and serializes batches that name the same topic. */
   async createBulk(orgId: string, data: CalendarSlotsBulkCreate) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)

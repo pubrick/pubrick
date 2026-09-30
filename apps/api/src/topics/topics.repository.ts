@@ -15,6 +15,7 @@ import {
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { RunsRepository } from "../runs/runs.repository";
 
@@ -230,7 +231,7 @@ export class TopicsRepository {
       ? await db
           .select({
             id: schema.topicSuggestionRequests.id,
-            createdAt: schema.topicSuggestionRequests.createdAt,
+            createdAt: sql<string>`to_char(${schema.topicSuggestionRequests.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           })
           .from(schema.topicSuggestionRequests)
           .where(
@@ -252,7 +253,7 @@ export class TopicsRepository {
           eq(schema.topicSuggestionRequests.orgId, orgId),
           eq(schema.topicSuggestionRequests.brandId, brandId),
           cursor
-            ? sql`(${schema.topicSuggestionRequests.createdAt}, ${schema.topicSuggestionRequests.id}) < (${cursor.createdAt}, ${cursor.id}::uuid)`
+            ? sql`(${schema.topicSuggestionRequests.createdAt}, ${schema.topicSuggestionRequests.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
             : undefined,
         ),
       )
@@ -304,6 +305,7 @@ export class TopicsRepository {
 
   async requestSuggestions(orgId: string, brandId: string) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const brand = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
@@ -393,6 +395,7 @@ export class TopicsRepository {
 
   async fromNews(orgId: string, brandId: string, newsItemId: string) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // Dismiss takes this same row lock before checking linked topics.
       const [news] = await tx
         .select({

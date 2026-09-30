@@ -6,6 +6,7 @@ import type {
   CommentAnalysisResult,
   PublicationCommentsDto,
 } from "@pubrick/shared";
+import { hasOrganizationRole } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -40,7 +41,8 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canManageAnalytics = role === "owner" || role === "admin" || role === "member";
+  const canManageAnalytics = hasOrganizationRole(role, ["owner", "admin", "member"]);
+  const loadVersion = useRef(0);
   const [brand, setBrand] = useState<{ id: string; name: string } | null>(null);
   const [days, setDays] = useState<Period>(30);
   const [data, setData] = useState<AnalyticsDto | null>(null);
@@ -71,21 +73,28 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
   );
 
   const load = useCallback(() => {
+    const version = ++loadVersion.current;
     setData(null);
     Promise.all([
       api<{ id: string; name: string }>(`/api/brands/${id}`),
       api<AnalyticsDto>(`/api/analytics/brands/${id}?days=${days}`),
     ])
       .then(([nextBrand, nextData]) => {
+        if (version !== loadVersion.current) return;
         setBrand(nextBrand);
         setData(nextData);
         setError(null);
       })
-      .catch((cause) => setError(describeError(cause)));
+      .catch((cause) => {
+        if (version === loadVersion.current) setError(describeError(cause));
+      });
   }, [id, days, describeError]);
 
   useEffect(() => {
     load();
+    return () => {
+      loadVersion.current += 1;
+    };
   }, [load]);
 
   async function refresh(publicationId: string) {

@@ -11,6 +11,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 
 export function topicKey(title: string): string {
   return createHash("sha256")
@@ -400,6 +401,7 @@ export class SuggestionsRepository {
     calendar: CalendarSignals = { placeholders: [], memorable: [] },
   ) {
     return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return 0;
       // Block/unblock and topic edits take this same lock before touching
       // topics, giving exact-title suppression a stable snapshot.
       const [brand] = await tx

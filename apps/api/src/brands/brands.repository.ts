@@ -13,6 +13,7 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { mediaPath } from "../media/media.repository";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 
 // Explicit allowlist: new columns (secrets included) must be opted in, never
@@ -112,6 +113,7 @@ export class BrandsRepository {
   /** One explicit review action saves the profile and selected ideas together. */
   async applyImport(orgId: string, id: string, reviewed: BrandImportApply) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [current] = await tx
         .select({
           name: schema.brands.name,

@@ -22,6 +22,7 @@ import {
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { ZodValidationPipe } from "../validation.pipe";
 
@@ -449,6 +450,7 @@ export class RunsRepository {
 
     const id = await db.transaction(async (tx) => {
       await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
+      await holdOrganization(tx, orgId);
       // A topic id can only come from a server-side check under this same
       // transaction. The public RunCreate body has no topicId field.
       const topicId = beforeInsert ? await beforeInsert(tx) : null;
@@ -594,6 +596,7 @@ export class RunsRepository {
       orgId,
       parseRunCreate.transform({
         brandId: row.brandId,
+        title: stored.title,
         contentType: stored.contentType,
         generateCover: stored.generateCover,
         generateInlineImages: stored.generateInlineImages,

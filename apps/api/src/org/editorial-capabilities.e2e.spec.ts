@@ -305,4 +305,72 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
     await author.agent.get(`/api/content/${itemId}`).expect(404);
     await author.agent.patch(`/api/content/${itemId}`).send({ body: "No" }).expect(404);
   });
+
+  it("composes Better Auth roles without granting editorial members manager powers", async () => {
+    const owner = await person("multi-owner");
+    const org = await owner.agent
+      .post("/api/auth/organization/create")
+      .send({ name: "Multiple roles", slug: `multi-${randomUUID()}` })
+      .expect(200);
+    const orgId = org.body.id as string;
+    await owner.agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: orgId })
+      .expect(200);
+    const brandId = (await owner.agent.post("/api/brands").send({ name: "Granted" }).expect(201))
+      .body.id;
+    const channelId = (
+      await owner.agent
+        .post("/api/channels")
+        .send({ brandId, platform: "vc_ru", name: "Manual" })
+        .expect(201)
+    ).body.id;
+    const itemId = (
+      await owner.agent
+        .post("/api/content")
+        .send({ brandId, body: "Human draft", channelIds: [channelId] })
+        .expect(201)
+    ).body.id;
+    const author = await person("multi-author");
+    const memberId = await join(orgId, author, "author");
+    for (const roles of [
+      ["author", "author"],
+      ["author", "editor"],
+    ]) {
+      await owner.agent
+        .post("/api/auth/organization/update-member-role")
+        .send({ memberId, role: roles })
+        .expect(200);
+      await owner.agent
+        .put(`/api/brands/${brandId}/access`)
+        .send({ memberIds: [memberId] })
+        .expect(200);
+      await author.agent.get(`/api/brands/${brandId}`).expect(200);
+      await author.agent
+        .post(`/api/content/${itemId}/approve`)
+        .send({ scheduledAt: "not-a-date" })
+        .expect(roles.includes("editor") ? 400 : 403);
+      await author.agent
+        .post("/api/sources")
+        .send({ brandId, type: "rss", url: "https://example.com/feed" })
+        .expect(403);
+      await author.agent.get("/api/ai-credentials").expect(403);
+    }
+    const manager = await person("multi-admin");
+    const managerId = await join(orgId, manager, "member");
+    await owner.agent
+      .post("/api/auth/organization/update-member-role")
+      .send({ memberId: managerId, role: ["admin", "member"] })
+      .expect(200);
+    await manager.agent.get("/api/ai-credentials").expect(200);
+    await manager.agent.get(`/api/brands/${brandId}/access`).expect(200);
+    await manager.agent.get(`/api/brands/${brandId}/autopilot/operations`).expect(200);
+    await manager.agent.get("/api/sources/telegram-login").expect(200);
+    await db
+      .update(schema.member)
+      .set({ role: "owner,admin" })
+      .where(eq(schema.member.userId, owner.userId));
+    await owner.agent.get("/api/ai-credentials").expect(200);
+    await owner.agent.get(`/api/brands/${brandId}/access`).expect(200);
+  });
 });

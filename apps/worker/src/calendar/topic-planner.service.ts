@@ -3,6 +3,7 @@ import { schema } from "@pubrick/db";
 import { MANUAL_TOPIC_PLAN_QUEUE, MAX_BRIEF_LENGTH } from "@pubrick/shared";
 import { and, asc, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 const SCAN_LIMIT = 100;
 const PLANNING_DAYS = 14;
@@ -110,6 +111,7 @@ export class TopicPlannerService {
     attemptId?: string,
   ): Promise<number> {
     return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return 0;
       // All manual calendar writes take this brand lock before topic locks too.
       // It serializes the daily cap and linked-topic uniqueness across replicas.
       const [brand] = await tx

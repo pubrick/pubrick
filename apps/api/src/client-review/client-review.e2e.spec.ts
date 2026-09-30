@@ -180,6 +180,64 @@ describe.skipIf(!url)("client approval links", () => {
     await owner.post(`/api/content/${itemId}/approve`).send({}).expect(200);
   });
 
+  it("exposes only snapshot inline images through the live capability", async () => {
+    const owner = await orgAgent();
+    const { itemId, brandId } = await draft(owner);
+    const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#ffcc00" } })
+      .png()
+      .toBuffer();
+    const uploaded = await owner
+      .post(`/api/media?brandId=${brandId}`)
+      .attach("file", png, { filename: "inline.png", contentType: "image/png" })
+      .expect(201);
+    const { db } = await import("../db");
+    const [item] = await db
+      .select({ orgId: schema.contentItems.orgId })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, itemId));
+    if (!item) throw new Error("Draft missing");
+    const [slot] = await db
+      .insert(schema.contentImageSlots)
+      .values({
+        orgId: item.orgId,
+        brandId,
+        contentItemId: itemId,
+        mediaId: uploaded.body.id,
+        afterParagraph: 0,
+        alt: "Illustration",
+        caption: "Important caption",
+        alignment: "center",
+      })
+      .returning({ id: schema.contentImageSlots.id });
+    if (!slot) throw new Error("Image slot missing");
+    await db
+      .update(schema.contentItems)
+      .set({ imagesRevision: 1 })
+      .where(eq(schema.contentItems.id, itemId));
+    const created = await owner
+      .post(`/api/content/${itemId}/client-review-link`)
+      .send({})
+      .expect(201);
+    const guest = request(app.getHttpServer());
+    const base = `/api/client-review/${created.body.token}`;
+    const preview = await guest.get(base).expect(200);
+    expect(preview.body.preview.images).toEqual([
+      {
+        id: slot.id,
+        afterParagraph: 0,
+        alt: "Illustration",
+        caption: "Important caption",
+        alignment: "center",
+      },
+    ]);
+    const image = await guest.get(`${base}/images/${slot.id}`).expect(200);
+    expect(image.headers["content-type"]).toMatch(/^image\/jpeg/);
+    expect(image.headers["cache-control"]).toContain("no-store");
+    await guest.get(`${base}/images/${uploaded.body.id}`).expect(404);
+    await owner.delete(`/api/content/${itemId}/client-review-link`).expect(204);
+    await guest.get(`${base}/images/${slot.id}`).expect(410);
+  });
+
   it("serves only the attached JPEG cover through the capability", async () => {
     const owner = await orgAgent();
     const { itemId, brandId } = await draft(owner);

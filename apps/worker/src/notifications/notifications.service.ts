@@ -10,6 +10,7 @@ import {
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 
 const COPY: Record<NotificationEvent, string> = {
   draft_ready: "A new draft is ready for review.",
@@ -120,6 +121,7 @@ export class NotificationsService {
 
   private async snapshotDigest(orgId: string, brandId: string, manualDate?: string): Promise<void> {
     await db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return;
       const [config] = await tx
         .select({
           enabled: schema.notificationDigestConfigs.enabled,

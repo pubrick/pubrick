@@ -17,6 +17,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
+import { holdOrganization, holdOrganizations } from "../organization-lock";
 
 export type LoadedAdaptation = {
   id: string;
@@ -1028,6 +1029,7 @@ export class PublishRepository {
     claim?: SendClaim,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return false;
       const rows = await tx
         .update(schema.adaptations)
         .set({ status: "published", lastError: null, failureReason: null, updatedAt: nowSql() })
@@ -1197,6 +1199,7 @@ export class PublishRepository {
     partial?: PartialTelegramDelivery,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return false;
       const rows = await tx
         .update(schema.adaptations)
         .set({
@@ -1438,6 +1441,15 @@ export class PublishRepository {
       noLiveJob,
     );
     return db.transaction(async (tx) => {
+      const candidates = await tx
+        .selectDistinct({ orgId: schema.adaptations.orgId })
+        .from(schema.adaptations)
+        .where(abandoned);
+      const orgIds = await holdOrganizations(
+        tx,
+        candidates.map((row) => row.orgId),
+      );
+      if (!orgIds.length) return [];
       const swept = await tx
         .update(schema.adaptations)
         .set({
@@ -1453,13 +1465,18 @@ export class PublishRepository {
         })
         .where(
           and(
+            inArray(schema.adaptations.orgId, orgIds),
             abandoned,
             // The lock order, taken by a sub-select because an UPDATE cannot
             // carry an ORDER BY. Sorted, then locked: ascending id, the one
             // order every walker of this table uses.
             sql`${schema.adaptations.id} in (
               select a.id from adaptations a
-               where a.status = 'publishing'
+               where a.org_id in (${sql.join(
+                 orgIds.map((id) => sql`${id}`),
+                 sql`, `,
+               )})
+                 and a.status = 'publishing'
                  and a.updated_at < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})
                  and ${noLiveJobFor(sql`a.id`)}
                order by a.id
@@ -1609,6 +1626,15 @@ export class PublishRepository {
       else 'send_abandoned'
     end`;
     return db.transaction(async (tx) => {
+      const candidates = await tx
+        .selectDistinct({ orgId: schema.adaptations.orgId })
+        .from(schema.adaptations)
+        .where(and(stranded, noLiveJob));
+      const orgIds = await holdOrganizations(
+        tx,
+        candidates.map((row) => row.orgId),
+      );
+      if (!orgIds.length) return [];
       const swept = await tx
         .update(schema.adaptations)
         .set({
@@ -1627,6 +1653,7 @@ export class PublishRepository {
         })
         .where(
           and(
+            inArray(schema.adaptations.orgId, orgIds),
             stranded,
             noLiveJob,
             // The lock order, taken by a sub-select because an UPDATE cannot
@@ -1634,7 +1661,11 @@ export class PublishRepository {
             // order every walker of this table uses — `approve` included.
             sql`${schema.adaptations.id} in (
               select a.id from adaptations a
-               where (
+               where a.org_id in (${sql.join(
+                 orgIds.map((id) => sql`${id}`),
+                 sql`, `,
+               )})
+                 and (
                      (a.status = 'scheduled'
                        and a.scheduled_at < now() - make_interval(secs => ${seconds}))
                   or (a.status = 'queued'
