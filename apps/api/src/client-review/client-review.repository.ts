@@ -13,6 +13,7 @@ import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { badRequest, conflict, forbidden, gone, notFound } from "../api-error";
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
+import { holdOrganization } from "../organization-lock";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Reader = Tx | typeof db;
@@ -233,6 +234,7 @@ export class ClientReviewRepository {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + input.expiresInHours * 3_600_000);
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const snapshot = await lockItemForLink(tx, orgId, itemId);
       if (!OPEN_ITEM_STATUSES.has(snapshot.status) || snapshot.channels.length === 0) {
         throw conflict(

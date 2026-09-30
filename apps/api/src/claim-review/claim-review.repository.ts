@@ -5,6 +5,7 @@ import type { ClaimReviewDto } from "@pubrick/shared";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 
 const ITEM_COLUMNS = {
@@ -76,6 +77,7 @@ export class ClaimReviewRepository {
 
   async start(orgId: string, contentItemId: string, expectedBody: string): Promise<ClaimReviewDto> {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // Serialize requests for one article, including concurrent starts on two API nodes.
       const [item] = await tx
         .select(ITEM_COLUMNS)

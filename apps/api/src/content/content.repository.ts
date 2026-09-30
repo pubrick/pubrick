@@ -83,6 +83,7 @@ import { requireClientReviewApproval } from "../client-review/client-review.repo
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
 import { MediaImageService } from "../media/media-image.service";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
@@ -1872,6 +1873,7 @@ export class ContentRepository {
     userId: string,
   ) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [version] = await tx
         .select({
           body: schema.contentVersions.body,
@@ -2308,6 +2310,7 @@ export class ContentRepository {
 
   async update(orgId: string, id: string, data: ContentUpdate, userId: string) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const current = await this.requireEditableItem(tx, orgId, id);
       if (
         data.richBody !== undefined &&
@@ -2685,6 +2688,7 @@ export class ContentRepository {
           }
         : null;
     const staged = await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [existing] = await tx
         .select({ id: schema.contentItems.id, status: schema.contentItems.status })
         .from(schema.contentItems)
@@ -2944,6 +2948,7 @@ export class ContentRepository {
 
   async acceptDraftRevision(orgId: string, id: string, proposalId: string) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const item = await this.requireEditableItem(tx, orgId, id);
       if (item.status === "partially_published") {
         throw conflict(
@@ -3458,6 +3463,7 @@ export class ContentRepository {
       );
     }
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const current = await this.requireEditableItem(tx, orgId, id);
       if (current.body !== request.expectedBody || current.status === "partially_published") {
         throw conflict(
@@ -3519,6 +3525,7 @@ export class ContentRepository {
   /** Accept one exact source quote under the item's write lock. */
   async acceptClaimCorrection(orgId: string, id: string, proposalId: string) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const item = await this.requireEditableItem(tx, orgId, id);
       if (item.status === "partially_published") {
         throw conflict(
@@ -4079,6 +4086,7 @@ export class ContentRepository {
     reason: string;
   }): Promise<RefineProposal | undefined> {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, row.orgId);
       const [item] = await tx
         .select({ status: schema.contentItems.status })
         .from(schema.contentItems)
@@ -4182,6 +4190,7 @@ export class ContentRepository {
    */
   async acceptRefine(orgId: string, id: string, proposalId: string) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // The item first — and this order is one of REFUSALS, not of locks.
       // `lockedProposal` takes no lock of its own (its own docstring says why),
       // so swapping these two statements would move nothing in the lock order:
@@ -4447,6 +4456,7 @@ export class ContentRepository {
       reason: outcome.reason,
     };
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // The adaptation precedes the item everywhere in this repository.
       const [locked] = await tx
         .select({ id: schema.adaptations.id })
@@ -4485,6 +4495,7 @@ export class ContentRepository {
 
   async acceptReadapt(orgId: string, itemId: string, adaptationId: string, proposalId: string) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [adaptation] = await tx
         .select({
           status: schema.adaptations.status,
@@ -4623,6 +4634,7 @@ export class ContentRepository {
     userId: string,
   ) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // `adaptations` before `content_items` — the product's one lock order,
       // written down in `docs/lock-order.md`, which this file is the fourth
       // site of. `body` comes back for
@@ -5282,15 +5294,6 @@ export class ContentRepository {
       .update(schema.contentItems)
       .set({ status })
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
-  }
-
-  /** The decision journal has an org FK. Take its implicit lock before item locks. */
-  private async holdDecisionOrganization(tx: Tx, orgId: string): Promise<void> {
-    await tx
-      .select({ id: schema.organization.id })
-      .from(schema.organization)
-      .where(eq(schema.organization.id, orgId))
-      .for("key share");
   }
 
   /** Read only after the item lock: delivery status alone is not a new verdict. */
@@ -6097,7 +6100,7 @@ export class ContentRepository {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
     await db.transaction(async (tx) => {
-      await this.holdDecisionOrganization(tx, orgId);
+      await holdOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const targets = await this.lockAdaptations(tx, orgId, id, [
         "pending",
@@ -6608,7 +6611,7 @@ export class ContentRepository {
   /** Return an unsent approval to the review queue without recording a rejection. */
   async retractApproval(orgId: string, id: string) {
     await db.transaction(async (tx) => {
-      await this.holdDecisionOrganization(tx, orgId);
+      await holdOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       // A worker claims an adaptation before making the external request. Lock
       // every row first, in the same order as approval and publishing, so a
@@ -6757,6 +6760,7 @@ export class ContentRepository {
     partialResolution?: "completed" | "removed",
   ) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       // `adaptations` first — the product's one lock order. One row, by primary
       // key, so there is no multi-row ordering question to answer here.
       const locked = await tx
@@ -6911,6 +6915,7 @@ export class ContentRepository {
     userId: string,
   ) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const locked = await tx
         .select({ id: schema.adaptations.id })
         .from(schema.adaptations)
@@ -7042,7 +7047,7 @@ export class ContentRepository {
    */
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
-      await this.holdDecisionOrganization(tx, orgId);
+      await holdOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
       const outstanding = await this.lockAdaptations(tx, orgId, id, [
         ...OUTSTANDING_ADAPTATION_STATUSES,

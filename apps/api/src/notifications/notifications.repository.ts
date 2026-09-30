@@ -21,6 +21,7 @@ import {
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 
 @Injectable()
@@ -323,6 +324,7 @@ export class NotificationsRepository {
       }
     }
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       await tx
         .insert(schema.notificationSettings)
         .values({

@@ -4,6 +4,7 @@ import { hasOrganizationRole, isOrganizationManager } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { badRequest, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 
 @Injectable()
 export class BrandAccessRepository {
@@ -75,6 +76,7 @@ export class BrandAccessRepository {
   /** Serialize replacements on the brand row and validate every selected member in the same transaction. */
   async replace(orgId: string, brandId: string, memberIds: string[]) {
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)

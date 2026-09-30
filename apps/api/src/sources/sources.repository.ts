@@ -26,6 +26,7 @@ import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.reposi
 import { conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 import { requestManualPaidReplyAnalysis } from "../paid-replies/manual-analysis";
 import { QueueService } from "../queue/queue.service";
 
@@ -284,6 +285,7 @@ export class SourcesRepository {
     }
 
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const [actor] = await tx
         .select({ role: schema.member.role })
         .from(schema.member)

@@ -7,6 +7,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { conflict, forbidden } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 
 const LOGIN_TTL_MS = 10 * 60_000;
 const BEGIN_COOLDOWN_MS = 60_000;
@@ -409,6 +410,7 @@ export class TelegramLoginRepository implements OnModuleInit, OnModuleDestroy {
     session: string,
   ) {
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       await this.assertMember(tx, orgId, actorId);
       const [attempt] = await tx
         .select({ id: attempts.id, expiresAt: attempts.expiresAt })

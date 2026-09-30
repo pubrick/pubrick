@@ -5,6 +5,7 @@ import { type NewsRecheckRequest, preferredCredential } from "@pubrick/shared";
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 
 const BATCH_COLUMNS = {
@@ -106,6 +107,7 @@ export class RecheckRepository {
     await this.requireBrand(orgId, brandId);
     try {
       return await db.transaction(async (tx) => {
+        await holdOrganization(tx, orgId);
         // Lock the brand row so two concurrent previews/admissions cannot select
         // overlapping work before the partial unique index rejects the second.
         await tx.execute(

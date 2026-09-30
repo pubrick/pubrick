@@ -5,6 +5,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { badRequest, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { holdOrganization } from "../organization-lock";
 
 const ENTRY_COLUMNS = {
   id: schema.feedEntries.id,
@@ -66,6 +67,7 @@ export class FeedsRepository {
     const feed = await this.feed(orgId, brandId);
     if (!feed) throw notFound("feed_not_found", "Enable the public feed first");
     await db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
       const items = await tx
         .select({
           id: schema.contentItems.id,
