@@ -4,7 +4,9 @@ Humans and AI agents follow the same gates.
 
 ## Quality gates (all PRs)
 
-`pnpm typecheck && pnpm lint && pnpm test` must pass. CI runs exactly these.
+`pnpm typecheck && pnpm lint && pnpm test` must pass. CI also builds the complete
+workspace and runs the database test tier without cached results. Bootstrap
+script tests run locally through `pnpm test` and as a separate CI step.
 
 Develop in coherent, reviewable slices. During a slice, run focused checks for
 the code being changed. After the slice is integrated, run the full local gate
