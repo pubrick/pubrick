@@ -1292,7 +1292,13 @@ export default function SettingsPage() {
       >
         {created === null ? (
           <form id={INVITE_FORM_ID} onSubmit={invite} className="flex flex-col gap-3">
-            <p className="text-sm text-fg-secondary">{t("peopleInviteBody")}</p>
+            <p className="text-sm text-fg-secondary">
+              {t(
+                capabilities.deploymentMode === "hosted"
+                  ? "peopleInviteHostedBody"
+                  : "peopleInviteBody",
+              )}
+            </p>
             <Input
               type="email"
               label={t("peopleEmailLabel")}
@@ -1323,11 +1329,21 @@ export default function SettingsPage() {
           </form>
         ) : (
           <div className="flex flex-col gap-3">
+            {capabilities.deploymentMode === "hosted" && (
+              <p role="status" aria-atomic="true" className="text-sm text-fg-secondary">
+                {t("peopleInviteHostedQueued")}
+              </p>
+            )}
             <p className="text-sm text-fg-secondary">
-              {t("peopleInviteLinkHint", {
-                email: created.email,
-                expires: new Date(created.expiresAt).toLocaleString(locale),
-              })}
+              {t(
+                capabilities.deploymentMode === "hosted"
+                  ? "peopleInviteHostedLinkHint"
+                  : "peopleInviteLinkHint",
+                {
+                  email: created.email,
+                  expires: new Date(created.expiresAt).toLocaleString(locale),
+                },
+              )}
             </p>
             {/* Readable and selectable, not just copyable: `navigator.clipboard`
                 is unavailable on an insecure origin, which a self-hosted

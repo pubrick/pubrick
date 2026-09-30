@@ -1768,7 +1768,7 @@ it("routes hosted invitations through admission with the actual selected workspa
       }),
     }),
   );
-  expect(await screen.findByRole("status")).toHaveTextContent(
+  expect(await within(screen.getByRole("dialog")).findByRole("status")).toHaveTextContent(
     "Invitation email queued; you can also copy the link.",
   );
   expect(mockAuthClient.organization.inviteMember).not.toHaveBeenCalled();
@@ -1797,7 +1797,7 @@ it("does not claim an invitation email was queued when hosted admission rejects"
   await user.click(
     within(screen.getByRole("dialog")).getByRole("button", { name: en.SettingsPage.peopleInvite }),
   );
-  await screen.findByRole("alert");
+  await within(screen.getByRole("dialog")).findByRole("alert");
   expect(
     screen.queryByText("Invitation email queued; you can also copy the link."),
   ).not.toBeInTheDocument();
