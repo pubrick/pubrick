@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -634,6 +635,7 @@ const NON_ENUM_CHECKS = [
   "media_cleanup_work_attempts_check",
   "media_cleanup_work_lease_check",
   "media_cleanup_work_completed_check",
+  "media_cleanup_work_byte_size_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
@@ -4410,6 +4412,64 @@ describe.skipIf(!url)("runMigrations", () => {
             [slotId],
           ),
         ).toBe(CHECK_VIOLATION);
+      } finally {
+        await after.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("0124 preserves historical cleanup ownership and unknown sizes without freeing storage", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0124_nice_mister_fear");
+    const assetId = randomUUID();
+    try {
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(pool), { migrationsFolder: before });
+        await pool.query(
+          "INSERT INTO media_cleanup_work(asset_id,org_id,kind,state,last_error) VALUES($1,'historical-cleanup','video','operator_action','permission')",
+          [assetId],
+        );
+      } finally {
+        await pool.end();
+      }
+      await runMigrations(fresh.url);
+      const after = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const result = await after.query(
+          "SELECT asset_id,org_id,kind,state,last_error,byte_size FROM media_cleanup_work WHERE asset_id=$1",
+          [assetId],
+        );
+        expect(result.rows).toEqual([
+          {
+            asset_id: assetId,
+            org_id: "historical-cleanup",
+            kind: "video",
+            state: "operator_action",
+            last_error: "permission",
+            byte_size: null,
+          },
+        ]);
+        expect(
+          await refusal(after, "UPDATE media_cleanup_work SET byte_size=0 WHERE asset_id=$1", [
+            assetId,
+          ]),
+        ).toBe("23514");
+        expect(
+          await refusal(after, "UPDATE media_cleanup_work SET byte_size=-1 WHERE asset_id=$1", [
+            assetId,
+          ]),
+        ).toBe("23514");
+        await after.query("UPDATE media_cleanup_work SET byte_size=123 WHERE asset_id=$1", [
+          assetId,
+        ]);
+        const constraint = await after.query(
+          "SELECT convalidated FROM pg_constraint WHERE conname='media_cleanup_work_byte_size_check'",
+        );
+        expect(constraint.rows).toEqual([{ convalidated: false }]);
       } finally {
         await after.end();
       }

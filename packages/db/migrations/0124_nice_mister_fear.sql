@@ -1,0 +1,3 @@
+ALTER TABLE "media_cleanup_work" ADD COLUMN "byte_size" bigint;--> statement-breakpoint
+CREATE INDEX "media_cleanup_storage_idx" ON "media_cleanup_work" USING btree ("org_id","asset_id") WHERE "media_cleanup_work"."state" <> 'completed';--> statement-breakpoint
+ALTER TABLE "media_cleanup_work" ADD CONSTRAINT "media_cleanup_work_byte_size_check" CHECK ("media_cleanup_work"."byte_size" > 0) NOT VALID;
