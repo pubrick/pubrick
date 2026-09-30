@@ -1218,6 +1218,7 @@
     "aiKeyAddPlaceholder": "Paste an API key",
     "aiKeyReplacePlaceholder": "Paste a new key to replace the saved one",
     "aiGoogleKeyHint": "Use an active Gemini API key from Google AI Studio.",
+    "aiDirectKeyHint": "Use an API key from {provider}, not a chat subscription. Draft generation and revision use this provider; Google-only features still require a Google key.",
     "aiGoogleKeyLink": "Get a key",
     "aiModelLabel": "Default model",
     "aiModelPlaceholder": "Provider default",

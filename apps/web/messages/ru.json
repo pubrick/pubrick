@@ -1218,6 +1218,7 @@
     "aiKeyAddPlaceholder": "Вставьте API-ключ",
     "aiKeyReplacePlaceholder": "Вставьте новый ключ, чтобы заменить сохранённый",
     "aiGoogleKeyHint": "Используйте действующий API-ключ Gemini из Google AI Studio.",
+    "aiDirectKeyHint": "Используйте API-ключ {provider}, а не подписку на чат. Этот провайдер используется для генерации и редактирования черновиков; функции только для Google по-прежнему требуют ключ Google.",
     "aiGoogleKeyLink": "Получить ключ",
     "aiModelLabel": "Модель по умолчанию",
     "aiModelPlaceholder": "Модель провайдера",

@@ -1,4 +1,7 @@
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createDeepSeek } from "@ai-sdk/deepseek";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAI } from "@ai-sdk/openai";
 // `ai` imports LanguageModelV4 but does not re-export it, and its own
 // `LanguageModel` is a union that includes a bare gateway model-id string — so a
 // function returning it hands callers something they cannot read `.modelId` off.
@@ -49,11 +52,17 @@ export type AiCredential = {
  * 2026-09-02, when the table started matching by model FAMILY — but a model the
  * table does not know still costs an org a permanent "cost not reported" on
  * every one of its calls, so `pricing.ts` is where a new default belongs
- * first.
+ * first. Direct-provider defaults intentionally remain unpriced until their
+ * cache/tier rules are represented; see docs/llm-providers.md.
  */
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
   google: "gemini-3.8-flash",
   openrouter: "google/gemini-3.8-flash",
+  // Vendor and maintained SDK model lists checked on 2026-09-30. DeepSeek
+  // retires dated aliases; its supported Flash alias follows the current release.
+  openai: "gpt-6-luna",
+  anthropic: "claude-sonnet-5-5",
+  deepseek: "deepseek-flash",
 };
 
 /**
@@ -87,6 +96,20 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
       })(id);
     case "openrouter":
       return createOpenRouter({ apiKey: credential.apiKey })(id);
+    case "openai":
+      // Direct BYOK must not inherit OPENAI_BASE_URL from the server environment.
+      // Custom endpoints are a distinct future mode requiring SSRF validation.
+      return createOpenAI({
+        apiKey: credential.apiKey,
+        baseURL: "https://api.openai.com/v1",
+      }).responses(id);
+    case "anthropic":
+      return createAnthropic({
+        apiKey: credential.apiKey,
+        baseURL: "https://api.anthropic.com/v1",
+      })(id);
+    case "deepseek":
+      return createDeepSeek({ apiKey: credential.apiKey, baseURL: "https://api.deepseek.com" })(id);
   }
 }
 
@@ -103,7 +126,7 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
  * button is to tell the truth about a key, so the level is the lowest one the
  * default model actually accepts.
  *
- * One level for both providers because both accept this word: Google takes it
+ * One level for Google and OpenRouter because both accept this word: Google takes it
  * as `thinkingConfig.thinkingLevel`, OpenRouter as `reasoning.effort`.
  */
 const PROBE_THINKING_LEVEL = "low";
@@ -140,5 +163,10 @@ export function probeThinkingOptions(
       return { google: { thinkingConfig: { thinkingLevel: PROBE_THINKING_LEVEL } } };
     case "openrouter":
       return { openrouter: { reasoning: { effort: PROBE_THINKING_LEVEL } } };
+    case "openai":
+      // GPT-6 Luna supports none; custom models receive no guessed effort.
+      return { openai: { reasoningEffort: "none" } };
+    case "deepseek":
+      return { deepseek: { thinking: { type: "disabled" } } };
   }
 }

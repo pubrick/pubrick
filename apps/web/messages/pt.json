@@ -1218,6 +1218,7 @@
     "aiKeyAddPlaceholder": "Cole uma chave de API",
     "aiKeyReplacePlaceholder": "Cole uma nova chave para substituir a salva",
     "aiGoogleKeyHint": "Use uma chave de API ativa do Gemini no Google AI Studio.",
+    "aiDirectKeyHint": "Use uma chave de API do {provider}, não uma assinatura do chat. Este provedor gera e revisa rascunhos; os recursos exclusivos do Google ainda exigem uma chave do Google.",
     "aiGoogleKeyLink": "Obter chave",
     "aiModelLabel": "Modelo padrão",
     "aiModelPlaceholder": "Modelo do provedor",

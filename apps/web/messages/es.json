@@ -1218,6 +1218,7 @@
     "aiKeyAddPlaceholder": "Pega una clave de API",
     "aiKeyReplacePlaceholder": "Pega una clave nueva para sustituir la guardada",
     "aiGoogleKeyHint": "Usa una clave API de Gemini activa de Google AI Studio.",
+    "aiDirectKeyHint": "Usa una clave API de {provider}, no una suscripción al chat. Este proveedor genera y revisa borradores; las funciones exclusivas de Google siguen requiriendo una clave de Google.",
     "aiGoogleKeyLink": "Obtener clave",
     "aiModelLabel": "Modelo predeterminado",
     "aiModelPlaceholder": "Modelo del proveedor",

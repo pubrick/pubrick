@@ -36,7 +36,7 @@
     "@swc/core": "^1.16.1",
     "@types/html-to-text": "^9.0.4",
     "@types/node": "^22.20.1",
-    "ai": "^7.0.83",
+    "ai": "^7.0.123",
     "tsup": "^8.5.1",
     "unplugin-swc": "^1.5.11",
     "vitest": "^4.1.11"

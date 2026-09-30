@@ -1,8 +1,9 @@
 import { aiCredentialUpsertSchema } from "@pubrick/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { runFailureOf } from "./classify.js";
 import { generateStructured } from "./generate.js";
-import { DEFAULT_MODELS, resolveModel } from "./provider.js";
+import { DEFAULT_MODELS, probeThinkingOptions, resolveModel } from "./provider.js";
 import type { UsageRecord } from "./usage.js";
 
 const fixtures = [
@@ -164,6 +165,48 @@ describe("direct BYOK providers", () => {
         expect(JSON.parse(String(request?.body)).store).toBe(false);
   });
 
+  for (const { provider } of fixtures) {
+    it.each([
+      [401, "invalid_key"],
+      [429, "rate_limited"],
+    ] as const)(
+      `${provider} classifies HTTP %s and records the failed physical request`,
+      async (status, failure) => {
+        const records: UsageRecord[] = [];
+        const fetch = vi.fn(
+          async (_url: unknown, _init?: RequestInit) =>
+            new Response(
+              JSON.stringify({
+                error: { type: "fixture_error", message: "Fixture provider refusal" },
+              }),
+              { status, headers: { "content-type": "application/json" } },
+            ),
+        );
+        vi.stubGlobal("fetch", fetch);
+        let caught: unknown;
+        try {
+          await generateStructured({
+            model: resolveModel({ provider, apiKey: "sk-fixture" }),
+            provider,
+            schema: z.object({ headline: z.string() }),
+            instructions: "Return JSON",
+            prompt: "Hi",
+            maxRetries: 0,
+            onUsage: (record) => {
+              records.push(record);
+            },
+          });
+        } catch (error) {
+          caught = error;
+        }
+        expect(runFailureOf(caught)).toBe(failure);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(records).toHaveLength(1);
+        expect(records[0]).toMatchObject({ provider, status: "errored", outcome: "refused" });
+      },
+    );
+  }
+
   it("keeps OpenAI requests stateless without discarding unrelated per-call options", async () => {
     const fetch = vi.fn(
       async (_url: unknown, _init?: RequestInit) =>
@@ -198,4 +241,16 @@ describe("direct BYOK providers", () => {
       expect(() => resolveModel({ provider, apiKey: "  " })).toThrow(/no API key/);
     },
   );
+});
+
+it("probes only confirmed default models with the cheapest supported reasoning mode", () => {
+  expect(probeThinkingOptions("openai", "gpt-6-luna")).toEqual({
+    openai: { reasoningEffort: "none" },
+  });
+  expect(probeThinkingOptions("deepseek", "deepseek-flash")).toEqual({
+    deepseek: { thinking: { type: "disabled" } },
+  });
+  expect(probeThinkingOptions("anthropic", "claude-sonnet-5-5")).toBeUndefined();
+  for (const { provider } of fixtures)
+    expect(probeThinkingOptions(provider, "custom-model")).toBeUndefined();
 });

@@ -17,7 +17,7 @@ import type { CostSummary } from "../cost-display.js";
  * on save), or one the column allows and no factory can build (a 500 on the
  * first call). Neither is expressible from one list.
  */
-export const AI_PROVIDERS = ["google", "openrouter"] as const;
+export const AI_PROVIDERS = ["google", "openrouter", "openai", "anthropic", "deepseek"] as const;
 export type AiProviderId = (typeof AI_PROVIDERS)[number];
 
 export const aiProviderSchema = z.enum(AI_PROVIDERS);
@@ -222,7 +222,7 @@ export type AiTestFailure = (typeof AI_TEST_FAILURES)[number];
  * that makes an honest user wait is worse than the problem it solves. Honest use
  * is a person on the Settings screen who has just pasted a key — press, read,
  * maybe fix the model id and press again. There is one Test button per stored
- * provider and there are two providers, so a thorough session is a handful of
+ * provider and a small fixed provider list, so a thorough session is a handful of
  * presses; sixty calls is between thirty and sixty of them, which no
  * configuration session approaches and no support call reaches either. The
  * number is deliberately far above honest use and far below abuse, because the

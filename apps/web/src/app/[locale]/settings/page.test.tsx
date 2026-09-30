@@ -1563,18 +1563,28 @@ it.each([
   ["openai", "OpenAI"],
   ["anthropic", "Anthropic"],
   ["deepseek", "DeepSeek"],
-] as const)("saves a %s key in its own provider slot with visible feature limits", async (provider, name) => {
-  const calls: Call[] = [];
-  installApi(calls);
-  render(<SettingsPage />);
-  const user = userEvent.setup();
-  await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), provider);
-  expect(screen.getByRole("option", { name })).toBeInTheDocument();
-  await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "direct-key-fixture-12345678");
-  await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
-  await screen.findByText(en.SettingsPage.aiKeySavedNotice);
-  const sent = calls.find(({ path, method }) => path === "/api/ai-credentials" && method === "PUT");
-  expect(sent?.body).toEqual({ provider, apiKey: "direct-key-fixture-12345678" });
-  expect(aiCredentialUpsertSchema.parse(sent?.body)).toEqual(sent?.body);
-  expect(screen.getByText(en.SettingsPage.aiDirectKeyHint.replace("{provider}", name))).toBeInTheDocument();
-});
+] as const)(
+  "saves a %s key in its own provider slot with visible feature limits",
+  async (provider, name) => {
+    const calls: Call[] = [];
+    installApi(calls);
+    render(<SettingsPage />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiProviderLabel), provider);
+    expect(screen.getByRole("option", { name })).toBeInTheDocument();
+    await user.type(
+      screen.getByLabelText(en.SettingsPage.aiKeyLabel),
+      "direct-key-fixture-12345678",
+    );
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
+    await screen.findByText(en.SettingsPage.aiKeySavedNotice);
+    const sent = calls.find(
+      ({ path, method }) => path === "/api/ai-credentials" && method === "PUT",
+    );
+    expect(sent?.body).toEqual({ provider, apiKey: "direct-key-fixture-12345678" });
+    expect(aiCredentialUpsertSchema.parse(sent?.body)).toEqual(sent?.body);
+    expect(
+      screen.getByText(en.SettingsPage.aiDirectKeyHint.replace("{provider}", name)),
+    ).toBeInTheDocument();
+  },
+);

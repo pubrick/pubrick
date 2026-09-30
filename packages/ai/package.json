@@ -19,11 +19,14 @@
     "test": "vitest run --reporter=dot"
   },
   "dependencies": {
-    "@ai-sdk/google": "^4.0.56",
-    "@ai-sdk/provider": "^4.0.8",
-    "@openrouter/ai-sdk-provider": "^3.0.0",
+    "@ai-sdk/anthropic": "^4.0.69",
+    "@ai-sdk/deepseek": "^3.0.57",
+    "@ai-sdk/google": "^4.0.86",
+    "@ai-sdk/openai": "^4.0.82",
+    "@ai-sdk/provider": "^4.0.20",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
     "@pubrick/shared": "workspace:*",
-    "ai": "^7.0.83",
+    "ai": "^7.0.123",
     "undici": "^7.29.0",
     "zod": "^4.4.3"
   },

@@ -53,7 +53,7 @@
     "@types/sanitize-html": "^2.16.1",
     "@types/smtp-server": "^3.5.13",
     "@types/supertest": "^7.2.1",
-    "ai": "^7.0.83",
+    "ai": "^7.0.123",
     "fast-xml-parser": "^5.11.1",
     "mailparser": "^3.9.32",
     "smtp-server": "^3.19.16",

@@ -279,7 +279,18 @@ async function attempt<T>(
       prompt,
       ...(args.maxOutputTokens === undefined ? {} : { maxOutputTokens: args.maxOutputTokens }),
       ...(args.maxRetries === undefined ? {} : { maxRetries: args.maxRetries }),
-      ...(args.providerOptions === undefined ? {} : { providerOptions: args.providerOptions }),
+      // Responses defaults to retaining responses. Pubrick stores its own history;
+      // every physical call (including repair) is stateless at the provider.
+      ...(args.provider === "openai"
+        ? {
+            providerOptions: {
+              ...args.providerOptions,
+              openai: { ...args.providerOptions?.openai, store: false },
+            },
+          }
+        : args.providerOptions === undefined
+          ? {}
+          : { providerOptions: args.providerOptions }),
       // The in-flight half of the same rule: a signal that fires after dispatch
       // has to reach the provider, and this attempt may be either of the two.
       // This is also the ONLY thing that makes the budget a bound on a call

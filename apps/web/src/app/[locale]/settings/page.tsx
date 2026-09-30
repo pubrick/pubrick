@@ -91,6 +91,9 @@ type TestState = "loading" | AiCredentialTestResult | { failed: string };
 const PROVIDER_NAMES: Record<AiProviderId, string> = {
   google: "Google",
   openrouter: "OpenRouter",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  deepseek: "DeepSeek",
 };
 
 // Same mechanism for the invite dialog: the submit lives in the modal footer.
@@ -769,6 +772,11 @@ export default function SettingsPage() {
                   >
                     {t("aiGoogleKeyLink")}
                   </a>
+                </p>
+              )}
+              {provider !== "google" && (
+                <p className="text-sm text-fg-secondary">
+                  {t("aiDirectKeyHint", { provider: PROVIDER_NAMES[provider] })}
                 </p>
               )}
               <Advanced
