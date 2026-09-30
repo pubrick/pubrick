@@ -14,6 +14,7 @@ import {
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
+import { resolveTenantQuotaMode } from "@pubrick/billing";
 import {
   type AiTextTarget,
   admitAiTextCall,
@@ -24,6 +25,7 @@ import {
   schema,
   snapshotAiTextSelection,
   withImageCallLock,
+  withTenantResourceAdmission,
 } from "@pubrick/db";
 import {
   AiTextSelectionChangedError,
@@ -1172,16 +1174,23 @@ export class GenerateRepository {
     await mkdir(directory, { recursive: true });
     await writeFile(target, output.data, { flag: "wx", mode: 0o600 });
     try {
-      await db.insert(schema.mediaAssets).values({
-        id,
+      await withTenantResourceAdmission(
         orgId,
-        brandId,
-        name: placement === "cover" ? "Generated draft cover" : "Generated inline illustration",
-        mimeType: "image/jpeg",
-        width: output.info.width,
-        height: output.info.height,
-        byteSize: output.data.length,
-      });
+        db,
+        resolveTenantQuotaMode(process.env, process.env.NODE_ENV),
+        { resource: "mediaBytes", additional: output.data.length },
+        (tx) =>
+          tx.insert(schema.mediaAssets).values({
+            id,
+            orgId,
+            brandId,
+            name: placement === "cover" ? "Generated draft cover" : "Generated inline illustration",
+            mimeType: "image/jpeg",
+            width: output.info.width,
+            height: output.info.height,
+            byteSize: output.data.length,
+          }),
+      );
     } catch (error) {
       await unlink(target).catch(() => undefined);
       throw error;
