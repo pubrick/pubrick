@@ -1,7 +1,6 @@
 import { Injectable } from "@nestjs/common";
-import { type AiCallScope, googleProxyFetch } from "@pubrick/ai";
+import { type AiCallScope, googleProxyFetch, preflightError } from "@pubrick/ai";
 import type { GoogleProxyTestResult } from "@pubrick/shared";
-import { throwHostedAiRefusal } from "../hosted-ai-call";
 
 const GOOGLE_CONNECTIVITY_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const PROXY_TEST_TIMEOUT_MS = 8_000;
@@ -27,7 +26,7 @@ export class GoogleProxyProbe {
       else await request(controller.signal);
       return { ok: true };
     } catch (error) {
-      throwHostedAiRefusal(error);
+      if (preflightError(error)) throw error;
       // Transport errors can contain proxy userinfo. Only closed codes reach the client.
       return { ok: false, reason: controller.signal.aborted ? "timeout" : "unreachable" };
     } finally {

@@ -40,7 +40,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
-import { hostedAiCallScope } from "../hosted-ai-call";
+import { hostedAiCallScope, throwHostedAiRefusal } from "../hosted-ai-call";
 import { AiCredentialProbe } from "./ai-credentials.probe";
 import { GoogleProxyProbe } from "./google-proxy.probe";
 
@@ -134,7 +134,14 @@ export class AiCredentialsRepository {
     if (!proxyUrl) return { ok: false, reason: "not_configured" };
     if (!isAllowedGoogleProxy(proxyUrl)) return { ok: false, reason: "invalid_proxy" };
     const scope = hostedAiCallScope(orgId, "probe");
-    return scope ? this.googleProxyProbe.run(proxyUrl, scope) : this.googleProxyProbe.run(proxyUrl);
+    try {
+      return scope
+        ? await this.googleProxyProbe.run(proxyUrl, scope)
+        : await this.googleProxyProbe.run(proxyUrl);
+    } catch (error) {
+      throwHostedAiRefusal(error);
+      throw error;
+    }
   }
 
   async list(orgId: string) {
@@ -553,7 +560,10 @@ export class AiCredentialsRepository {
     }
 
     if (!credential) return { ok: false, reason: "model_not_found" };
-    const outcome = await this.probe.run(credential);
+    const outcome = await this.probe.run(credential).catch((error: unknown) => {
+      throwHostedAiRefusal(error);
+      throw error;
+    });
 
     // Before the verdict, and for the failed verdict too: the provider counts
     // tokens before it knows whether we could parse the answer, so a failed

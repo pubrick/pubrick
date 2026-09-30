@@ -18,7 +18,9 @@ vi.mock("@pubrick/ai", async (original) => ({
 }));
 function fixture() {
   const repository = {
-    withIndexLock: vi.fn(async (_org: string, _brand: string, execute: () => Promise<unknown>) => execute()),
+    withIndexLock: vi.fn(async (_org: string, _brand: string, execute: () => Promise<unknown>) =>
+      execute(),
+    ),
     indexInput: vi.fn(async () => ({ isActive: true, title: "Title", content: "Content" })),
     unindexed: vi.fn(async () => [{ id: "entry", title: "Title", content: "Content" }]),
     googleKey: vi.fn(async () => "synthetic-key"),

@@ -4,6 +4,7 @@ import {
   classifyAiError,
   generateStructured,
   googleProxyFetch,
+  preflightError,
   probeThinkingOptions,
   resolveModel,
   runFailureOf,
@@ -12,7 +13,6 @@ import {
 } from "@pubrick/ai";
 import type { AiTestFailure, RunFailure } from "@pubrick/shared";
 import { z } from "zod";
-import { throwHostedAiRefusal } from "../hosted-ai-call";
 
 /**
  * What one Test call produced.
@@ -99,7 +99,7 @@ export class AiCredentialProbe {
         records.push(record);
       });
     } catch (error) {
-      throwHostedAiRefusal(error);
+      if (preflightError(error)) throw error;
       const reason = classifyProbeFailure(error, records);
       // A retryable generation error does not establish whether Google
       // accepts the key. The models endpoint checks it without another paid
