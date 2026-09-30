@@ -22,6 +22,39 @@ const payload = {
 };
 const user = { id: "user_1", email: "person@example.com", emailVerified: false };
 describe("encrypted authentication mail contract", () => {
+  it("requires the exact unconsumed reset verification row, its owner and authoritative deadline", () => {
+    const reset = {
+      ...payload,
+      kind: "reset" as const,
+      link: "https://pubrick.example/api/auth/reset-password/private-token?callbackURL=%2Fen%2Freset-password",
+    };
+    const verification = {
+      identifier: "reset-password:private-token",
+      userId: user.id,
+      expiresAt: reset.expiresAt,
+    };
+    expect(deliveryEligibility(reset, identity, now, { user })).toBe("reset_token_invalid");
+    expect(deliveryEligibility(reset, identity, now, { user, resetVerification: null })).toBe(
+      "reset_token_invalid",
+    );
+    expect(
+      deliveryEligibility(reset, identity, now, { user, resetVerification: verification }),
+    ).toBe("eligible");
+    for (const changed of [
+      { ...verification, identifier: "reset-password:other-token" },
+      { ...verification, userId: "other_user" },
+    ]) {
+      expect(deliveryEligibility(reset, identity, now, { user, resetVerification: changed })).toBe(
+        "reset_token_invalid",
+      );
+    }
+    expect(
+      deliveryEligibility(reset, identity, now, {
+        user,
+        resetVerification: { ...verification, expiresAt: now },
+      }),
+    ).toBe("expired");
+  });
   it("stores only ciphertext, preserves a stable Message-ID and reads old rotated keys", () => {
     const envelope = sealAuthMail(payload, key);
     expect(Object.keys(envelope)).toEqual(["ciphertext"]);

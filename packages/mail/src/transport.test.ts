@@ -23,6 +23,11 @@ const payload = {
   messageId: "<pubrick-auth.a91b4a67-2a4d-45f6-b7ce-a12b0b912ac0@pubrick.example>",
   link: "https://pubrick.example/api/auth/reset-password/private-token?callbackURL=%2Fru%2Freset-password",
 };
+const resetVerification = {
+  identifier: "reset-password:private-token",
+  userId: payload.userId,
+  expiresAt: payload.expiresAt,
+};
 const config = {
   host: "smtp.example",
   port: 587,
@@ -43,6 +48,17 @@ function capture() {
 }
 afterEach(() => vi.restoreAllMocks());
 describe("SMTP delivery attempt boundary", () => {
+  it("never calls SMTP for a consumed or deleted reset token", async () => {
+    const smtp = capture();
+    const mail = createSmtpMailTransport(config, { identity, now: () => now });
+    expect(
+      await mail.deliver(payload, async () => ({
+        user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+        resetVerification: null,
+      })),
+    ).toEqual({ status: "skipped", reason: "reset_token_invalid" });
+    expect(smtp.sendMail).not.toHaveBeenCalled();
+  });
   it("does not submit SMTP after shutdown while awaiting authoritative ownership", async () => {
     const smtp = capture();
     const mail = createSmtpMailTransport(config, { identity, now: () => now });
@@ -57,7 +73,10 @@ describe("SMTP delivery attempt boundary", () => {
         }),
     );
     mail.close();
-    release({ user: { id: payload.userId, email: payload.recipient, emailVerified: true } });
+    release({
+      user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+      resetVerification,
+    });
     await expect(delivery).rejects.toMatchObject({
       name: "AuthMailError",
       code: "unavailable",
@@ -104,6 +123,7 @@ describe("SMTP delivery attempt boundary", () => {
     const mail = createSmtpMailTransport(config, { identity, now: () => now });
     const resolve = vi.fn().mockResolvedValue({
       user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+      resetVerification,
     });
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "sent" });
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "sent" });
@@ -136,7 +156,10 @@ describe("SMTP delivery attempt boundary", () => {
     const mail = createSmtpMailTransport(config, { identity, now: () => clock });
     const resolve = vi.fn(async () => {
       clock = payload.expiresAt;
-      return { user: { id: payload.userId, email: payload.recipient, emailVerified: true } };
+      return {
+        user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+        resetVerification,
+      };
     });
     expect(await mail.deliver(payload, resolve)).toEqual({ status: "skipped", reason: "expired" });
     expect(resolve).not.toHaveBeenCalled();
@@ -175,6 +198,7 @@ describe("SMTP delivery attempt boundary", () => {
     const mail = createSmtpMailTransport(config, { identity, now: () => now });
     const promise = mail.deliver(payload, async () => ({
       user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+      resetVerification,
     }));
     await expect(promise).rejects.toMatchObject({ name: "AuthMailError", code, message: code });
     try {
@@ -190,6 +214,7 @@ describe("SMTP delivery attempt boundary", () => {
     await expect(
       mail.deliver(payload, async () => ({
         user: { id: payload.userId, email: payload.recipient, emailVerified: true },
+        resetVerification,
       })),
     ).rejects.toThrowError("rejected");
   });
