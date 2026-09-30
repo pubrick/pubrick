@@ -54,6 +54,7 @@ import sharp from "sharp";
 import { db, pool } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
+import { holdOrganization } from "../organization-lock";
 import { digest, receiptDigest, type TemplateSnapshot } from "./template-snapshot";
 
 /**
@@ -1281,7 +1282,8 @@ export class GenerateRepository {
   ): Promise<TerminalOutcome> {
     try {
       return await db.transaction(async (tx) => {
-        // Lock the brand before anything else. `FOR SHARE` also conflicts with
+        if (!(await holdOrganization(tx, orgId))) return "gone";
+        // With the tenant held, lock the brand before child rows. `FOR SHARE` conflicts with
         // a non-key setting UPDATE, so the opt-in cannot change before commit.
         //
         // The opt-in comes from this row in the same transaction as the new

@@ -725,3 +725,27 @@ organization must acquire that stronger lock directly at entry; never take
 key-share first and upgrade it to `FOR UPDATE`, since simultaneous upgrades
 can themselves deadlock. Single statements and transactions that already insert
 the organization FK before locking children retain their existing order.
+
+### Worker completion and tenant deletion
+
+Delayed jobs treat a tenant removed during execution as an ordinary no-op.
+Worker `holdOrganization` returns whether its `FOR KEY SHARE` parent lock
+found a live tenant; callers stop before any child lock when it did not.
+Generation completion, Autopilot/calendar admission, topic planning and
+suggestion completion/scanning, RSS saves, digest snapshots, and public news
+comment saves take that parent lock before acquiring their existing child
+locks. Generation admission keeps its advisory lock first, as the API does.
+Private comment/paid-analysis and publication-comment paths already acquire
+the organization first and retain their stronger locks where necessary.
+
+Publication terminal receipts also acquire the organization before adapting
+the existing delivery row. Bulk abandoned/stranded recovery reads candidate
+tenant IDs without child locks, holds those tenants in ascending ID order,
+and restricts both its adaptation lock walk and update to that held set.
+Newly eligible tenants wait for the next sweep. No path upgrades this helper's
+key-share lock to an organization update lock.
+
+`apps/worker/src/organization-lock.e2e.spec.ts` exercises real tenant deletion
+against generation, RSS, suggestions, Autopilot, terminal publication writes
+and bulk publication recovery. Every path must let the cascade complete and
+finish without a deadlock or an attempted insert into the deleted tenant.

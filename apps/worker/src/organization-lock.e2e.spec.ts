@@ -66,7 +66,7 @@ describe.skipIf(!url)("worker tenant deletion lock order", () => {
           contentItemId: item.id,
           channelId: channel.id,
           status: "publishing",
-          updatedAt: new Date(0),
+          updatedAt: kind === "publication sweep" ? new Date(0) : new Date(),
         })
         .returning();
       if (!adaptation) throw new Error("Missing adaptation");
@@ -150,5 +150,52 @@ describe.skipIf(!url)("worker tenant deletion lock order", () => {
       }
     },
     15_000,
+  );
+  it.each(["sweepAbandoned", "sweepStranded"] as const)(
+    "%s recovers eligible deliveries across two held tenants",
+    async (method) => {
+      const orgIds = [randomUUID(), randomUUID()];
+      const adaptationIds: string[] = [];
+      try {
+        for (const orgId of orgIds) {
+          await database.db
+            .insert(schema.organization)
+            .values({ id: orgId, name: "Sweep", slug: orgId });
+          const [brand] = await database.db
+            .insert(schema.brands)
+            .values({ orgId, name: "Brand" })
+            .returning();
+          if (!brand) throw new Error("Missing brand");
+          const [channel] = await database.db
+            .insert(schema.channels)
+            .values({ orgId, brandId: brand.id, name: "Manual", platform: "vc_ru" })
+            .returning();
+          const [item] = await database.db
+            .insert(schema.contentItems)
+            .values({ orgId, brandId: brand.id, body: "Draft" })
+            .returning();
+          if (!channel || !item) throw new Error("Missing parents");
+          const [adaptation] = await database.db
+            .insert(schema.adaptations)
+            .values({
+              orgId,
+              contentItemId: item.id,
+              channelId: channel.id,
+              status: method === "sweepAbandoned" ? "publishing" : "queued",
+              updatedAt: new Date(0),
+            })
+            .returning();
+          if (!adaptation) throw new Error("Missing adaptation");
+          adaptationIds.push(adaptation.id);
+        }
+        const { PublishRepository } = await import("./publish/publish.repository");
+        const swept = await new PublishRepository()[method]();
+        expect(swept.map((row) => row.id)).toEqual(expect.arrayContaining(adaptationIds));
+        for (const orgId of orgIds) expect(swept.some((row) => row.orgId === orgId)).toBe(true);
+      } finally {
+        for (const orgId of orgIds)
+          await database.db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+      }
+    },
   );
 });

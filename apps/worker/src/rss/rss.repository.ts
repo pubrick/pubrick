@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import { and, asc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import type { FeedItem } from "./rss.fetcher";
 
 @Injectable()
@@ -92,6 +93,7 @@ export class RssRepository {
 
   async save(orgId: string, sourceId: string, feedUrl: string, items: FeedItem[]) {
     await db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return;
       const rows = await tx
         .select({ id: schema.newsSources.id, brandId: schema.newsSources.brandId })
         .from(schema.newsSources)

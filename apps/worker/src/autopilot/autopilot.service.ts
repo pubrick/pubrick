@@ -15,6 +15,7 @@ import {
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { quietHour } from "./rules";
 
 const SCAN_LIMIT = 100;
@@ -175,6 +176,7 @@ export class AutopilotService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      if (!(await holdOrganization(tx, orgId))) return "disabled";
       if (scan) {
         const [existing] = await tx
           .select({ decision: schema.autopilotScanEvents.decision })

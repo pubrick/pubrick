@@ -2196,15 +2196,12 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
   /**
    * Two channels of ONE item landing in the same instant.
    *
-   * The interleaving is pinned rather than hoped for. Every `publications` row
-   * has a foreign key to `organization`, and Postgres takes `FOR KEY SHARE` on
-   * the referenced org row for the INSERT — so a third session holding
-   * `FOR UPDATE` on that row parks BOTH `markPublished` transactions at exactly
-   * the point this race is made of: each has already written its own adaptation
-   * (uncommitted), and neither has read its siblings yet. One COMMIT releases
-   * them together, because two `FOR KEY SHARE` waiters do not conflict with
-   * each other. No trigger, no `pg_sleep`, and nothing left in the schema for
-   * the next test to trip over.
+   * The interleaving is pinned rather than hoped for. Publication INSERTs
+   * acquire channel FK key-share locks. Hold those channels FOR UPDATE so both
+   * handlers have updated their own adaptation but neither has read siblings.
+   * The organization is already held at entry to protect tenant deletion; using
+   * it as this barrier would stop both handlers before the race under test.
+   * Releasing the channel barrier lets compatible FK waiters proceed together.
    *
    * Without the item lock in `recomputeItemStatus`, each transaction then reads
    * the other's adaptation as still `publishing` — MVCC, the write is not
@@ -2227,7 +2224,7 @@ describe.skipIf(!url)("PublishRepository + PublishService.markExhausted (real DB
 
     const holder = await pool.connect();
     await holder.query("BEGIN");
-    await holder.query("SELECT id FROM organization WHERE id = $1 FOR UPDATE", [orgId]);
+    await holder.query("SELECT id FROM channels WHERE org_id = $1 ORDER BY id FOR UPDATE", [orgId]);
 
     const landings = Promise.allSettled([
       repo.markPublished(orgId, first, { externalId: "1", externalUrl: "https://t.me/c/1" }),

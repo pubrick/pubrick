@@ -4,6 +4,7 @@ import { TOPIC_SUGGESTIONS_QUEUE } from "@pubrick/shared";
 import { and, asc, eq, gt, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { holdOrganization } from "../organization-lock";
 import { STALE_AUTOMATIC_SWEEP_LIMIT, SuggestionsRepository } from "./suggestions.repository";
 
 const SCAN_LIMIT = 100;
@@ -63,6 +64,7 @@ export class SuggestionsScanService {
 
   async trigger(boss: PgBoss, orgId: string, brandId: string): Promise<SuggestionScanDecision> {
     return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return "disabled";
       // Manual admission takes this same lock before checking its cooldown.
       // It must precede the config lock to preserve the product lock order.
       const [brand] = await tx
