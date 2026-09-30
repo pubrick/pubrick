@@ -65,3 +65,9 @@ PostgreSQL databases and prove transactional rollback, cascade survival,
 concurrent leases, stale acknowledgements, restored re-staging, bounded failure,
 active-asset refusal and retention. Deployment is complete only once the worker
 poller and every resource/workspace deletion path are wired to this protocol.
+
+## Application lifecycle
+
+Workspace, brand and individual media deletion stage ownership proofs in the same database transaction before deleting metadata. A rollback preserves both metadata and files and rolls back the cleanup proof. API responses complete after the database commit; filesystem deletion is asynchronous and does not turn a successful deletion into a retry. Individual attachment conflicts remain authoritative foreign-key refusals.
+
+The worker performs one nonoverlapping batch at startup and every 10 seconds. Shutdown stops new polls and awaits the active batch. Failed polls log only a closed error code. API and worker must share `MEDIA_STORAGE_DIR` and the same filesystem: Compose already binds both to `/data/media` on the shared media volume. Native development defaults to `.data/media` under each process working directory; when running API and worker from different directories, configure the same absolute path for both. Pending cleanup is operational data excluded from workspace downloads; full instance recovery retains it with the database, and restored workers remain stopped until operator review.

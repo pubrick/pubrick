@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_QUEUE_OPTIONS,
@@ -48,6 +49,23 @@ afterEach(() => {
   for (const name of Object.keys(process.env)) if (!(name in saved)) delete process.env[name];
   Object.assign(process.env, saved);
   vi.resetModules();
+});
+
+describe("worker media storage configuration", () => {
+  it("uses the configured shared media mount and rejects an empty path", async () => {
+    process.env.MEDIA_STORAGE_DIR = "/data/media";
+    expect(await boot(FRESH_KEYS[0] as string)).toBeNull();
+    expect((await import("./env")).env.MEDIA_STORAGE_DIR).toBe("/data/media");
+    process.env.MEDIA_STORAGE_DIR = "";
+    expect(refusal(await boot(FRESH_KEYS[0] as string))).toContain("MEDIA_STORAGE_DIR");
+  });
+  it("defaults to the existing generated and uploaded media location", async () => {
+    delete process.env.MEDIA_STORAGE_DIR;
+    expect(await boot(FRESH_KEYS[0] as string)).toBeNull();
+    expect((await import("./env")).env.MEDIA_STORAGE_DIR).toBe(
+      path.resolve(process.cwd(), ".data/media"),
+    );
+  });
 });
 
 describe("the worker validates the key ring at boot", () => {

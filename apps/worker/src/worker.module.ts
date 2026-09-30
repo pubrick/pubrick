@@ -14,6 +14,7 @@ import { GenerateRepository } from "./generate/generate.repository";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexRepository } from "./knowledge/knowledge-auto-index.repository";
 import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.service";
+import { MediaCleanupModule } from "./media-cleanup/media-cleanup.module";
 import { MetricsService } from "./metrics/metrics.service";
 import { NotificationsService } from "./notifications/notifications.service";
 import { PublishRepository } from "./publish/publish.repository";
@@ -30,7 +31,7 @@ import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
-  imports: [AuthMailModule],
+  imports: [AuthMailModule, MediaCleanupModule],
   providers: [
     AutopilotService,
     QueueService,

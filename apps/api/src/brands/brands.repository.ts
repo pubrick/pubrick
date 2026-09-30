@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { unlink } from "node:fs/promises";
-import { Injectable, Logger } from "@nestjs/common";
-import { schema, withTenantResourceAdmission } from "@pubrick/db";
+import { Injectable } from "@nestjs/common";
+import { schema, stageMediaCleanup, withTenantResourceAdmission } from "@pubrick/db";
 import {
   type BrandCreate,
   type BrandImportApply,
@@ -13,7 +12,6 @@ import {
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { conflict, notFound } from "../api-error";
 import { db } from "../db";
-import { mediaPath } from "../media/media.repository";
 import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
@@ -68,7 +66,6 @@ export function brandImportProfileHash(profile: ImportProfile): string {
 
 @Injectable()
 export class BrandsRepository {
-  private readonly logger = new Logger(BrandsRepository.name);
   constructor(private readonly queue: QueueService) {}
 
   list(orgId: string, visibleBrandIds: string[] | null = null) {
@@ -247,7 +244,7 @@ export class BrandsRepository {
    */
   async delete(orgId: string, id: string) {
     const mode = tenantQuotaMode();
-    const mediaIds = await db.transaction(async (tx) => {
+    await db.transaction(async (tx) => {
       if (mode.mode === "hosted")
         await tx.execute(
           sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
@@ -259,10 +256,6 @@ export class BrandsRepository {
         .limit(1)
         .for("update");
       if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
-      const assets = await tx
-        .select({ id: schema.mediaAssets.id, kind: schema.mediaAssets.kind })
-        .from(schema.mediaAssets)
-        .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.brandId, id)));
 
       // EVERY run of this brand, `FOR UPDATE`, by ascending id — the second
       // position in the canonical order, and taken here rather than left to the
@@ -343,27 +336,11 @@ export class BrandsRepository {
           and(eq(schema.contentImageSlots.orgId, orgId), eq(schema.contentImageSlots.brandId, id)),
         );
 
+      await stageMediaCleanup(orgId, tx, { brandId: id });
       await tx
         .delete(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, id)));
-      return assets;
     });
-    // The database is authoritative. A filesystem failure after commit cannot
-    // turn a successful brand deletion into a retryable 500, so report an
-    // orphaned file for operator cleanup without reversing the result.
-    await Promise.all(
-      mediaIds.map(async (asset) => {
-        try {
-          await unlink(mediaPath(asset.id, asset.kind));
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            this.logger.warn(
-              `Could not remove media file after brand deletion: mediaId=${asset.id} error=${String(error)}`,
-            );
-          }
-        }
-      }),
-    );
     return { deleted: true };
   }
 }

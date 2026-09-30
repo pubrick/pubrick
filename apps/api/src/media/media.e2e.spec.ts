@@ -327,7 +327,7 @@ describe.skipIf(!url)("media library e2e", () => {
     ).rejects.toThrow();
   });
 
-  it("removes an uploaded file when its brand is deleted", async () => {
+  it("stages durable file cleanup when its brand is deleted", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Temporary brand" }).expect(201);
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#00ff00" } })
@@ -340,7 +340,13 @@ describe.skipIf(!url)("media library e2e", () => {
     const file = path.join(mediaDir, `${uploaded.body.id}.jpg`);
     expect((await readFile(file)).length).toBeGreaterThan(0);
     await owner.delete(`/api/brands/${brand.body.id}`).expect(200);
-    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+    // DB deletion succeeds before asynchronous worker cleanup; the retained proof survives the cascade.
+    expect((await readFile(file)).length).toBeGreaterThan(0);
+    const [proof] = await direct.db
+      .select()
+      .from(schema.mediaCleanupWork)
+      .where(eq(schema.mediaCleanupWork.assetId, uploaded.body.id));
+    expect(proof).toMatchObject({ assetId: uploaded.body.id, state: "pending", kind: "image" });
   });
 
   it("deletes a brand whose post still holds a cover", async () => {

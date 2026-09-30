@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Injectable, Logger } from "@nestjs/common";
-import { schema, withTenantResourceAdmission } from "@pubrick/db";
+import { Injectable } from "@nestjs/common";
+import { schema, stageMediaCleanup, withTenantResourceAdmission } from "@pubrick/db";
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
@@ -39,8 +39,6 @@ const COLUMNS = {
 
 @Injectable()
 export class MediaRepository {
-  private readonly logger = new Logger(MediaRepository.name);
-
   /** A live Telegram cover keeps the reviewed media frozen until recovery. */
   private async requireNoPartialTelegram(
     tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -346,7 +344,7 @@ export class MediaRepository {
   }
 
   async delete(orgId: string, id: string): Promise<void> {
-    const asset = await this.requireAsset(orgId, id);
+    await this.requireAsset(orgId, id);
     const attached = await db
       .select({ id: schema.contentItems.id })
       .from(schema.contentItems)
@@ -387,6 +385,13 @@ export class MediaRepository {
           await tx.execute(
             sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
           );
+        const [locked] = await tx
+          .select({ id: schema.mediaAssets.id })
+          .from(schema.mediaAssets)
+          .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
+          .for("update");
+        if (!locked) throw notFound("media_not_found", "Media not found");
+        await stageMediaCleanup(orgId, tx, { assetIds: [id] });
         return tx
           .delete(schema.mediaAssets)
           .where(and(eq(schema.mediaAssets.orgId, orgId), eq(schema.mediaAssets.id, id)))
@@ -409,13 +414,6 @@ export class MediaRepository {
       throw error;
     }
     if (!rows.length) throw notFound("media_not_found", "Image not found");
-    await unlink(mediaPath(id, asset.kind)).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") {
-        this.logger.warn(
-          `Could not remove deleted media file: mediaId=${id} error=${String(error)}`,
-        );
-      }
-    });
   }
 
   async attach(

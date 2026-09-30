@@ -229,7 +229,7 @@ describe.skipIf(!url)("native API resource writers", () => {
         .where(eq(schema.mediaAssets.orgId, f.orgId)),
     ).toHaveLength(0);
   });
-  it("allows expired workspaces to delete media and removes committed disk bytes", async () => {
+  it("allows expired workspaces to delete media and durably stage physical cleanup", async () => {
     const f = await fixture();
     const asset = await media.upload(f.orgId, f.brandId, {
       buffer: png,
@@ -242,9 +242,12 @@ describe.skipIf(!url)("native API resource writers", () => {
       .set({ access: false })
       .where(eq(schema.organizationBillingState.orgId, f.orgId));
     await media.delete(f.orgId, asset.id);
-    await expect(readFile(path.join(mediaDir, `${asset.id}.jpg`))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect((await readFile(path.join(mediaDir, `${asset.id}.jpg`))).length).toBeGreaterThan(0);
+    const [proof] = await connection.db
+      .select()
+      .from(schema.mediaCleanupWork)
+      .where(eq(schema.mediaCleanupWork.assetId, asset.id));
+    expect(proof).toMatchObject({ assetId: asset.id, orgId: f.orgId, state: "pending" });
     expect(
       await connection.db
         .select()

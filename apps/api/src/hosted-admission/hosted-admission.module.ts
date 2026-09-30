@@ -1,5 +1,5 @@
 import { type DynamicModule, Module } from "@nestjs/common";
-import { authorizeBillingGrowth, HostedAdmissionRepository } from "@pubrick/db";
+import { authorizeBillingGrowth, HostedAdmissionRepository, stageMediaCleanup } from "@pubrick/db";
 import type { BillingConfig } from "../billing/billing.config";
 import { BillingModule } from "../billing/billing.module";
 import { BillingRepository } from "../billing/billing.repository";
@@ -54,7 +54,10 @@ export class HostedAdmissionModule {
                       link: link.href,
                     });
                   },
-                  stageDeletion: (tx, input) => billing.tombstoneInTx(input.orgId, tx),
+                  stageDeletion: async (tx, input) => {
+                    await billing.tombstoneInTx(input.orgId, tx);
+                    await stageMediaCleanup(input.orgId, tx);
+                  },
                 },
               ),
             );
