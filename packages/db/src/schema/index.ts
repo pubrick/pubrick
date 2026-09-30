@@ -17,6 +17,7 @@ export * from "./draft-revision.js";
 export * from "./editorial-notes.js";
 export * from "./feeds.js";
 export * from "./generation.js";
+export * from "./hosted-account-admission.js";
 export * from "./knowledge.js";
 export * from "./media.js";
 export * from "./memorable-dates.js";

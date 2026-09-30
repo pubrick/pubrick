@@ -8,6 +8,8 @@ export {
   BillingGrowthError,
 } from "./billing-growth.js";
 export { createDb } from "./client.js";
+export * from "./hosted-admission.js";
+export * from "./hosted-admission-policy.js";
 export { withImageCallLock } from "./image-call-lock.js";
 export { runMigrations } from "./migrate.js";
 export { newsRankScore } from "./news-rank.js";
