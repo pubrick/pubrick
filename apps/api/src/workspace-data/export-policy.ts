@@ -755,6 +755,8 @@ export const WORKSPACE_EXPORT_TABLES = [
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  hostedAccountCreationClaims: "Account-scoped creation abuse prevention audit",
+  hostedInvitationAcceptances: "Recipient-bound invitation acceptance audit",
   billingAccounts: "Operator-scoped customer ownership and recovery keys",
   billingCheckoutAttempts: "Operator-scoped payment attempts and idempotency keys",
   billingCleanup: "Durable external payment cleanup obligations",

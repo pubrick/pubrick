@@ -1,10 +1,12 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import {
+  BillingGrowthError,
   type HostedAdmissionActor,
   HostedAdmissionError,
   type HostedAdmissionLocale,
@@ -19,6 +21,18 @@ export class HostedAdmissionService {
     try {
       return await action();
     } catch (error) {
+      if (error instanceof BillingGrowthError) {
+        const status =
+          error.code === "subscription_required"
+            ? 402
+            : error.code === "resource_limit"
+              ? 409
+              : 503;
+        throw new HttpException(
+          { code: error.code, message: error.code, resource: error.resource },
+          status,
+        );
+      }
       if (!(error instanceof HostedAdmissionError)) throw error;
       const response = { code: error.code, message: "Workspace action could not be completed." };
       if (error.code === "unauthenticated") throw new UnauthorizedException(response);
