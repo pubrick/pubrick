@@ -1,6 +1,7 @@
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { createDb } from "@pubrick/db";
+import { openAuthMail } from "@pubrick/mail";
 import { AUTH_MAIL_QUEUE } from "@pubrick/shared";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -22,6 +23,7 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
   let smtp: SMTPServer;
   let smtpClosed = false;
   const messages: Array<{ to: string; body: string }> = [];
+  const retryAttempts = new Map<string, string[]>();
   const password = "hosted-password123";
   const origin = "http://localhost:3000";
   const fresh = (label: string) =>
@@ -56,6 +58,17 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
           body += chunk.toString();
         });
         stream.on("end", () => {
+          if (recipient.startsWith("retry-check-")) {
+            const attempts = retryAttempts.get(recipient) ?? [];
+            attempts.push(body);
+            retryAttempts.set(recipient, attempts);
+            if (attempts.length < 4) {
+              callback(
+                Object.assign(new Error("Synthetic transient retry"), { responseCode: 451 }),
+              );
+              return;
+            }
+          }
           messages.push({ to: recipient, body });
           callback();
         });
@@ -336,6 +349,41 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
     await emailLink(email, "verify-email");
     const parsed = await simpleParser(messages.find((message) => message.to === email)?.body ?? "");
     expect(parsed.messageId).toMatch(/^<pubrick-auth\.[0-9a-f-]+@localhost>$/);
+  });
+  it("retries transient SMTP through pg-boss within four attempts using a stable Message-ID", async () => {
+    const email = fresh("retry-check");
+    await boss.updateQueue(AUTH_MAIL_QUEUE, { retryDelay: 1, retryBackoff: false });
+    try {
+      await request(app.getHttpServer())
+        .post("/api/auth/sign-up/email")
+        .set(headers("192.0.2.25"))
+        .send({ email, password, name: "Retry" })
+        .expect(200);
+      await emailLink(email, "verify-email");
+      const bodies = retryAttempts.get(email) ?? [];
+      expect(bodies).toHaveLength(4);
+      const ids = await Promise.all(
+        bodies.map(async (body) => (await simpleParser(body)).messageId),
+      );
+      expect(new Set(ids).size).toBe(1);
+      const { env } = await import("./env");
+      await vi.waitFor(
+        async () => {
+          const jobs = await external.pool.query(
+            "select data,state,retry_count from pgboss.job where name=$1",
+            [AUTH_MAIL_QUEUE],
+          );
+          const value = jobs.rows.find(
+            (row) => openAuthMail(row.data, env.APP_ENCRYPTION_KEY).recipient === email,
+          );
+          expect(value?.state).toBe("completed");
+          expect(value?.retry_count).toBe(3);
+        },
+        { timeout: 10000, interval: 25 },
+      );
+    } finally {
+      await boss.updateQueue(AUTH_MAIL_QUEUE, { retryDelay: 30, retryBackoff: true });
+    }
   });
   it("keeps SMTP failures non-enumerating and exposes only safe capability booleans", async () => {
     const logger = vi.spyOn(console, "warn").mockImplementation(() => {});
