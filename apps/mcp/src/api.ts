@@ -1,4 +1,5 @@
 import {
+  CONTENT_STATUSES,
   PUBLICATION_OPERATION_FILTERS,
   type PublicationOperationFilter,
   type PublicPublication,
@@ -10,14 +11,7 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_CURSOR_LENGTH = 4096;
 const REQUEST_TIMEOUT_MS = 10_000;
 
-export const contentStatusSchema = z.enum([
-  "draft",
-  "approved",
-  "partially_published",
-  "rejected",
-  "published",
-  "failed",
-]);
+export const contentStatusSchema = z.enum(CONTENT_STATUSES);
 
 const summarySchema = z.object({
   id: z.uuid(),
