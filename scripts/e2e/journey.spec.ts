@@ -7,7 +7,20 @@ test("account, workspace, manual draft, persisted edits and UI tenant switching"
   page,
   context,
 }) => {
-  await page.goto("/en/signup");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/en");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Installation guide" })).toHaveAttribute(
+    "href",
+    "https://github.com/pubrick/pubrick/blob/main/docs/self-hosting.md",
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: "/tmp/pubrick-landing-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: "/tmp/pubrick-landing-desktop.png", fullPage: true });
+  await page.getByRole("link", { name: "Sign up", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("Browser editor");
   await page.getByLabel("Email", { exact: true }).fill("editor@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-browser-password-123!");
