@@ -10,29 +10,31 @@ import { holdOrganization } from "../organization-lock";
 export class BrandAccessRepository {
   /** Managers can see every brand; regular members see their explicit grants. */
   async visibleBrandIds(orgId: string, userId: string): Promise<string[] | null> {
-    const [membership] = await db
+    const memberships = await db
       .select({ id: schema.member.id, role: schema.member.role })
       .from(schema.member)
-      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
-      .limit(1);
-    if (!membership) return [];
-    if (isOrganizationManager(membership.role)) return null;
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+    if (memberships.length === 0) return [];
+    if (memberships.some((membership) => isOrganizationManager(membership.role))) return null;
     const grants = await db
       .select({ brandId: schema.brandAccess.brandId })
       .from(schema.brandAccess)
       .where(
-        and(eq(schema.brandAccess.orgId, orgId), eq(schema.brandAccess.memberId, membership.id)),
+        and(
+          eq(schema.brandAccess.orgId, orgId),
+          inArray(
+            schema.brandAccess.memberId,
+            memberships.map((membership) => membership.id),
+          ),
+        ),
       );
-    return grants.map((grant) => grant.brandId);
+    return [...new Set(grants.map((grant) => grant.brandId))];
   }
 
-  /** Checks both the active membership and the brand's organization. */
+  /** Checks every scoped membership/grant, including untouched legacy duplicates. */
   async hasAccess(orgId: string, brandId: string, userId: string): Promise<boolean> {
-    const [row] = await db
-      .select({
-        role: schema.member.role,
-        grant: schema.brandAccess.memberId,
-      })
+    const rows = await db
+      .select({ role: schema.member.role, grant: schema.brandAccess.memberId })
       .from(schema.brands)
       .innerJoin(
         schema.member,
@@ -46,18 +48,16 @@ export class BrandAccessRepository {
           eq(schema.brandAccess.memberId, schema.member.id),
         ),
       )
-      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
-      .limit(1);
-    return !!row && (isOrganizationManager(row.role) || row.grant !== null);
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)));
+    return rows.some((row) => isOrganizationManager(row.role) || row.grant !== null);
   }
 
   async isManager(orgId: string, userId: string): Promise<boolean> {
-    const [membership] = await db
+    const memberships = await db
       .select({ role: schema.member.role })
       .from(schema.member)
-      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
-      .limit(1);
-    return !!membership && isOrganizationManager(membership.role);
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)));
+    return memberships.some((membership) => isOrganizationManager(membership.role));
   }
 
   async list(orgId: string, brandId: string) {

@@ -173,8 +173,7 @@ export class ActiveOrgGuard implements CanActivate {
       .from(schema.member)
       .where(
         and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, session.user.id)),
-      )
-      .limit(1);
+      );
     if (membership.length === 0) {
       // Uncoded on purpose: the web replaces every non-org 403's sentence with
       // one of its own before a reader sees it, so this one is already
@@ -191,8 +190,9 @@ export class ActiveOrgGuard implements CanActivate {
     // Every protected route must make an explicit access choice. This applies
     // to managers too, so a new route cannot accidentally inherit broad access.
     if (!scope) throw new ForbiddenException("Brand scope is required for this route");
-    const manager = isOrganizationManager(membership[0]?.role);
-    const role = membership[0]?.role;
+    // Legacy duplicate rows represent one scoped account, not independent roles.
+    const role = membership.map((row) => row.role).join(",");
+    const manager = isOrganizationManager(role);
     if (!hasOrganizationRole(role, ORGANIZATION_ROLES)) {
       throw new ForbiddenException("Organization role is not recognized");
     }
