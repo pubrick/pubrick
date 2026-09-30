@@ -40,6 +40,14 @@ services:
       # Who may register: open | invite | closed. Unset means open until the first
       # account exists, invite-only from then on — see .env.example.
       SIGNUP_MODE: ${SIGNUP_MODE:-}
+      PUBRICK_DEPLOYMENT_MODE: ${PUBRICK_DEPLOYMENT_MODE:-self-hosted}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-true}
       # IPs/CIDRs of the proxies in front of Pubrick. Empty means no X-Forwarded-For
       # is believed, and auth rate limiting falls back to one shared bucket per path.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}

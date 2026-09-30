@@ -1,8 +1,8 @@
-import { Module } from "@nestjs/common";
+import { Module, type OnModuleDestroy } from "@nestjs/common";
 import { AuthModule } from "@thallesp/nestjs-better-auth";
 import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
-import { auth } from "./auth";
+import { auth, authMailer } from "./auth";
 import { AutopilotModule } from "./autopilot/autopilot.module";
 import { BrandAccessModule } from "./brand-access/brand-access.module";
 import { BrandsModule } from "./brands/brands.module";
@@ -61,4 +61,8 @@ import { WebhooksModule } from "./webhooks/webhooks.module";
     WebhooksModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements OnModuleDestroy {
+  async onModuleDestroy() {
+    await authMailer?.close();
+  }
+}

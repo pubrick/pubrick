@@ -1,16 +1,19 @@
 import { schema } from "@pubrick/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { organization } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { adminAc, defaultStatements, ownerAc } from "better-auth/plugins/organization/access";
+import { eq } from "drizzle-orm";
+import { hostedIdentityPlugin } from "./auth-hosted.plugin";
 import { invitationRoleGate } from "./auth-invitation-role-gate";
+import { createAuthMailer, invitationMailUrl } from "./auth-mail";
 import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";
 import { signupGate } from "./auth-signup-gate";
 import { db } from "./db";
-import { env } from "./env";
+import { env, identity } from "./env";
 import { findInitialOrganizationId } from "./org/initial-org";
 
 /**
@@ -65,6 +68,9 @@ const editorAc = ac.newRole({
 /** 48 hours, the plugin's own default — stated so `docs/self-hosting.md` cites code. */
 export const INVITATION_EXPIRES_IN_SECONDS = 48 * 60 * 60;
 
+export const authMailer = identity.mail ? createAuthMailer(env.WEB_ORIGIN, identity.mail) : null;
+const mailer = authMailer;
+
 const ORGANIZATION_OPTIONS = {
   ac,
   roles: { owner: ownerAc, admin: adminAc, member: memberAc, author: authorAc, editor: editorAc },
@@ -75,9 +81,21 @@ const ORGANIZATION_OPTIONS = {
   // customise it today, so acceptance works — and the day someone sets that
   // option for an unrelated reason, every invitation in the product would start
   // refusing with "email verification required" on a deployment that has no
-  // mailer and never verifies an address. Pubrick does not verify email (see
-  // docs/self-hosting.md); it says so here.
-  requireEmailVerificationOnInvitation: false,
+  // mailer. Self-hosted preserves that behavior; hosted identity explicitly
+  // requires verified ownership before accepting an invitation.
+  requireEmailVerificationOnInvitation: identity.hosted,
+  ...(mailer
+    ? {
+        sendInvitationEmail: async (data: { email: string; id: string }, request?: Request) => {
+          mailer.submit(
+            "invite",
+            data.email,
+            invitationMailUrl(env.WEB_ORIGIN, data.id, request),
+            request,
+          );
+        },
+      }
+    : {}),
   // Re-inviting an address supersedes its outstanding invitation instead of
   // failing with "already invited". That is the only way to re-issue a link
   // somebody lost, and it keeps the invariant the link's copy claims: at most
@@ -91,8 +109,39 @@ export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   secret: env.BETTER_AUTH_SECRET,
   trustedOrigins: [env.WEB_ORIGIN],
-  emailAndPassword: { enabled: true },
-  session: { cookieCache: { enabled: true, maxAge: 300 } },
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: identity.hosted,
+    ...(mailer
+      ? {
+          sendResetPassword: async (
+            { user, url }: { user: { email: string }; url: string },
+            request?: Request,
+          ) => {
+            mailer.submit("reset", user.email, url, request);
+          },
+          revokeSessionsOnPasswordReset: true,
+        }
+      : {}),
+  },
+  ...(mailer
+    ? {
+        emailVerification: {
+          sendOnSignUp: identity.hosted,
+          sendOnSignIn: false,
+          autoSignInAfterVerification: false,
+          sendVerificationEmail: async (
+            { user, url }: { user: { email: string }; url: string },
+            request?: Request,
+          ) => {
+            mailer.submit("verify", user.email, url, request);
+          },
+        },
+      }
+    : {}),
+  // Hosted getSession always reads authoritative ownership, including old cookies
+  // from a self-hosted deployment switched into hosted mode.
+  session: { cookieCache: { enabled: !identity.hosted, maxAge: 300 } },
   // Stated, not inherited. Better Auth defaults this to `enabled ?? isProduction`, and
   // neither the api image nor compose set NODE_ENV — so the shipped image ran with the
   // limiter off: twelve consecutive wrong-password sign-ins returned twelve 401s and no
@@ -104,7 +153,19 @@ export const auth = betterAuth({
   // window/max are better-auth's own defaults, written out so a future change to them is
   // visible here; the endpoints that matter carry stricter built-in rules (sign-in,
   // sign-up, change-password, change-email: 3 per 10s).
-  rateLimit: { enabled: env.AUTH_RATE_LIMIT_ENABLED, window: 10, max: 100 },
+  rateLimit: {
+    enabled: env.AUTH_RATE_LIMIT_ENABLED,
+    window: 10,
+    max: 100,
+    ...(mailer
+      ? {
+          customRules: {
+            "/send-verification-email": { window: 60, max: 3 },
+            "/request-password-reset": { window: 60, max: 3 },
+          },
+        }
+      : {}),
+  },
   advanced: {
     ipAddress: {
       // Keys the limiter — and the address recorded on each session — on a header only
@@ -126,12 +187,26 @@ export const auth = betterAuth({
         // set-active itself, which overwrites whatever this seeded (null, there).
         // Returning `{ data }` replaces the row Better Auth is about to insert —
         // the documented shape for this hook in better-auth 1.7.
-        before: async (session) => ({
-          data: {
-            ...session,
-            activeOrganizationId: await findInitialOrganizationId(session.userId),
-          },
-        }),
+        before: async (session) => {
+          if (identity.hosted) {
+            const [user] = await db
+              .select({ emailVerified: schema.user.emailVerified })
+              .from(schema.user)
+              .where(eq(schema.user.id, session.userId))
+              .limit(1);
+            if (!user?.emailVerified)
+              throw new APIError("FORBIDDEN", {
+                code: "EMAIL_NOT_VERIFIED",
+                message: "Email verification is required.",
+              });
+          }
+          return {
+            data: {
+              ...session,
+              activeOrganizationId: await findInitialOrganizationId(session.userId),
+            },
+          };
+        },
       },
     },
   },
@@ -147,5 +222,9 @@ export const auth = betterAuth({
   // before better-auth's own origin check, which is the only way an operator whose
   // PUBLIC_ORIGIN does not match the address bar gets a sentence naming both
   // values instead of `Invalid origin`. See auth-origin.plugin.ts.
-  plugins: [originMismatchPlugin(env.WEB_ORIGIN), organization(ORGANIZATION_OPTIONS)],
+  plugins: [
+    originMismatchPlugin(env.WEB_ORIGIN),
+    hostedIdentityPlugin(identity.hosted, !!mailer),
+    organization(ORGANIZATION_OPTIONS),
+  ],
 });

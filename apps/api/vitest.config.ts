@@ -31,7 +31,20 @@ export default defineConfig({
     // Neither default goes untested: auth.compiled.e2e.spec.ts boots the compiled api
     // with these unset and asserts the 429s, and auth.e2e.spec.ts drives all three
     // postures by setting SIGNUP_MODE per test.
-    env: { AUTH_RATE_LIMIT_ENABLED: "false", SIGNUP_MODE: "open" },
+    // Tests never inherit an operator's live mail transport. The hosted identity
+    // tier explicitly sets its own loopback capture before importing the API.
+    env: {
+      AUTH_RATE_LIMIT_ENABLED: "false",
+      SIGNUP_MODE: "open",
+      PUBRICK_DEPLOYMENT_MODE: "self-hosted",
+      SMTP_HOST: "",
+      SMTP_USER: "",
+      SMTP_PASSWORD: "",
+      SMTP_FROM: "",
+      SMTP_PORT: "587",
+      SMTP_SECURE: "false",
+      SMTP_REQUIRE_TLS: "true",
+    },
   },
   plugins: [swc.vite({ module: { type: "es6" } })],
 });

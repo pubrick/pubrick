@@ -9,14 +9,9 @@ import { ORIGIN_MISMATCH_CODE } from "@pubrick/shared";
  * codes included — which is what lets ONE refusal be translated without
  * inventing a parallel error pipeline for the auth surface.
  *
- * ONE code is translated, deliberately. better-auth's own codes
- * (`INVALID_EMAIL_OR_PASSWORD`, `INVALID_ORIGIN`, …) keep their English
- * sentence, exactly as they did before this function existed: they are the
- * library's vocabulary, not this product's, and inventing four translations per
- * upstream code is a promise this repository cannot keep across upgrades.
- * `ORIGIN_MISMATCH` is different — it is ours, it is the one refusal a
- * first-run install hits before it has any account at all, and its whole point
- * is to be readable by the person who wrote the `.env`.
+ * Origin mismatch and the ownership/recovery codes used by Pubrick's hosted
+ * journey are translated. Unrecognized upstream codes keep the server's
+ * sentence so SDK upgrades cannot silently invent recovery promises.
  *
  * THE TWO HALVES COME FROM DIFFERENT PLACES, and that is not an accident. The
  * origin the browser is on is read LOCALLY (`window.location.origin`) rather
@@ -46,6 +41,10 @@ export function authErrorMessage(
   ) {
     return t("originMismatch", { opened: browserOrigin, configured: error.expectedOrigin });
   }
+  if (error.code === "EMAIL_NOT_VERIFIED") return t("verificationHint");
+  if (error.code === "INVALID_TOKEN" || error.code === "TOKEN_EXPIRED")
+    return t("invalidRecoveryLink");
+  if (error.code === "RESET_PASSWORD_DISABLED") return t("recoveryUnavailable");
   return error.message ?? t("genericError");
 }
 

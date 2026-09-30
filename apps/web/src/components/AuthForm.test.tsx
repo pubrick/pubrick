@@ -6,16 +6,25 @@ import en from "../../messages/en.json";
 import ru from "../../messages/ru.json";
 import { AuthForm } from "./AuthForm";
 
+vi.mock("@/lib/auth-capabilities", () => ({
+  useAuthCapabilities: vi.fn(() => ({
+    requiresEmailVerification: false,
+    passwordRecoveryEnabled: false,
+  })),
+}));
+
 vi.mock("@/lib/auth-client", () => ({
   authClient: {
     signIn: { email: vi.fn() },
     signUp: { email: vi.fn() },
     signOut: vi.fn(),
+    sendVerificationEmail: vi.fn(),
     useSession: vi.fn(),
     organization: { create: vi.fn(), setActive: vi.fn() },
   },
 }));
 
+import { useAuthCapabilities } from "@/lib/auth-capabilities";
 import { authClient } from "@/lib/auth-client";
 
 // The real client type is generated from server-side plugin inference and is
@@ -30,6 +39,10 @@ const mockAuthClient = authClient as unknown as MockAuthClient;
 beforeEach(() => {
   mockAuthClient.signIn.email.mockReset();
   mockAuthClient.signUp.email.mockReset();
+  vi.mocked(useAuthCapabilities).mockReturnValue({
+    requiresEmailVerification: false,
+    passwordRecoveryEnabled: false,
+  });
 });
 
 async function fillLogin(user: ReturnType<typeof userEvent.setup>) {
@@ -218,5 +231,62 @@ describe("AuthForm — the return path AppShell's guard attaches", () => {
     await user.click(screen.getByRole("button", { name: en.Auth.signupAction }));
 
     await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/onboarding"));
+  });
+});
+
+describe("hosted ownership journey", () => {
+  it("keeps an unverified signup out of onboarding, preserves its invitation and offers a resend", async () => {
+    navigationState.searchParams = new URLSearchParams({
+      next: "/en/onboarding?invitation=invite",
+    });
+    vi.mocked(useAuthCapabilities).mockReturnValue({
+      requiresEmailVerification: true,
+      passwordRecoveryEnabled: true,
+    });
+    mockAuthClient.signUp.email.mockResolvedValue({ data: { token: null }, error: null });
+    vi.mocked(authClient.sendVerificationEmail).mockResolvedValue({
+      data: { status: true },
+      error: null,
+    });
+    render(<AuthForm mode="signup" />);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(en.Auth.name), "Ann");
+    await fillLogin(user);
+    await user.click(screen.getByRole("button", { name: en.Auth.signupAction }));
+    expect(
+      await screen.findByRole("heading", { name: en.Auth.verificationTitle }),
+    ).toBeInTheDocument();
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: en.Auth.backToLogin })).toHaveAttribute(
+      "href",
+      "/en/login?next=%2Fen%2Fonboarding%3Finvitation%3Dinvite",
+    );
+    expect(mockAuthClient.signUp.email).toHaveBeenCalledWith(
+      {
+        email: "ann@example.com",
+        password: "hunter22222",
+        name: "Ann",
+        callbackURL: `${window.location.origin}/en/verify-email?next=%2Fen%2Fonboarding%3Finvitation%3Dinvite`,
+      },
+      { headers: { "x-pubrick-locale": "en" } },
+    );
+    await user.click(screen.getByRole("button", { name: en.Auth.resendVerification }));
+    expect(await screen.findByRole("status")).toHaveTextContent(en.Auth.verificationResent);
+    expect(authClient.sendVerificationEmail).toHaveBeenCalledWith(
+      {
+        email: "ann@example.com",
+        callbackURL: `${window.location.origin}/en/verify-email?next=%2Fen%2Fonboarding%3Finvitation%3Dinvite`,
+      },
+      { headers: { "x-pubrick-locale": "en" } },
+    );
+  });
+  it("recovers from a rejected network call without leaving login disabled", async () => {
+    mockAuthClient.signIn.email.mockRejectedValue(new Error("network unavailable"));
+    render(<AuthForm mode="login" />);
+    const user = userEvent.setup();
+    await fillLogin(user);
+    await user.click(screen.getByRole("button", { name: en.Auth.loginAction }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(en.Auth.genericError);
+    expect(screen.getByRole("button", { name: en.Auth.loginAction })).not.toBeDisabled();
   });
 });

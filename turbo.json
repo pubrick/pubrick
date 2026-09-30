@@ -58,6 +58,16 @@
         "HOME",
         "PATH",
         "SIGNUP_MODE",
+        "PUBRICK_DEPLOYMENT_MODE",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_USER",
+        "SMTP_PASSWORD",
+        "SMTP_FROM",
+        "SMTP_SECURE",
+        "SMTP_REQUIRE_TLS",
+        "AUTH_RATE_LIMIT_ENABLED",
+        "TRUSTED_PROXIES",
         // NODE_ENV is read by apps/web's design page to hide itself in production, and the
         // page's tests import that module — so the test task is the one that executes the
         // read, and it is declared here for the same reason as CI above rather than because

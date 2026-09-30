@@ -1,9 +1,36 @@
 import { googleProxyEnvSchema } from "@pubrick/ai";
 import { parseEnv, parseKeyRing } from "@pubrick/shared";
 import { z } from "zod";
+import { identityConfig } from "./auth-hosted-policy";
 import { assertNoPublishedSecrets, parseSignupMode, parseTrustedProxies } from "./auth-policy";
 
 export const env = parseEnv({
+  PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
+  SMTP_HOST: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  SMTP_PORT: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number().int().min(1).max(65535).default(587),
+  ),
+  SMTP_USER: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  SMTP_PASSWORD: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().min(1).optional(),
+  ),
+  SMTP_FROM: z.preprocess((value) => (value === "" ? undefined : value), z.email().optional()),
+  SMTP_SECURE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  SMTP_REQUIRE_TLS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
   DATABASE_URL: z.string().min(1),
   API_PORT: z.coerce.number().default(3001),
   BETTER_AUTH_SECRET: z.string().min(16),
@@ -87,3 +114,5 @@ assertNoPublishedSecrets(
   },
   process.env.NODE_ENV,
 );
+
+export const identity = identityConfig(env, process.env.NODE_ENV);
