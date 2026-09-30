@@ -68,8 +68,8 @@ assigned brands. The
 [OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
 [optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
 platforms remain unavailable until a safe publishing workflow is implemented.
-Features land phase by phase — see
-[docs/specs/0001-product-design.md](docs/specs/0001-product-design.md).
+Features land phase by phase — see the current [development roadmap](docs/roadmap.md)
+and the original [product design](docs/specs/0001-product-design.md).
 
 Public RSS syndication is available for selected published posts; see
 [docs/public-rss.md](docs/public-rss.md). It does not confirm delivery to Dzen.
