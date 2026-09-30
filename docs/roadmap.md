@@ -52,6 +52,13 @@ build alone does not satisfy release acceptance. Image reproducibility here
 means a recorded source revision and deployable digest; byte-identical rebuilds
 require additional base-image and toolchain pinning.
 
+Implementation progress: release image tooling, consistent Compose recovery,
+security reporting and the production browser runner are implemented on the
+release-foundation feature branch. The built browser journey and native recovery
+round trip passed locally. See the [verification record](reviews/2026-09-30-release-foundation.md)
+for test scope and follow-up fixes. No versioned images or release have been
+published yet, so the release acceptance remains pending.
+
 ## Iteration 2 — common LLM providers
 
 Extend the existing AI SDK resolver rather than adding a second gateway:
