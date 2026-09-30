@@ -85,6 +85,7 @@ export function classifyAiError(
   if (error instanceof PermanentError || error instanceof TransientError) return error;
 
   const cause = unwrapRetry(error);
+  if (cause instanceof PermanentError || cause instanceof TransientError) return cause;
 
   // A cancelled call and a call that ran out of time are ONE arm, because they
   // are one shape: an abort. Which of the two it was is not in the shape.

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { KNOWLEDGE_EMBEDDING_DIMENSIONS, KNOWLEDGE_EMBEDDING_MODEL } from "@pubrick/ai";
 import { schema } from "@pubrick/db";
 import { and, eq } from "drizzle-orm";
@@ -28,6 +29,117 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
     await (await import("../db")).pool.end();
   });
 
+  it("refuses a running historical batch even before its first counted result", async () => {
+    const orgId = `legacy-batch-${randomUUID()}`;
+    await db.insert(schema.organization).values({ id: orgId, name: "Legacy", slug: orgId });
+    const [brand] = await db.insert(schema.brands).values({ orgId, name: "Legacy" }).returning();
+    if (!brand) throw new Error("Missing brand");
+    await db
+      .insert(schema.aiCredentials)
+      .values({ orgId, provider: "openai", credentialsEncrypted: "opaque-current" });
+    const [batch] = await db
+      .insert(schema.relevanceBatches)
+      .values({ orgId, brandId: brand.id, days: 1, selectedCount: 2, status: "running" })
+      .returning();
+    if (!batch) throw new Error("Missing batch");
+    const first = randomUUID();
+    const second = randomUUID();
+    await db.insert(schema.relevanceBatchItems).values([
+      { orgId, brandId: brand.id, batchId: batch.id, itemId: first, status: "running" },
+      { orgId, brandId: brand.id, batchId: batch.id, itemId: second, status: "queued" },
+    ]);
+    await expect(repo.claimBatch(orgId, brand.id, batch.id, second)).rejects.toMatchObject({
+      runFailure: "configuration_changed",
+    });
+    const [retained] = await db
+      .select()
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, batch.id));
+    expect(retained).toMatchObject({
+      status: "running",
+      processedCount: 0,
+      unrecordedCalls: 0,
+      textSelection: null,
+    });
+    const [queued] = await db
+      .select()
+      .from(schema.relevanceBatchItems)
+      .where(eq(schema.relevanceBatchItems.itemId, second));
+    expect(queued?.status).toBe("queued");
+    await repo.finishBatch(orgId, brand.id, batch.id, second, {
+      kind: "failed",
+      code: "configuration_changed",
+      halt: true,
+    });
+    const [halting] = await db
+      .select()
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, batch.id));
+    expect(halting).toMatchObject({
+      status: "halting",
+      errorCode: "configuration_changed",
+      processedCount: 1,
+    });
+    const orphans = await repo.orphanedBatchJobs();
+    expect(orphans).toEqual(
+      expect.arrayContaining([expect.objectContaining({ batchId: batch.id, itemId: first })]),
+    );
+    await repo.finishBatch(orgId, brand.id, batch.id, first, {
+      kind: "failed",
+      code: "model_failed",
+    });
+    const [halted] = await db
+      .select()
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, batch.id));
+    expect(halted).toMatchObject({ status: "halted", processedCount: 2 });
+    await db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+  });
+
+  it("pins a fresh batch once before concurrent first-item transitions", async () => {
+    const orgId = `fresh-batch-${randomUUID()}`;
+    await db.insert(schema.organization).values({ id: orgId, name: "Fresh", slug: orgId });
+    const [brand] = await db.insert(schema.brands).values({ orgId, name: "Fresh" }).returning();
+    if (!brand) throw new Error("Missing brand");
+    await db.insert(schema.aiCredentials).values({
+      orgId,
+      provider: "google",
+      credentialsEncrypted: "opaque-fixture",
+      defaultModel: "retained-model",
+    });
+    const [batch] = await db
+      .insert(schema.relevanceBatches)
+      .values({ orgId, brandId: brand.id, days: 1, selectedCount: 2 })
+      .returning();
+    if (!batch) throw new Error("Missing batch");
+    const itemIds = [randomUUID(), randomUUID()];
+    await db
+      .insert(schema.relevanceBatchItems)
+      .values(itemIds.map((itemId) => ({ orgId, brandId: brand.id, batchId: batch.id, itemId })));
+    // Deleted source IDs still allow membership claims; no paid calls are made.
+    const results = await Promise.all(
+      itemIds.map((itemId) => repo.claimBatch(orgId, brand.id, batch.id, itemId)),
+    );
+    expect(results).toEqual([{ missing: true }, { missing: true }]);
+    const [retained] = await db
+      .select()
+      .from(schema.relevanceBatches)
+      .where(eq(schema.relevanceBatches.id, batch.id));
+    expect(retained).toMatchObject({
+      status: "running",
+      textSelection: { provider: "google", modelId: "retained-model", credentialRevision: 1 },
+    });
+    expect(
+      (
+        await db
+          .select()
+          .from(schema.relevanceBatchItems)
+          .where(eq(schema.relevanceBatchItems.batchId, batch.id))
+      ).map((row) => row.status),
+    ).toEqual(["running", "running"]);
+    await db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+  });
+
   it("preserves failed old verdicts, advances exactly once, and stops on terminal auth failure", async () => {
     const orgId = `bulk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     await db
@@ -38,6 +150,12 @@ describe.skipIf(!url)("paid relevance batch progress (Postgres)", () => {
       .values({ orgId, name: "Cafe" })
       .returning({ id: schema.brands.id });
     if (!brand) throw new Error("brand fixture");
+    await db.insert(schema.aiCredentials).values({
+      orgId,
+      provider: "google",
+      credentialsEncrypted: "opaque-fixture",
+      defaultModel: "retained-model",
+    });
     const [source] = await db
       .insert(schema.newsSources)
       .values({ orgId, brandId: brand.id, name: "Feed", url: "https://example.com/feed" })

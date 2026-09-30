@@ -198,6 +198,7 @@ export class AiCredentialProbe {
  *   meter, below, knows more than the code does.
  */
 const TEST_FAILURE_FOR_RUN_FAILURE: Record<RunFailure, AiTestFailure | null> = {
+  configuration_changed: "configuration_changed",
   cancelled: null,
   every_channel_deleted: null,
   internal: null,

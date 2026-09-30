@@ -1,9 +1,11 @@
+import type { AiTextSnapshot } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   check,
   foreignKey,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -31,6 +33,7 @@ export const RELEVANCE_BATCH_ITEM_STATUSES = [
 ] as const;
 export const RELEVANCE_BATCH_ERRORS = [
   "no_api_key",
+  "configuration_changed",
   "unreadable_key",
   "invalid_key",
   "model_not_found",
@@ -43,6 +46,7 @@ export const relevanceBatches = pgTable(
   "news_relevance_batches",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    textSelection: jsonb("text_selection").$type<AiTextSnapshot>(),
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),

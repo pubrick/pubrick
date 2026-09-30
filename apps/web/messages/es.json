@@ -415,7 +415,9 @@
     "analysis_queued": "El análisis está en cola. Comprueba el resultado en breve.",
     "analysis_analyzing": "El análisis está en curso. Comprueba el resultado en breve.",
     "analysis_blocked": "Un límite de seguridad o un cambio de configuración bloqueó el análisis. Recoge una muestra nueva para volver a intentarlo.",
-    "analysis_unknown": "Es posible que el proveedor haya procesado la solicitud. Recoge una muestra nueva para volver a intentarlo."
+    "analysis_unknown": "Es posible que el proveedor haya procesado la solicitud. Recoge una muestra nueva para volver a intentarlo.",
+    "configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud.",
+    "recheckError_configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud."
   },
   "Knowledge": {
     "title": "Conocimiento de marca",
@@ -1340,7 +1342,22 @@
     "publicApiOpen": "Gestionar claves API",
     "webhooksTitle": "Webhooks salientes",
     "webhooksHint": "Envía resultados de publicación a tus herramientas.",
-    "webhooksOpen": "Gestionar webhooks"
+    "webhooksOpen": "Gestionar webhooks",
+    "aiTextTitle": "Generación de texto",
+    "aiTextHint": "Elige el proveedor y modelo para nuevas tareas de texto. Las ejecuciones existentes conservan su configuración.",
+    "aiTextProvider": "Proveedor de texto",
+    "aiTextSelect": "Elige un proveedor guardado",
+    "aiTextCurrent": "Actual: {provider} · {model}",
+    "aiTextMissing": "Falta la clave de {provider}. Guárdala abajo o elige otro proveedor guardado.",
+    "aiTextEmpty": "Guarda tu primera clave API abajo para configurar la generación de texto.",
+    "aiTextModelHint": "Deja el modelo vacío para usar el modelo predeterminado del proveedor.",
+    "aiTextUnsaved": "Los cambios no se han guardado.",
+    "aiTextSaved": "Configuración de texto guardada.",
+    "aiTextSave": "Guardar",
+    "aiTextReload": "Recargar",
+    "aiTestModel": "Modelo de prueba: {model}",
+    "aiTestFailConfigurationChanged": "La clave cambió antes de admitir la solicitud. Revisa los ajustes e inténtalo de nuevo.",
+    "aiTextModelOptions": "Opciones del modelo"
   },
   "SearchSettings": {
     "title": "API de búsqueda",
@@ -1388,7 +1405,8 @@
       "source_changed": "El borrador guardado cambió antes de iniciar la revisión. Repítela para el texto actual.",
       "provider_unavailable": "El proveedor de IA o búsqueda no estaba disponible. Inténtalo más tarde.",
       "invalid_response": "El proveedor de IA devolvió una respuesta inutilizable. Inténtalo de nuevo.",
-      "internal_error": "La revisión se detuvo inesperadamente. Inténtalo de nuevo."
+      "internal_error": "La revisión se detuvo inesperadamente. Inténtalo de nuevo.",
+      "configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud."
     },
     "missingSearchKey": "Añade una clave de Yandex Search API para buscar fuentes.",
     "missingAiKey": "Añade una clave de proveedor de IA para extraer y comparar afirmaciones.",
@@ -1597,7 +1615,8 @@
       "retries_exhausted": "Se reintentó esta generación hasta agotar los intentos. Inténtalo de nuevo.",
       "timed_out": "La llamada al modelo se quedó sin tiempo antes de que el proveedor respondiera. Se reintentará esta generación.",
       "too_long_for_channel": "El modelo no logró ajustarse al límite de longitud de uno de los canales. Prueba con un brief más corto.",
-      "unreadable_key": "No se pudo leer la clave de API guardada. Vuelve a guardarla en Ajustes."
+      "unreadable_key": "No se pudo leer la clave de API guardada. Vuelve a guardarla en Ajustes.",
+      "configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud."
     },
     "draftReady": "Borrador listo",
     "draftDeleted": "El borrador de esta generación fue eliminado.",
@@ -1795,7 +1814,9 @@
     "metrics_refresh_cooldown": "Este post se consultó recientemente. Vuelve a intentarlo en 15 minutos.",
     "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación.",
     "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla.",
-    "media_cover_video_selected": "Quita el video seleccionado antes de regenerar la portada."
+    "media_cover_video_selected": "Quita el video seleccionado antes de regenerar la portada.",
+    "ai_settings_changed": "La clave cambió antes de admitir la solicitud. Revisa los ajustes e inténtalo de nuevo.",
+    "ai_default_key_missing": "Guarda tu primera clave API abajo para configurar la generación de texto."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -2016,7 +2037,8 @@
     "scanDecisionsHint": "Por qué se omitió la solicitud automática de ideas. Las solicitudes y sus resultados aparecen arriba.",
     "scanDecision_ideas_pending": "Hay tres ideas pendientes de revisión",
     "scanDecision_no_ai_key": "Falta una clave de IA",
-    "scanDecision_queued": "Solicitud diaria en cola"
+    "scanDecision_queued": "Solicitud diaria en cola",
+    "suggestionError_configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud."
   },
   "Autopilot": {
     "title": "Piloto automático",
@@ -2115,7 +2137,8 @@
       "suggestionError": {
         "no_api_key": "No hay una clave de IA configurada. Añádela en Ajustes.",
         "unreadable_key": "No se puede leer la clave de IA guardada. Sustitúyela en Ajustes.",
-        "model_failed": "El modelo no pudo completar esta solicitud."
+        "model_failed": "El modelo no pudo completar esta solicitud.",
+        "configuration_changed": "La configuración de IA cambió. Revisa Ajustes e inicia una nueva solicitud."
       }
     },
     "scanTitle": "Comprobaciones programadas",
@@ -2177,7 +2200,8 @@
       "no_approved_topic": "No hay temas aprobados sin fecha disponibles",
       "invalid_brief": "La descripción del tema es demasiado larga",
       "dispatched": "Se inició la generación del borrador",
-      "worker_failed": "La comprobación falló; inténtalo más tarde"
+      "worker_failed": "La comprobación falló; inténtalo más tarde",
+      "no_ai_key": "El proveedor de texto seleccionado no tiene clave. Revisa Ajustes."
     },
     "diagnosticsTitle": "Resumen de hoy",
     "refresh": "Actualizar",

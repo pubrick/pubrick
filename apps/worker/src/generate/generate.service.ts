@@ -400,7 +400,7 @@ export class GenerateService {
     const parsedPolicy = brandLinkPolicySchema.safeParse(context.linkPolicy);
     const linkPolicy = parsedPolicy.success ? parsedPolicy.data : null;
 
-    const credential = await this.repo.credential(run.orgId);
+    const credential = await this.repo.credential(run.orgId, run.textSelection);
     if (!credential) {
       throw withRunFailure(
         new PermanentError("no AI provider key is configured for this organization"),

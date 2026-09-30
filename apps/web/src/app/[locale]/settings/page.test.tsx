@@ -88,6 +88,16 @@ function installApi(calls: Call[], handlers: Handlers = {}) {
       body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
     });
 
+    if (method === "GET" && path === "/api/ai-credentials/text-settings") {
+      const key = storedCredentials[0];
+      return {
+        provider: key?.provider ?? null,
+        model: key?.defaultModel ?? null,
+        modelId: key?.provider ? (key.defaultModel ?? "gemini-3.8-flash") : null,
+        revision: key ? 1 : 0,
+        configured: Boolean(key),
+      };
+    }
     if (method === "GET" && path === "/api/ai-credentials")
       return storedCredentials.map((credential) =>
         credential.provider === "google" ? { ...credential, proxyConfigured } : credential,
@@ -436,21 +446,22 @@ describe("Settings — AI provider: saving a key", () => {
     expect(screen.getByText(en.SettingsPage.aiKeyPending)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent(en.SettingsPage.aiKeySavedNotice);
+    expect(await screen.findByText(en.SettingsPage.aiKeySavedNotice)).toHaveAttribute(
+      "role",
+      "status",
+    );
     expect(
       screen.getByText(en.SettingsPage.aiKeyStored.replace("{provider}", "Google")),
     ).toBeInTheDocument();
   });
 
-  it("sends the key as a PUT, with the body pinned twice", async () => {
+  it("sends the key independently of the workspace text model", async () => {
     const calls: Call[] = [];
     installApi(calls);
     await renderSettings();
 
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(en.SettingsPage.aiKeyLabel), "sk-live-abcdefgh12345678");
-    await user.click(screen.getByText(en.Ui.advanced));
-    await user.type(screen.getByLabelText(en.SettingsPage.aiModelLabel), "gemini-3.7-flash");
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiSave }));
 
     await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
@@ -460,12 +471,9 @@ describe("Settings — AI provider: saving a key", () => {
     expect(put?.body).toEqual({
       provider: "google",
       apiKey: "sk-live-abcdefgh12345678",
-      defaultModel: "gemini-3.7-flash",
     });
     // 2. ...and a round trip through the schema the API validates with. The
-    // literal alone cannot see a server-side rename of the OPTIONAL field:
-    // z.object() strips what it does not know, so a renamed `defaultModel`
-    // would parse happily into {} and both sides would stay green.
+    // key writes must not also change the separate text settings.
     expect(aiCredentialUpsertSchema.parse(put?.body)).toEqual(put?.body);
   });
 
@@ -492,10 +500,11 @@ describe("Settings — AI provider: saving a key", () => {
     // required; the model id is the option almost nobody sets.
     await renderSettings();
 
+    await screen.findByText(en.SettingsPage.aiTextEmpty);
     expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).not.toBeVisible();
 
     const user = userEvent.setup();
-    await user.click(screen.getByText(en.Ui.advanced));
+    await user.click(screen.getByText(en.SettingsPage.aiTextModelOptions));
 
     expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).toBeVisible();
   });
@@ -667,7 +676,7 @@ describe("Settings — Google proxy", () => {
     await renderSettings();
 
     const user = userEvent.setup();
-    expect(screen.getByTestId("advanced-dirty-dot")).toBeInTheDocument();
+    expect(screen.getAllByTestId("advanced-dirty-dot").length).toBeGreaterThan(0);
     await user.click(screen.getByText(en.Ui.advanced));
     await user.click(screen.getByRole("button", { name: en.SettingsPage.aiProxyRemove }));
 
@@ -1030,6 +1039,14 @@ describe("Settings — AI provider: a failed spend read is not a spend of zero",
     mockApi.mockImplementation(async (...args: unknown[]) => {
       const path = args[0] as string;
       if (path === "/api/ai-credentials/spend") throw new ApiError(500, "Internal Server Error");
+      if (path === "/api/ai-credentials/text-settings")
+        return {
+          provider: "google",
+          model: googleKey.defaultModel,
+          modelId: googleKey.defaultModel,
+          revision: 1,
+          configured: true,
+        };
       if (path === "/api/ai-credentials") return [googleKey];
       throw new Error(`unhandled request in test: ${path}`);
     });
@@ -1075,6 +1092,14 @@ describe("Settings — AI provider: a failed spend read is not a spend of zero",
         if (fail) throw new ApiError(500, "Internal Server Error");
         return { kind: "exact", usd: 1.25 } satisfies CostSummary;
       }
+      if (path === "/api/ai-credentials/text-settings")
+        return {
+          provider: "google",
+          model: googleKey.defaultModel,
+          modelId: googleKey.defaultModel,
+          revision: 1,
+          configured: true,
+        };
       if (path === "/api/ai-credentials") return [googleKey];
       if (path.endsWith("/test"))
         return {
@@ -1126,6 +1151,14 @@ describe("Settings — a refused credential action speaks the product's language
       const path = args[0] as string;
       const method = (args[1] as RequestInit | undefined)?.method ?? "GET";
       if (method === "POST" && path.endsWith("/test")) throw gone;
+      if (path === "/api/ai-credentials/text-settings")
+        return {
+          provider: "google",
+          model: googleKey.defaultModel,
+          modelId: googleKey.defaultModel,
+          revision: 1,
+          configured: true,
+        };
       if (method === "GET" && path === "/api/ai-credentials") return [googleKey];
       if (method === "GET" && path === "/api/ai-credentials/spend")
         return { kind: "exact", usd: 0 } satisfies CostSummary;

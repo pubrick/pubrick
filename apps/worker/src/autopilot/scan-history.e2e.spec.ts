@@ -23,6 +23,9 @@ describe.skipIf(!url)("scheduled Autopilot decisions", () => {
     await boss.start();
     await boss.createQueue("generate");
     await db.insert(schema.organization).values({ id: orgId, name: "Scan E2E", slug: orgId });
+    await db
+      .insert(schema.aiCredentials)
+      .values({ orgId, provider: "google", credentialsEncrypted: "opaque-fixture" });
   });
   afterAll(async () => {
     if (db) await db.delete(schema.organization).where(eq(schema.organization.id, orgId));

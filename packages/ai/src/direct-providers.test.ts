@@ -1,4 +1,4 @@
-import { aiCredentialUpsertSchema, PermanentError } from "@pubrick/shared";
+import { AiTextSelectionChangedError, aiCredentialUpsertSchema } from "@pubrick/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { runFailureOf } from "./classify.js";
@@ -179,9 +179,11 @@ describe("direct BYOK providers", () => {
   });
 
   it("admits each physical schema repair independently and refuses rotation before HTTP", async () => {
+    const records: UsageRecord[] = [];
     let calls = 0;
     const admitCall = vi.fn(async () => {
-      if (++calls > 1) throw new PermanentError("Credential changed; retry with current settings");
+      if (++calls > 1)
+        throw new AiTextSelectionChangedError("Credential changed; retry with current settings");
     });
     const fetch = vi.fn(
       async () =>
@@ -198,9 +200,73 @@ describe("direct BYOK providers", () => {
         instructions: "Return JSON",
         prompt: "Hi",
         maxRetries: 0,
+        onUsage: (record) => {
+          records.push(record);
+        },
       }),
     ).rejects.toThrow("Credential changed");
     expect(admitCall).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(records).toHaveLength(1);
+  });
+
+  it("checks SDK transport retry admission and never retries a local configuration refusal", async () => {
+    const records: UsageRecord[] = [];
+    let calls = 0;
+    const admitCall = vi.fn(async () => {
+      if (++calls > 1) throw new AiTextSelectionChangedError();
+    });
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "Busy", type: "server_error" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const caught = await generateStructured({
+      model: resolveModel({ provider: "openai", apiKey: "sk-fixture", admitCall }),
+      provider: "openai",
+      schema: z.object({ headline: z.string() }),
+      instructions: "JSON",
+      prompt: "Hi",
+      maxRetries: 2,
+      onUsage: (record) => {
+        records.push(record);
+      },
+    }).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(AiTextSelectionChangedError);
+    expect(runFailureOf(caught)).toBe("configuration_changed");
+    expect(admitCall).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ outcome: "refused", status: "errored" });
+  });
+
+  it("allows an already admitted response to finish after credential rotation", async () => {
+    let rotated = false;
+    const admitCall = vi.fn(async () => {
+      if (rotated) throw new AiTextSelectionChangedError();
+    });
+    const fetch = vi.fn(async () => {
+      rotated = true;
+      return new Response(JSON.stringify(reply("openai")), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      generateStructured({
+        model: resolveModel({ provider: "openai", apiKey: "sk-fixture", admitCall }),
+        provider: "openai",
+        schema: z.object({ headline: z.string() }),
+        instructions: "JSON",
+        prompt: "Hi",
+        maxRetries: 0,
+        onUsage: vi.fn(),
+      }),
+    ).resolves.toEqual({ headline: "Hello" });
+    expect(admitCall).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 

@@ -457,6 +457,8 @@ export const API_ERROR_CODES = [
   // ── credentials ───────────────────────────────────────────────────────────
   /** Test or Remove against a provider whose key is no longer stored. */
   "ai_credential_not_found",
+  "ai_settings_changed",
+  "ai_default_key_missing",
   // ── planned calendar generation ──────────────────────────────────────────
   "calendar_slot_not_found",
   "editorial_placeholder_not_found",

@@ -45,10 +45,32 @@ Google-only features retain their separate Google-key requirement: Gemini image
 generation, knowledge embeddings/search, website-to-brand import, and automatic
 paid reply analysis. Choosing a different text provider does not turn these into
 that vendor's image or embedding API. A saved Google key can coexist with another
-text provider. The generic text pipeline selects the first-added
-provider credential (`created_at` ascending, with provider-name tie breaking);
-replacing an existing key does not reorder providers. An explicit
-per-run/provider choice is not introduced here.
+text provider. Settings has one **Text generation** selection for the workspace provider and
+model. Saving or replacing a key does not change this selection. Existing
+workspaces preserve their first-added credential and its model on upgrade
+(`created_at` ascending, with provider-name tie breaking). Deleting the selected
+key keeps the selection visibly unavailable; Pubrick never silently bills another
+provider. Choose another saved provider explicitly to resume new generation.
+
+New pipeline runs retain the selected provider, model, credential ID and credential
+revision. Existing runs keep their original model after a workspace default edit.
+Replacing a key or changing its Google proxy increments the credential revision;
+the next physical request refuses with `configuration_changed`. Requests already
+admitted before the change commits may finish. The check runs again for native
+SDK retries and schema repairs, and refusals before HTTP do not create paid usage.
+
+Resumed legacy runs infer their text provider/model only from identifiable text
+usage. Image and embedding ledger rows do not establish text provenance. Missing
+accounting, mixed historical configurations, or checkpoints without text usage
+require an explicit retry rather than inventing a provider history. Topic
+suggestions, claim reviews and relevance requests retain their first admitted text
+configuration across queue redelivery. Editor refinements select once per request.
+
+The existing **Test** button remains on each provider credential row. Its displayed
+model is the workspace model for the selected provider, otherwise the credential's
+legacy/default model. A model change invalidates the displayed verdict. Saving
+text settings uses a revision check: stale concurrent writes ask the user to reload.
+
 
 ## Retention, proxy and costs
 
@@ -101,3 +123,30 @@ reads/writes; coordinate it with other schema maintenance. The previously
 validated narrower checks already establish the validity of old provider values.
 Do not downgrade to a binary that only accepts Google/OpenRouter after storing
 direct credentials or usage without a separately planned data recovery.
+
+
+Migration `0118_text_defaults_and_pins` retains the oldest configured provider and
+model, adds credential revisions and nullable snapshots to existing work, and
+widens auxiliary refusal/Autopilot decision checks with `NOT VALID`. New rows are
+checked immediately. Existing encrypted credentials and usage records are not
+rewritten. Stop old workers before the matching API upgrade and restart matching
+workers only after API health; old workers do not enforce the new selections.
+
+Operators can validate the widened checks separately after the upgrade:
+
+```sql
+ALTER TABLE ai_credentials VALIDATE CONSTRAINT ai_credentials_revision_check;
+ALTER TABLE autopilot_manual_attempts VALIDATE CONSTRAINT autopilot_manual_attempts_decision_check;
+ALTER TABLE autopilot_scan_events VALIDATE CONSTRAINT autopilot_scan_events_decision_check;
+ALTER TABLE claim_reviews VALIDATE CONSTRAINT claim_reviews_error_code_check;
+ALTER TABLE news_relevance_batch_items VALIDATE CONSTRAINT news_relevance_batch_items_error_code_check;
+ALTER TABLE news_relevance_batches VALIDATE CONSTRAINT news_relevance_batches_error_code_check;
+ALTER TABLE news_items VALIDATE CONSTRAINT news_items_relevance_error_code_check;
+ALTER TABLE topic_suggestion_requests VALIDATE CONSTRAINT topic_suggestion_requests_error_code_check;
+```
+
+Legacy suggestions with earlier attempts, relevance batches already running,
+and relevance items with earlier scoring attempts refuse ambiguous configuration.
+Untouched queued legacy batches pin before their first running transition. Start
+new suggestions/recheck requests, or use an item's explicit scoring retry, after
+reviewing Settings. Newly pinned work preserves its configuration on redelivery.

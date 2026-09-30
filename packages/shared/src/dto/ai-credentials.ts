@@ -189,6 +189,7 @@ export type AiCredentialPublic = {
  * screen — precisely what the closed code sets exist to prevent.
  */
 export const AI_TEST_FAILURES = [
+  "configuration_changed",
   "invalid_key",
   "model_not_found",
   "no_structured_output",

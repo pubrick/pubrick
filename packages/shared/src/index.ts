@@ -3,6 +3,7 @@ export {
   compareCredentialOrder,
   preferredCredential,
 } from "./ai-credential-order.js";
+export * from "./ai-text-selection.js";
 export {
   CHANNEL_HEALTH_TTL_MS,
   type ChannelHealthState,

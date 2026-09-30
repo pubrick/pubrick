@@ -16,8 +16,10 @@ import {
   AI_PROVIDERS,
   type AiCredentialUpsert,
   type AiProviderId,
+  type AiTextSettingsUpdate,
   aiCredentialUpsertSchema,
   aiProviderSchema,
+  aiTextSettingsUpdateSchema,
   type GoogleProxyTest,
   type GoogleProxyUpdate,
   googleProxyTestSchema,
@@ -75,6 +77,19 @@ export class AiCredentialsController {
   @Get("spend")
   spend(@OrgId() orgId: string) {
     return this.credentials.spend(orgId);
+  }
+
+  @Get("text-settings")
+  textSettings(@OrgId() orgId: string) {
+    return this.credentials.textSettings(orgId);
+  }
+
+  @Put("text-settings")
+  updateTextSettings(
+    @OrgId() orgId: string,
+    @Body(new ZodValidationPipe(aiTextSettingsUpdateSchema)) body: AiTextSettingsUpdate,
+  ) {
+    return this.credentials.updateTextSettings(orgId, body);
   }
 
   @Put()

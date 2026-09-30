@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { lockAiTextSelection, schema, snapshotAiTextSelection } from "@pubrick/db";
 import {
   type ApiErrorCode,
   COVER_SUPPORTED_PLATFORMS,
@@ -22,7 +22,6 @@ import {
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
-import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { ZodValidationPipe } from "../validation.pipe";
 
@@ -449,8 +448,23 @@ export class RunsRepository {
     const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
 
     const id = await db.transaction(async (tx) => {
+      const aiState = await lockAiTextSelection(orgId, tx);
+      if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
+      if (
+        !aiState.settings.provider ||
+        !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
+      )
+        throw conflict(
+          "ai_default_key_missing",
+          "The selected text provider has no key. Review Settings before generating text.",
+        );
+      const textSelection = snapshotAiTextSelection(aiState);
+      if (!textSelection)
+        throw conflict(
+          "ai_default_key_missing",
+          "Add an AI key in Settings before generating text.",
+        );
       await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
-      await holdOrganization(tx, orgId);
       // A topic id can only come from a server-side check under this same
       // transaction. The public RunCreate body has no topicId field.
       const topicId = beforeInsert ? await beforeInsert(tx) : null;
@@ -487,6 +501,7 @@ export class RunsRepository {
           orgId,
           brandId: data.brandId,
           topicId,
+          textSelection,
           // MATERIAL decides the kind: a brief is an instruction ABOUT the
           // material, not a second thing to work from, so a request carrying
           // both is a source run with `text` set. A `sourceUrl` with no material

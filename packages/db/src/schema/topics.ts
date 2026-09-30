@@ -1,3 +1,4 @@
+import type { AiTextSnapshot } from "@pubrick/shared";
 import {
   TOPIC_CONTENT_TYPES,
   TOPIC_INSPIRATION_KINDS,
@@ -92,6 +93,7 @@ export const topicSuggestionRequests = pgTable(
   "topic_suggestion_requests",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    textSelection: jsonb("text_selection").$type<AiTextSnapshot>(),
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
@@ -105,7 +107,9 @@ export const topicSuggestionRequests = pgTable(
     localDate: text("local_date"),
     /** Enqueue-time opt-in snapshot; never consult mutable settings in the handler. */
     semanticFilterBlockedTopics: boolean("semantic_filter_blocked_topics").notNull().default(false),
-    errorCode: text("error_code", { enum: ["no_api_key", "unreadable_key", "model_failed"] }),
+    errorCode: text("error_code", {
+      enum: ["configuration_changed", "no_api_key", "unreadable_key", "model_failed"],
+    }),
     suggestionCount: integer("suggestion_count").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -125,6 +129,7 @@ export const topicSuggestionRequests = pgTable(
     enumCheck("topic_suggestion_requests_origin_check", t.origin, ["manual", "automatic"]),
     enumCheck("topic_suggestion_requests_error_code_check", t.errorCode, [
       "no_api_key",
+      "configuration_changed",
       "unreadable_key",
       "model_failed",
     ]),

@@ -9,6 +9,7 @@ import {
 } from "@pubrick/ai";
 import { type SearchHit, SearchProviderError, YandexWebSearchClient } from "@pubrick/search";
 import {
+  AiTextSelectionChangedError,
   type ClaimReviewClaim,
   type ClaimReviewFailure,
   type ClaimReviewJob,
@@ -114,10 +115,20 @@ export class ClaimReviewService {
     let aiCredential: AiCredential | undefined;
     try {
       searchCredential = await this.repo.searchCredential(job.orgId);
-      aiCredential = await this.aiCredentials.credential(job.orgId);
-    } catch {
+      aiCredential = await this.aiCredentials.credential(job.orgId, undefined, {
+        kind: "claim_review",
+        id: job.reviewId,
+      });
+    } catch (error) {
       this.logger.warn(`Claim review ${job.reviewId} cannot load credentials`);
-      await this.repo.failed(job.orgId, job.reviewId, token, "provider_unavailable");
+      await this.repo.failed(
+        job.orgId,
+        job.reviewId,
+        token,
+        error instanceof AiTextSelectionChangedError
+          ? "configuration_changed"
+          : "provider_unavailable",
+      );
       return;
     }
     if (!searchCredential) {
@@ -245,11 +256,13 @@ export class ClaimReviewService {
       await this.repo.ready(job.orgId, job.reviewId, token, claims);
     } catch (error) {
       const code: ClaimReviewFailure =
-        error instanceof InvalidReviewResult ||
-        error instanceof PermanentError ||
-        runFailureOf(error) === "no_structured_output"
-          ? "invalid_response"
-          : "provider_unavailable";
+        error instanceof AiTextSelectionChangedError
+          ? "configuration_changed"
+          : error instanceof InvalidReviewResult ||
+              error instanceof PermanentError ||
+              runFailureOf(error) === "no_structured_output"
+            ? "invalid_response"
+            : "provider_unavailable";
       this.logger.warn(`Claim review ${job.reviewId} failed (${code})`);
       await this.repo.failed(job.orgId, job.reviewId, token, code);
     }

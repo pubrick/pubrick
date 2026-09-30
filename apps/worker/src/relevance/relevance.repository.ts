@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { type FeedbackSignals, KNOWLEDGE_EMBEDDING_MODEL, type UsageRecord } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import { lockAiTextSelection, pinAiTextTarget, schema } from "@pubrick/db";
 import {
   decryptJson,
   parseStoredAiCredential,
@@ -62,6 +62,8 @@ export class RelevanceRepository {
   }
   async claimBatch(orgId: string, brandId: string, batchId: string, itemId: string) {
     return db.transaction(async (tx) => {
+      const aiState = await lockAiTextSelection(orgId, tx);
+      if (!aiState) return null;
       // Claim and terminal stop serialize on this row. A queued item cannot
       // become payable after the batch has entered halting or halted state.
       const [batch] = await tx
@@ -77,6 +79,9 @@ export class RelevanceRepository {
         .for("update")
         .limit(1);
       if (!batch || (batch.status !== "queued" && batch.status !== "running")) return null;
+      // Pin untouched queued batches before the first item/status transition.
+      // Already-running historical batches cannot establish their old vendor.
+      await pinAiTextTarget(orgId, tx, aiState, { kind: "relevance_batch", id: batchId });
       const [claimed] = await tx
         .update(schema.relevanceBatchItems)
         .set({ status: "running" })
@@ -145,6 +150,7 @@ export class RelevanceRepository {
       | {
           kind: "failed";
           code:
+            | "configuration_changed"
             | "no_api_key"
             | "unreadable_key"
             | "invalid_key"
@@ -444,7 +450,7 @@ export class RelevanceRepository {
     orgId: string,
     brandId: string,
     itemId: string,
-    code: "no_api_key" | "unreadable_key" | "model_failed",
+    code: "configuration_changed" | "no_api_key" | "unreadable_key" | "model_failed",
   ) {
     await db
       .update(schema.newsItems)

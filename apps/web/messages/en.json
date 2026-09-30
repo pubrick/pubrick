@@ -415,7 +415,9 @@
     "analysis_queued": "Analysis is queued. Check the result shortly.",
     "analysis_analyzing": "Analysis is in progress. Check the result shortly.",
     "analysis_blocked": "Analysis was blocked by a safety limit or changed settings. Collect a new sample before trying again.",
-    "analysis_unknown": "The provider may have processed this request. Collect a new sample before trying again."
+    "analysis_unknown": "The provider may have processed this request. Collect a new sample before trying again.",
+    "configuration_changed": "The AI configuration changed. Review Settings, then start a new request.",
+    "recheckError_configuration_changed": "The AI configuration changed. Review Settings, then start a new request."
   },
   "Knowledge": {
     "title": "Brand knowledge",
@@ -1340,7 +1342,22 @@
     "publicApiOpen": "Manage API keys",
     "webhooksTitle": "Outgoing webhooks",
     "webhooksHint": "Send publication outcomes to your own tools.",
-    "webhooksOpen": "Manage webhooks"
+    "webhooksOpen": "Manage webhooks",
+    "aiTextTitle": "Text generation",
+    "aiTextHint": "Choose the provider and model for new text tasks. Existing runs keep their admitted configuration.",
+    "aiTextProvider": "Text provider",
+    "aiTextSelect": "Select a saved provider",
+    "aiTextCurrent": "Current: {provider} · {model}",
+    "aiTextMissing": "The selected {provider} key is missing. Save it below or select another saved provider.",
+    "aiTextEmpty": "Save your first API key below to configure text generation.",
+    "aiTextModelHint": "Leave the model empty to use the provider default.",
+    "aiTextUnsaved": "Changes have not been saved.",
+    "aiTextSaved": "Text settings saved.",
+    "aiTextSave": "Save",
+    "aiTextReload": "Reload",
+    "aiTestModel": "Test model: {model}",
+    "aiTestFailConfigurationChanged": "The key changed before this request was admitted. Review Settings and try again.",
+    "aiTextModelOptions": "Model options"
   },
   "SearchSettings": {
     "title": "Search API",
@@ -1388,7 +1405,8 @@
       "source_changed": "The saved draft changed before this check began. Refresh for the current text.",
       "provider_unavailable": "The AI or search provider was unavailable. Try again later.",
       "invalid_response": "The AI provider returned an unusable answer. Try again.",
-      "internal_error": "The check stopped unexpectedly. Try again."
+      "internal_error": "The check stopped unexpectedly. Try again.",
+      "configuration_changed": "The AI configuration changed. Review Settings, then start a new request."
     },
     "missingSearchKey": "Add a Yandex Search API key to search for evidence.",
     "missingAiKey": "Add an AI provider key to extract and compare claims.",
@@ -1597,7 +1615,8 @@
       "retries_exhausted": "This run was retried until its attempts ran out. Try again.",
       "timed_out": "The model call ran out of time before the provider answered. This run will be retried.",
       "too_long_for_channel": "The model could not fit one of the channels' length limits. Try a shorter brief.",
-      "unreadable_key": "The stored API key could not be read. Save it again in Settings."
+      "unreadable_key": "The stored API key could not be read. Save it again in Settings.",
+      "configuration_changed": "The AI configuration changed. Review Settings, then start a new request."
     },
     "draftReady": "Draft ready",
     "draftDeleted": "This run's draft has been deleted.",
@@ -1795,7 +1814,9 @@
     "metrics_refresh_cooldown": "This post was checked recently. Try again in 15 minutes.",
     "metrics_unavailable": "Automatic metrics are unavailable for this publication.",
     "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating.",
-    "media_cover_video_selected": "Remove the selected video before regenerating a cover."
+    "media_cover_video_selected": "Remove the selected video before regenerating a cover.",
+    "ai_settings_changed": "The key changed before this request was admitted. Review Settings and try again.",
+    "ai_default_key_missing": "Save your first API key below to configure text generation."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -2016,7 +2037,8 @@
     "scanDecisionsHint": "Why the automatic idea request was skipped. Requests and their outcomes appear above.",
     "scanDecision_ideas_pending": "Three ideas are waiting for review",
     "scanDecision_no_ai_key": "AI key missing",
-    "scanDecision_queued": "Daily request queued"
+    "scanDecision_queued": "Daily request queued",
+    "suggestionError_configuration_changed": "The AI configuration changed. Review Settings, then start a new request."
   },
   "Autopilot": {
     "title": "Autopilot",
@@ -2115,7 +2137,8 @@
       "suggestionError": {
         "no_api_key": "No AI key is configured. Add one in Settings.",
         "unreadable_key": "The saved AI key cannot be read. Replace it in Settings.",
-        "model_failed": "The model could not complete this request."
+        "model_failed": "The model could not complete this request.",
+        "configuration_changed": "The AI configuration changed. Review Settings, then start a new request."
       }
     },
     "scanTitle": "Scheduled checks",
@@ -2177,7 +2200,8 @@
       "no_approved_topic": "No approved undated topic is ready",
       "invalid_brief": "The approved topic brief is too long",
       "dispatched": "Draft generation started",
-      "worker_failed": "The check failed; try again later"
+      "worker_failed": "The check failed; try again later",
+      "no_ai_key": "The selected text provider has no key. Review Settings."
     },
     "diagnosticsTitle": "Today at a glance",
     "refresh": "Refresh",

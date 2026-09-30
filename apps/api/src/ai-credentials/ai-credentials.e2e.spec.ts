@@ -124,6 +124,85 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       .send({ provider: "google", apiKey: SECRET_KEY, ...body });
   }
 
+  describe("explicit workspace text settings", () => {
+    it("selects a provider and model atomically, probes that model, and rejects stale or missing-key writes", async () => {
+      const { agent, orgId } = await orgAgent();
+      await save(agent, { defaultModel: "legacy-google" }).expect(200);
+      await save(agent, { provider: "openai", defaultModel: "legacy-openai" }).expect(200);
+      const initial = await agent.get("/api/ai-credentials/text-settings").expect(200);
+      expect(initial.body).toMatchObject({
+        provider: "google",
+        modelId: "legacy-google",
+        configured: true,
+      });
+      const selected = await agent
+        .put("/api/ai-credentials/text-settings")
+        .send({
+          provider: "openai",
+          model: "workspace-openai",
+          expectedRevision: initial.body.revision,
+        })
+        .expect(200);
+      expect(selected.body).toMatchObject({
+        provider: "openai",
+        model: "workspace-openai",
+        modelId: "workspace-openai",
+        revision: initial.body.revision + 1,
+      });
+      await agent.post("/api/ai-credentials/openai/test").expect(200);
+      expect(probeCalls.at(-1)).toMatchObject({
+        provider: "openai",
+        defaultModel: "workspace-openai",
+      });
+      await agent.post("/api/ai-credentials/google/test").expect(200);
+      expect(probeCalls.at(-1)).toMatchObject({
+        provider: "google",
+        defaultModel: "legacy-google",
+      });
+      await agent
+        .put("/api/ai-credentials/text-settings")
+        .send({ provider: "google", model: null, expectedRevision: initial.body.revision })
+        .expect(409)
+        .expect((response) => expect(response.body.code).toBe("ai_settings_changed"));
+      await agent
+        .put("/api/ai-credentials/text-settings")
+        .send({ provider: "anthropic", model: null, expectedRevision: selected.body.revision })
+        .expect(409)
+        .expect((response) => expect(response.body.code).toBe("ai_default_key_missing"));
+      expect((await repo.credential(orgId))?.defaultModel).toBe("workspace-openai");
+    });
+
+    it("keeps a selected missing provider without falling back and isolates tenants", async () => {
+      const a = await orgAgent();
+      const b = await orgAgent();
+      await save(a.agent).expect(200);
+      await save(a.agent, { provider: "openai" }).expect(200);
+      const selected = await a.agent.get("/api/ai-credentials/text-settings").expect(200);
+      await a.agent.delete("/api/ai-credentials/google").expect(200);
+      const missing = await a.agent.get("/api/ai-credentials/text-settings").expect(200);
+      expect(missing.body).toMatchObject({
+        provider: "google",
+        configured: false,
+        revision: selected.body.revision,
+      });
+      await expect(repo.credential(a.orgId)).rejects.toMatchObject({
+        runFailure: "configuration_changed",
+      });
+      expect(
+        (await b.agent.get("/api/ai-credentials/text-settings").expect(200)).body,
+      ).toMatchObject({ provider: null, configured: false });
+      await b.agent
+        .put("/api/ai-credentials/text-settings")
+        .send({ provider: "openai", model: "other-tenant", expectedRevision: 0 })
+        .expect(409);
+      const restored = await a.agent
+        .put("/api/ai-credentials/text-settings")
+        .send({ provider: "openai", model: null, expectedRevision: selected.body.revision })
+        .expect(200);
+      expect(restored.body).toMatchObject({ provider: "openai", configured: true });
+    });
+  });
+
   function usage(overrides: Partial<UsageRecord> = {}): UsageRecord {
     return {
       provider: "google",
@@ -165,7 +244,9 @@ describe.skipIf(!url)("ai credentials e2e", () => {
       const checked = await a.agent.post(`/api/ai-credentials/${provider}/test`).expect(200);
       expect(checked.body).toMatchObject({ ok: true, modelId });
       expect(JSON.stringify(checked.body)).not.toContain(SECRET_KEY);
-      expect(probeCalls).toEqual([{ provider, apiKey: SECRET_KEY, defaultModel: modelId }]);
+      expect(probeCalls).toEqual([
+        { provider, apiKey: SECRET_KEY, defaultModel: modelId, admitCall: expect.any(Function) },
+      ]);
       const [ledger] = await direct.db
         .select()
         .from(schema.usageLedger)
@@ -653,6 +734,7 @@ describe.skipIf(!url)("ai credentials e2e", () => {
 
       expect(probeCalls).toHaveLength(2);
       expect(probeCalls[0]).toEqual({
+        admitCall: expect.any(Function),
         provider: "google",
         apiKey: SECRET_KEY,
         defaultModel: "gemini-3.7-flash",

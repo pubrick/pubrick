@@ -12,6 +12,7 @@ import {
   runFailureOf,
 } from "@pubrick/ai";
 import {
+  AiTextSelectionChangedError,
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   PermanentError,
@@ -86,9 +87,22 @@ export class RelevanceService {
         usageLossRecordFailed = true;
       }
     };
-    const input = batchId
-      ? await this.repo.claimBatch(job.orgId, job.brandId, batchId, job.itemId)
-      : await this.repo.claim(job.orgId, job.brandId, job.itemId);
+    let input: Awaited<
+      ReturnType<RelevanceRepository["claim"] | RelevanceRepository["claimBatch"]>
+    >;
+    try {
+      input = batchId
+        ? await this.repo.claimBatch(job.orgId, job.brandId, batchId, job.itemId)
+        : await this.repo.claim(job.orgId, job.brandId, job.itemId);
+    } catch (error) {
+      if (!(error instanceof AiTextSelectionChangedError) || !batchId) throw error;
+      await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
+        kind: "failed",
+        code: "configuration_changed",
+        halt: true,
+      });
+      return;
+    }
     if (!input) {
       if (!batchId) await this.repo.markAttemptLimit(job.orgId, job.brandId, job.itemId);
       return;
@@ -102,16 +116,28 @@ export class RelevanceService {
     }
     let credential: AiCredential | undefined;
     try {
-      credential = await this.credentials.credential(job.orgId);
+      credential = await this.credentials.credential(job.orgId, undefined, {
+        kind: batchId ? "relevance_batch" : "relevance_item",
+        id: batchId ?? job.itemId,
+      });
     } catch (error) {
       if (!(error instanceof PermanentError)) throw error;
       if (batchId)
         await this.repo.finishBatch(job.orgId, job.brandId, batchId, job.itemId, {
           kind: "failed",
-          code: "unreadable_key",
+          code:
+            error instanceof AiTextSelectionChangedError
+              ? "configuration_changed"
+              : "unreadable_key",
           halt: true,
         });
-      else await this.repo.failed(job.orgId, job.brandId, job.itemId, "unreadable_key");
+      else
+        await this.repo.failed(
+          job.orgId,
+          job.brandId,
+          job.itemId,
+          error instanceof AiTextSelectionChangedError ? "configuration_changed" : "unreadable_key",
+        );
       return;
     }
     if (!credential) {
@@ -168,10 +194,12 @@ export class RelevanceService {
       if (batchId) {
         const classified = runFailureOf(error);
         const terminal =
+          classified === "configuration_changed" ||
           classified === "no_api_key" ||
           classified === "invalid_key" ||
           classified === "model_not_found";
         const code =
+          classified === "configuration_changed" ||
           classified === "no_api_key" ||
           classified === "invalid_key" ||
           classified === "model_not_found" ||
@@ -184,7 +212,12 @@ export class RelevanceService {
           halt: terminal,
         });
       } else {
-        await this.repo.failed(job.orgId, job.brandId, job.itemId, "model_failed");
+        await this.repo.failed(
+          job.orgId,
+          job.brandId,
+          job.itemId,
+          error instanceof AiTextSelectionChangedError ? "configuration_changed" : "model_failed",
+        );
         if (error instanceof TransientError) throw error;
       }
       return;

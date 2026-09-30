@@ -69,6 +69,7 @@ export type AutopilotDispatch = {
 
 /** Closed decisions from the same admission path used by scheduled Autopilot. */
 export const AUTOPILOT_DECISIONS = [
+  "no_ai_key",
   "disabled",
   "before_start",
   "quiet_hours",
@@ -198,7 +199,9 @@ export const autopilotOperationSchema = z.discriminatedUnion("kind", [
     status: z.enum(["queued", "running", "succeeded", "failed"]),
     origin: z.enum(["manual", "automatic"]),
     localDate: z.iso.date().nullable(),
-    errorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
+    errorCode: z
+      .enum(["configuration_changed", "no_api_key", "unreadable_key", "model_failed"])
+      .nullable(),
     suggestionCount: z.number().int().nonnegative(),
   }),
 ]);

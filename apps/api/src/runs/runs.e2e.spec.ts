@@ -187,6 +187,10 @@ describe.skipIf(!url)("runs e2e", () => {
       .post("/api/auth/organization/set-active")
       .send({ organizationId: created.body.id })
       .expect(200);
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "openai", apiKey: "fixture-key-never-a-live-secret" })
+      .expect(200);
     return agent;
   }
 
@@ -223,7 +227,7 @@ describe.skipIf(!url)("runs e2e", () => {
    * A model that answers with one canned JSON body. The V4 usage shape is
    * nested and `finishReason` is an object — a bare string passes vitest and
    * fails `tsc` (see `packages/ai`'s steps.test.ts, where both traps are
-   * documented). NO provider is reached: house rule, and this suite has no key.
+   * documented). NO provider is reached: house rule; credentials are synthetic fixture values.
    */
   function jsonModel(text: string) {
     return new MockLanguageModelV4({

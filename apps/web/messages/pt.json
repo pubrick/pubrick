@@ -415,7 +415,9 @@
     "analysis_queued": "A análise está na fila. Verifique o resultado em breve.",
     "analysis_analyzing": "A análise está em curso. Verifique o resultado em breve.",
     "analysis_blocked": "Um limite de segurança ou uma alteração das definições bloqueou a análise. Recolha uma nova amostra para tentar novamente.",
-    "analysis_unknown": "O fornecedor poderá ter processado o pedido. Recolha uma nova amostra para tentar novamente."
+    "analysis_unknown": "O fornecedor poderá ter processado o pedido. Recolha uma nova amostra para tentar novamente.",
+    "configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido.",
+    "recheckError_configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido."
   },
   "Knowledge": {
     "title": "Conhecimento da marca",
@@ -1340,7 +1342,22 @@
     "publicApiOpen": "Gerenciar chaves de API",
     "webhooksTitle": "Webhooks de saída",
     "webhooksHint": "Envie resultados de publicação para suas ferramentas.",
-    "webhooksOpen": "Gerenciar webhooks"
+    "webhooksOpen": "Gerenciar webhooks",
+    "aiTextTitle": "Geração de texto",
+    "aiTextHint": "Escolha o provedor e modelo para novas tarefas de texto. As execuções existentes mantêm sua configuração.",
+    "aiTextProvider": "Provedor de texto",
+    "aiTextSelect": "Escolha um provedor salvo",
+    "aiTextCurrent": "Atual: {provider} · {model}",
+    "aiTextMissing": "A chave de {provider} está ausente. Salve-a abaixo ou escolha outro provedor salvo.",
+    "aiTextEmpty": "Salve sua primeira chave API abaixo para configurar a geração de texto.",
+    "aiTextModelHint": "Deixe o modelo vazio para usar o modelo padrão do provedor.",
+    "aiTextUnsaved": "As alterações não foram salvas.",
+    "aiTextSaved": "Configurações de texto salvas.",
+    "aiTextSave": "Salvar",
+    "aiTextReload": "Recarregar",
+    "aiTestModel": "Modelo do teste: {model}",
+    "aiTestFailConfigurationChanged": "A chave mudou antes da admissão da solicitação. Revise as configurações e tente novamente.",
+    "aiTextModelOptions": "Opções do modelo"
   },
   "SearchSettings": {
     "title": "API de pesquisa",
@@ -1388,7 +1405,8 @@
       "source_changed": "O rascunho guardado mudou antes da verificação começar. Repita-a para o texto atual.",
       "provider_unavailable": "O fornecedor de IA ou pesquisa não estava disponível. Tente mais tarde.",
       "invalid_response": "O fornecedor de IA devolveu uma resposta inutilizável. Tente novamente.",
-      "internal_error": "A verificação parou inesperadamente. Tente novamente."
+      "internal_error": "A verificação parou inesperadamente. Tente novamente.",
+      "configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido."
     },
     "missingSearchKey": "Adicione uma chave Yandex Search API para procurar fontes.",
     "missingAiKey": "Adicione uma chave de fornecedor de IA para extrair e comparar afirmações.",
@@ -1597,7 +1615,8 @@
       "retries_exhausted": "Esta geração foi repetida até esgotar as tentativas. Tente novamente.",
       "timed_out": "A chamada ao modelo esgotou o tempo antes de o provedor responder. Esta geração será repetida.",
       "too_long_for_channel": "O modelo não conseguiu respeitar o limite de tamanho de um dos canais. Tente um brief mais curto.",
-      "unreadable_key": "Não foi possível ler a chave de API salva. Salve-a novamente em Configurações."
+      "unreadable_key": "Não foi possível ler a chave de API salva. Salve-a novamente em Configurações.",
+      "configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido."
     },
     "draftReady": "Rascunho pronto",
     "draftDeleted": "O rascunho desta geração foi excluído.",
@@ -1795,7 +1814,9 @@
     "metrics_refresh_cooldown": "Esta publicação foi consultada recentemente. Tente novamente em 15 minutos.",
     "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação.",
     "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la.",
-    "media_cover_video_selected": "Remova o vídeo selecionado antes de regenerar a capa."
+    "media_cover_video_selected": "Remova o vídeo selecionado antes de regenerar a capa.",
+    "ai_settings_changed": "A chave mudou antes da admissão da solicitação. Revise as configurações e tente novamente.",
+    "ai_default_key_missing": "Salve sua primeira chave API abaixo para configurar a geração de texto."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -2016,7 +2037,8 @@
     "scanDecisionsHint": "Porque foi ignorado o pedido automático de ideias. Os pedidos e os seus resultados aparecem acima.",
     "scanDecision_ideas_pending": "Há três ideias à espera de revisão",
     "scanDecision_no_ai_key": "Chave de IA em falta",
-    "scanDecision_queued": "Pedido diário em fila"
+    "scanDecision_queued": "Pedido diário em fila",
+    "suggestionError_configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido."
   },
   "Autopilot": {
     "title": "Piloto automático",
@@ -2115,7 +2137,8 @@
       "suggestionError": {
         "no_api_key": "Não existe uma chave de IA configurada. Adicione-a nas Definições.",
         "unreadable_key": "Não é possível ler a chave de IA guardada. Substitua-a nas Definições.",
-        "model_failed": "O modelo não conseguiu concluir este pedido."
+        "model_failed": "O modelo não conseguiu concluir este pedido.",
+        "configuration_changed": "A configuração de IA mudou. Reveja as definições e inicie um novo pedido."
       }
     },
     "scanTitle": "Verificações agendadas",
@@ -2177,7 +2200,8 @@
       "no_approved_topic": "Nenhum tema aprovado sem data disponível",
       "invalid_brief": "A descrição do tema é longa demais",
       "dispatched": "Geração do rascunho iniciada",
-      "worker_failed": "A verificação falhou; tente novamente mais tarde"
+      "worker_failed": "A verificação falhou; tente novamente mais tarde",
+      "no_ai_key": "O fornecedor de texto selecionado não tem chave. Reveja as definições."
     },
     "diagnosticsTitle": "Resumo de hoje",
     "refresh": "Atualizar",

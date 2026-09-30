@@ -317,6 +317,7 @@ function stepState(
  * path rendered at a user in four languages.
  */
 const RUN_FAILURE_KEYS: Record<RunFailure, string> = {
+  configuration_changed: "failure.configuration_changed",
   cancelled: "failure.cancelled",
   every_channel_deleted: "failure.every_channel_deleted",
   internal: "failure.internal",

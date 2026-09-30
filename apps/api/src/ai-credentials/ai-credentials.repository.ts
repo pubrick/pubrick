@@ -1,13 +1,22 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { type AiCredential, isAllowedGoogleProxy, type UsageRecord } from "@pubrick/ai";
-import { schema } from "@pubrick/db";
+import {
+  admitAiTextCall,
+  aiTextSettingsView,
+  lockAiTextSelection,
+  pinnedAiCredential,
+  schema,
+  snapshotAiTextSelection,
+} from "@pubrick/db";
 import {
   AI_PROVIDERS,
   type AiCredentialTestResult,
   type AiCredentialUpsert,
   type AiProviderId,
+  type AiTextSettingsUpdate,
   type CostSummary,
   costTotals,
+  DEFAULT_TEXT_MODELS,
   decryptJson,
   encryptJson,
   type GoogleProxyTestResult,
@@ -16,13 +25,12 @@ import {
   MALFORMED_STORED_AI_CREDENTIAL_MESSAGE,
   MAX_TEST_CALLS_PER_HOUR,
   parseStoredAiCredential,
-  preferredCredential,
   summarizeCost,
   toLedgerCostUsd,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { notFound } from "../api-error";
+import { conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
 import { AiCredentialProbe } from "./ai-credentials.probe";
@@ -128,7 +136,7 @@ export class AiCredentialsRepository {
         ),
       );
     return {
-      configured: rows.length > 0,
+      configured: (await this.textSettings(orgId)).configured,
       googleConfigured: rows.some((row) => row.provider === "google"),
     };
   }
@@ -136,6 +144,8 @@ export class AiCredentialsRepository {
   async upsert(orgId: string, data: AiCredentialUpsert) {
     const defaultModel = data.defaultModel ?? null;
     return db.transaction(async (tx) => {
+      const selectionState = await lockAiTextSelection(orgId, tx);
+      if (!selectionState) throw notFound("ai_credential_not_found", "Organization not found");
       const previous = await tx
         .select({ credentialsEncrypted: schema.aiCredentials.credentialsEncrypted })
         .from(schema.aiCredentials)
@@ -172,12 +182,25 @@ export class AiCredentialsRepository {
           // reached from insert.js:149). Setting it by hand would be a no-op
           // dressed up as a safeguard. The e2e backdates the row and asserts the
           // date moves, so a drizzle upgrade that changed this fails there.
-          set: { credentialsEncrypted, defaultModel },
+          set: {
+            credentialsEncrypted,
+            defaultModel,
+            revision: sql`${schema.aiCredentials.revision} + 1`,
+          },
         })
         .returning({
           ...PUBLIC_COLUMNS,
           credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
         });
+      if (selectionState.settings.provider === null)
+        await tx
+          .update(schema.aiTextSettings)
+          .set({
+            provider: data.provider,
+            model: defaultModel,
+            revision: selectionState.settings.revision + 1,
+          })
+          .where(eq(schema.aiTextSettings.orgId, orgId));
       return rows[0] ? publicCredential(rows[0]) : undefined;
     });
   }
@@ -188,6 +211,8 @@ export class AiCredentialsRepository {
       throw new BadRequestException("Invalid or non-public Google proxy destination");
     }
     return db.transaction(async (tx) => {
+      const selectionState = await lockAiTextSelection(orgId, tx);
+      if (!selectionState) throw notFound("ai_credential_not_found", "Organization not found");
       const rows = await tx
         .select({ credentialsEncrypted: schema.aiCredentials.credentialsEncrypted })
         .from(schema.aiCredentials)
@@ -207,7 +232,7 @@ export class AiCredentialsRepository {
       );
       const updated = await tx
         .update(schema.aiCredentials)
-        .set({ credentialsEncrypted })
+        .set({ revision: sql`${schema.aiCredentials.revision} + 1`, credentialsEncrypted })
         .where(
           and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, "google")),
         )
@@ -238,12 +263,14 @@ export class AiCredentialsRepository {
    */
   async delete(orgId: string, provider: AiProviderId) {
     return db.transaction(async (tx) => {
+      const selectionState = await lockAiTextSelection(orgId, tx);
+      if (!selectionState) throw notFound("ai_credential_not_found", "Organization not found");
       const rows = await tx
         .delete(schema.aiCredentials)
         .where(
           and(eq(schema.aiCredentials.orgId, orgId), eq(schema.aiCredentials.provider, provider)),
         )
-        .returning({ provider: schema.aiCredentials.provider });
+        .returning({ provider: schema.aiCredentials.provider, id: schema.aiCredentials.id });
       if (rows.length === 0) {
         throw notFound("ai_credential_not_found", "No API key stored for this provider");
       }
@@ -258,6 +285,8 @@ export class AiCredentialsRepository {
           and(
             eq(schema.pipelineRuns.orgId, orgId),
             eq(schema.pipelineRuns.status, "queued"),
+            sql`(${schema.pipelineRuns.textSelection}->>'credentialId' = ${rows[0]?.id} OR
+              (${schema.pipelineRuns.textSelection} IS NULL AND ${selectionState.settings.provider === provider}))`,
             // ASCENDING id, taken by a sub-select because an `UPDATE` cannot
             // carry an `ORDER BY` of its own — the same shape
             // `PublishRepository.sweepAbandoned` uses over `adaptations`, and
@@ -427,7 +456,28 @@ export class AiCredentialsRepository {
 
     let credential: AiCredential;
     try {
-      credential = await this.getDecrypted(orgId, provider);
+      credential = await db.transaction(async (tx) => {
+        const state = await lockAiTextSelection(orgId, tx);
+        const row = state?.credentials.find((entry) => entry.provider === provider);
+        if (!state || !row)
+          throw notFound("ai_credential_not_found", "No API key stored for this provider");
+        const modelId =
+          state.settings.provider === provider
+            ? (state.settings.model ?? DEFAULT_TEXT_MODELS[provider])
+            : (row.defaultModel ?? DEFAULT_TEXT_MODELS[provider]);
+        const snapshot = {
+          provider,
+          modelId,
+          credentialId: row.id,
+          credentialRevision: row.revision,
+          settingsRevision: state.settings.revision,
+        };
+        return {
+          ...this.decrypt(provider, row),
+          defaultModel: modelId,
+          admitCall: () => admitAiTextCall(orgId, db, snapshot),
+        };
+      });
     } catch (error) {
       // "No key stored" is genuinely not-found and stays a 404. A blob that
       // will not decrypt is not: the row exists, the screen is still listing it,
@@ -566,19 +616,54 @@ export class AiCredentialsRepository {
    * resource the caller addressed, while asking for "whatever this org uses" is
    * a question with a legitimate empty answer that the caller has to render.
    */
+  async textSettings(orgId: string) {
+    return db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(orgId, tx);
+      if (!state) throw notFound("ai_credential_not_found", "Organization not found");
+      return aiTextSettingsView(state);
+    });
+  }
+
+  async updateTextSettings(orgId: string, input: AiTextSettingsUpdate) {
+    return db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(orgId, tx);
+      if (!state) throw notFound("ai_credential_not_found", "Organization not found");
+      if (state.settings.revision !== input.expectedRevision)
+        throw conflict("ai_settings_changed", "AI settings changed. Reload and try again.");
+      if (!state.credentials.some((row) => row.provider === input.provider))
+        throw conflict("ai_default_key_missing", "Save this provider key before selecting it.");
+      const [settings] = await tx
+        .update(schema.aiTextSettings)
+        .set({
+          provider: input.provider,
+          model: input.model,
+          revision: state.settings.revision + 1,
+        })
+        .where(eq(schema.aiTextSettings.orgId, orgId))
+        .returning({
+          orgId: schema.aiTextSettings.orgId,
+          provider: schema.aiTextSettings.provider,
+          model: schema.aiTextSettings.model,
+          revision: schema.aiTextSettings.revision,
+        });
+      if (!settings) throw new Error("AI settings update returned no row");
+      return aiTextSettingsView({ ...state, settings });
+    });
+  }
+
   async credential(orgId: string): Promise<AiCredential | undefined> {
-    const rows = await db
-      .select({
-        provider: schema.aiCredentials.provider,
-        createdAt: schema.aiCredentials.createdAt,
-        credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
-        defaultModel: schema.aiCredentials.defaultModel,
-      })
-      .from(schema.aiCredentials)
-      .where(eq(schema.aiCredentials.orgId, orgId));
-    const row = preferredCredential(rows);
-    if (!row) return undefined;
-    return this.decrypt(row.provider, row);
+    return db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(orgId, tx);
+      if (!state) return undefined;
+      const snapshot = snapshotAiTextSelection(state);
+      if (!snapshot) return undefined;
+      const row = pinnedAiCredential(state, snapshot);
+      return {
+        ...this.decrypt(row.provider, row),
+        defaultModel: snapshot.modelId,
+        admitCall: () => admitAiTextCall(orgId, db, snapshot),
+      };
+    });
   }
 
   /**

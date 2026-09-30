@@ -248,6 +248,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   run_not_cancellable_cancelled: "run_not_cancellable_cancelled",
   run_not_dismissable_queued: "run_not_dismissable_queued",
   run_not_dismissable_running: "run_not_dismissable_running",
+  ai_settings_changed: "ai_settings_changed",
+  ai_default_key_missing: "ai_default_key_missing",
   ai_credential_not_found: "ai_credential_not_found",
   calendar_slot_not_found: "calendar_slot_not_found",
   editorial_placeholder_not_found: "editorial_placeholder_not_found",

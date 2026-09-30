@@ -10,7 +10,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 // `pnpm -r ls @ai-sdk/provider --depth 10`, which must show one version).
 import type { LanguageModelV4, SharedV4ProviderOptions } from "@ai-sdk/provider";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { type AiProviderId, PermanentError } from "@pubrick/shared";
+import { type AiProviderId, DEFAULT_TEXT_MODELS, PermanentError } from "@pubrick/shared";
+import { wrapLanguageModel } from "ai";
 import { withRunFailure } from "./classify.js";
 import { googleFetchForProxy } from "./google-transport.js";
 
@@ -38,6 +39,8 @@ export type AiCredential = {
   apiKey: string;
   defaultModel?: string | null;
   proxyUrl?: string;
+  /** Admission runs immediately before every provider HTTP request, including retries/repairs. */
+  admitCall?: () => Promise<void>;
 };
 
 /**
@@ -55,15 +58,7 @@ export type AiCredential = {
  * first. Direct-provider defaults intentionally remain unpriced until their
  * cache/tier rules are represented; see docs/llm-providers.md.
  */
-export const DEFAULT_MODELS: Record<AiProvider, string> = {
-  google: "gemini-3.8-flash",
-  openrouter: "google/gemini-3.8-flash",
-  // Vendor and maintained SDK model lists checked on 2026-09-30. DeepSeek
-  // retires dated aliases; its supported Flash alias follows the current release.
-  openai: "gpt-6-luna",
-  anthropic: "claude-sonnet-5-5",
-  deepseek: "deepseek-flash",
-};
+export const DEFAULT_MODELS = DEFAULT_TEXT_MODELS;
 
 /**
  * Build a language model from an org's credential.
@@ -88,28 +83,54 @@ export function resolveModel(credential: AiCredential, modelId?: string): Langua
     );
   }
 
+  const admitted = (model: LanguageModelV4): LanguageModelV4 =>
+    credential.admitCall
+      ? wrapLanguageModel({
+          model,
+          middleware: {
+            specificationVersion: "v4",
+            wrapGenerate: async ({ doGenerate }) => {
+              await credential.admitCall?.();
+              return doGenerate();
+            },
+            wrapStream: async ({ doStream }) => {
+              await credential.admitCall?.();
+              return doStream();
+            },
+          },
+        })
+      : model;
+
   switch (credential.provider) {
     case "google":
-      return createGoogleGenerativeAI({
-        apiKey: credential.apiKey,
-        fetch: googleFetchForProxy(credential.proxyUrl),
-      })(id);
+      return admitted(
+        createGoogleGenerativeAI({
+          apiKey: credential.apiKey,
+          fetch: googleFetchForProxy(credential.proxyUrl),
+        })(id),
+      );
     case "openrouter":
-      return createOpenRouter({ apiKey: credential.apiKey })(id);
+      return admitted(createOpenRouter({ apiKey: credential.apiKey })(id));
     case "openai":
       // Direct BYOK must not inherit OPENAI_BASE_URL from the server environment.
       // Custom endpoints are a distinct future mode requiring SSRF validation.
-      return createOpenAI({
-        apiKey: credential.apiKey,
-        baseURL: "https://api.openai.com/v1",
-      }).responses(id);
+      return admitted(
+        createOpenAI({
+          apiKey: credential.apiKey,
+          baseURL: "https://api.openai.com/v1",
+        }).responses(id),
+      );
     case "anthropic":
-      return createAnthropic({
-        apiKey: credential.apiKey,
-        baseURL: "https://api.anthropic.com/v1",
-      })(id);
+      return admitted(
+        createAnthropic({
+          apiKey: credential.apiKey,
+          baseURL: "https://api.anthropic.com/v1",
+        })(id),
+      );
     case "deepseek":
-      return createDeepSeek({ apiKey: credential.apiKey, baseURL: "https://api.deepseek.com" })(id);
+      return admitted(
+        createDeepSeek({ apiKey: credential.apiKey, baseURL: "https://api.deepseek.com" })(id),
+      );
   }
 }
 

@@ -172,7 +172,9 @@ export const topicSuggestionRequestDtoSchema = z.object({
   id: z.string().uuid(),
   brandId: z.string().uuid(),
   status: z.enum(TOPIC_SUGGESTION_REQUEST_STATUSES),
-  errorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
+  errorCode: z
+    .enum(["configuration_changed", "no_api_key", "unreadable_key", "model_failed"])
+    .nullable(),
   suggestionCount: z.number().int().min(0).max(3),
   createdAt: z.string(),
   updatedAt: z.string(),

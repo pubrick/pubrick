@@ -26,6 +26,9 @@ describe.skipIf(!url)("manual Autopilot decision history", () => {
     await db
       .insert(schema.organization)
       .values({ id: orgId, name: "Manual Autopilot E2E", slug: orgId });
+    await db
+      .insert(schema.aiCredentials)
+      .values({ orgId, provider: "google", credentialsEncrypted: "opaque-fixture" });
     const [brand] = await db
       .insert(schema.brands)
       .values({ orgId, name: "Brand" })

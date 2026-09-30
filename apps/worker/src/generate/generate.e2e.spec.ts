@@ -239,11 +239,17 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
       defaultModel: "gemini-3.7-flash",
     });
 
+    const { lockAiTextSelection, snapshotAiTextSelection } = await import("@pubrick/db");
+    const textSelection = await db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(stamp, tx);
+      return state ? snapshotAiTextSelection(state) : undefined;
+    });
     const [run] = await db
       .insert(schema.pipelineRuns)
       .values({
         orgId: stamp,
         brandId,
+        textSelection,
         input: input?.(channelIds) ?? {
           kind: "brief",
           text: "Announce the autumn menu",
@@ -256,6 +262,103 @@ describe.skipIf(!url)("generate e2e (real DB + real pg-boss + mock model)", () =
   }
 
   /** The same job shape and group the api's `enqueueGenerate` sends. */
+  describe("retained text selection", () => {
+    for (const operation of ["claim", "beginStep"] as const) {
+      it(`serializes actual ${operation} with a settings writer before locking the run`, async () => {
+        const seeded = await seed();
+        const { lockAiTextSelection } = await import("@pubrick/db");
+        const jobId = `selection-${seeded.runId}`;
+        const fence = `${jobId}#first`;
+        const firstClaim = await repo.claim(seeded.orgId, seeded.runId, fence, jobId);
+        expect(firstClaim?.textSelection).toMatchObject({
+          provider: "google",
+          modelId: "gemini-3.7-flash",
+        });
+        let release!: () => void;
+        let ready!: () => void;
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const locked = new Promise<void>((resolve) => {
+          ready = resolve;
+        });
+        const editing = db.transaction(async (tx) => {
+          const state = await lockAiTextSelection(seeded.orgId, tx);
+          if (!state) throw new Error("Missing selection fixture");
+          await tx
+            .update(schema.aiTextSettings)
+            .set({ model: "changed-default", revision: state.settings.revision + 1 })
+            .where(eq(schema.aiTextSettings.orgId, seeded.orgId));
+          await tx
+            .select({ id: schema.pipelineRuns.id })
+            .from(schema.pipelineRuns)
+            .where(eq(schema.pipelineRuns.id, seeded.runId))
+            .for("update");
+          ready();
+          await gate;
+        });
+        await locked;
+        let finished = false;
+        const pending = (
+          operation === "claim"
+            ? repo.claim(seeded.orgId, seeded.runId, `${jobId}#second`, jobId)
+            : repo.beginStep(seeded.orgId, seeded.runId, fence, "researcher")
+        ).finally(() => {
+          finished = true;
+        });
+        try {
+          await expect
+            .poll(async () => {
+              const rows = await pool.query<{ blocked: boolean }>(`SELECT EXISTS (
+              SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+              AND query LIKE '%pg_advisory_xact_lock%' AND cardinality(pg_blocking_pids(pid)) > 0
+            ) AS blocked`);
+              return rows.rows[0]?.blocked;
+            })
+            .toBe(true);
+          expect(finished).toBe(false);
+        } finally {
+          release();
+        }
+        await editing;
+        expect(await pending).toBeTruthy();
+        const retained = await runRow(seeded.runId);
+        expect(retained?.textSelection).toEqual(firstClaim?.textSelection);
+        expect((await repo.credential(seeded.orgId, firstClaim?.textSelection))?.defaultModel).toBe(
+          "gemini-3.7-flash",
+        );
+      });
+    }
+
+    it("fails an untouched legacy run without a key at claim rather than choosing one later", async () => {
+      const seeded = await seed();
+      await db.delete(schema.aiCredentials).where(eq(schema.aiCredentials.orgId, seeded.orgId));
+      await db.delete(schema.aiTextSettings).where(eq(schema.aiTextSettings.orgId, seeded.orgId));
+      await db
+        .update(schema.pipelineRuns)
+        .set({ textSelection: null })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      expect(await repo.claim(seeded.orgId, seeded.runId, "empty#one", "empty")).toBeUndefined();
+      expect(await runRow(seeded.runId)).toMatchObject({ status: "failed", error: "no_api_key" });
+    });
+
+    it("refuses legacy checkpoint provenance that has no identifiable text usage", async () => {
+      const seeded = await seed();
+      await db
+        .update(schema.pipelineRuns)
+        .set({
+          textSelection: null,
+          steps: { writer: { status: "succeeded", output: { body: "Historical draft" } } },
+        })
+        .where(eq(schema.pipelineRuns.id, seeded.runId));
+      expect(await repo.claim(seeded.orgId, seeded.runId, "legacy#one", "legacy")).toBeUndefined();
+      expect(await runRow(seeded.runId)).toMatchObject({
+        status: "failed",
+        error: "configuration_changed",
+      });
+    });
+  });
+
   async function enqueue(runId: string, orgId: string): Promise<string> {
     const jobId = await boss.send(TEST_GENERATE_QUEUE, { runId, orgId }, { group: { id: orgId } });
     if (!jobId) throw new Error("boss.send returned null (unexpected duplicate job id)");

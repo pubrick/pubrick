@@ -1,4 +1,9 @@
-import type { AiCallOutcome, AiCostSource, LedgerStatus } from "@pubrick/shared";
+import {
+  type AiCallOutcome,
+  type AiCostSource,
+  AiTextSelectionChangedError,
+  type LedgerStatus,
+} from "@pubrick/shared";
 import { APICallError } from "ai";
 import { estimateCostUsd, priceFor } from "./pricing.js";
 import type { AiProvider } from "./provider.js";
@@ -253,6 +258,8 @@ export function createCallRecorder(fallbackModelId: string): {
           });
           return result;
         } catch (error) {
+          // Middleware refused before provider HTTP: this is not a billed call.
+          if (error instanceof AiTextSelectionChangedError) throw error;
           // The error is classified HERE and nowhere later. This catch is the
           // last place that knows whether the provider delivered a verdict or
           // simply stopped talking to us; the row it writes carries zero tokens

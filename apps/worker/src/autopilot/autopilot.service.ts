@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { lockAiTextSelection, schema, snapshotAiTextSelection } from "@pubrick/db";
 import {
   AUTOPILOT_DECISIONS,
   GENERATE_QUEUE,
@@ -15,7 +15,6 @@ import {
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
-import { holdOrganization } from "../organization-lock";
 import { quietHour } from "./rules";
 
 const SCAN_LIMIT = 100;
@@ -176,7 +175,8 @@ export class AutopilotService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
-      if (!(await holdOrganization(tx, orgId))) return "disabled";
+      const aiState = await lockAiTextSelection(orgId, tx);
+      if (!aiState) return "disabled";
       if (scan) {
         const [existing] = await tx
           .select({ decision: schema.autopilotScanEvents.decision })
@@ -404,9 +404,16 @@ export class AutopilotService {
         ...(topic.seoKeywords.length && { seoKeywords: topic.seoKeywords }),
       };
       if (!runInputSchema.safeParse(input).success) return finish("invalid_brief");
+      if (
+        !aiState.settings.provider ||
+        !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
+      )
+        return finish("no_ai_key");
+      const textSelection = snapshotAiTextSelection(aiState);
+      if (!textSelection) return finish("no_ai_key");
       const inserted = await tx
         .insert(schema.pipelineRuns)
-        .values({ orgId, brandId, topicId: topic.id, input })
+        .values({ orgId, brandId, topicId: topic.id, input, textSelection })
         .returning({ id: schema.pipelineRuns.id });
       const runId = inserted[0]?.id;
       if (!runId) throw new Error("Autopilot run insert returned no id");

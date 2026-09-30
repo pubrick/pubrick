@@ -662,7 +662,7 @@ export class SourcesRepository {
       if (item.relevanceStatus === "failed") {
         await tx
           .update(schema.newsItems)
-          .set({ relevanceAttempts: 0 })
+          .set({ relevanceAttempts: 0, textSelection: null })
           .where(
             and(
               eq(schema.newsItems.orgId, orgId),

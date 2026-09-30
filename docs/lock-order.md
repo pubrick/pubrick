@@ -749,3 +749,22 @@ key-share lock to an organization update lock.
 against generation, RSS, suggestions, Autopilot, terminal publication writes
 and bulk publication recovery. Every path must let the cascade complete and
 finish without a deadlock or an attempted insert into the deleted tenant.
+
+
+## Workspace text defaults and credential admission
+
+Text settings and credential writes, manual/Autopilot run admission, worker claim,
+worker `beginStep`, and every physical text model request share this order:
+
+1. The existing organization run-admission advisory transaction lock.
+2. The organization row `FOR SHARE` directly (never upgrade a weaker lock).
+3. The organization's text-settings row `FOR UPDATE`.
+4. Its credential rows ordered by UUID, `FOR UPDATE` directly.
+5. Run or background-request rows, when needed.
+
+The helper runs before a run row is locked. It must never be called from a
+transaction already holding a run/request lock. Credential revision admission
+commits before HTTP starts: key rotation cannot retract an already admitted call,
+but subsequent retries and schema repairs must admit the retained revision again.
+A default-provider/model edit does not invalidate a run's retained snapshot.
+Credential replacement/deletion or Google transport changes do invalidate it.

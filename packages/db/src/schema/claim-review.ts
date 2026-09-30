@@ -1,3 +1,4 @@
+import type { AiTextSnapshot } from "@pubrick/shared";
 import {
   CLAIM_REVIEW_FAILURES,
   CLAIM_REVIEW_STATUSES,
@@ -26,6 +27,7 @@ export const claimReviews = pgTable(
   "claim_reviews",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    textSelection: jsonb("text_selection").$type<AiTextSnapshot>(),
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),

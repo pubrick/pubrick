@@ -2,6 +2,7 @@ import {
   AI_CALL_OUTCOMES,
   AI_COST_SOURCES,
   AI_PROVIDERS,
+  type AiTextSnapshot,
   CONTENT_ORIGINS,
   KEY_OWNERSHIPS,
   LEDGER_STATUSES,
@@ -46,6 +47,7 @@ export const aiCredentials = pgTable(
     credentialsEncrypted: text("credentials_encrypted").notNull(),
     /** Null falls back to the provider's built-in default model. */
     defaultModel: text("default_model"),
+    revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .$onUpdate(() => new Date())
@@ -62,6 +64,28 @@ export const aiCredentials = pgTable(
      * REAL provider rather than one per spelling of it.
      */
     enumCheck("ai_credentials_provider_check", t.provider, AI_PROVIDERS),
+    check("ai_credentials_revision_check", sql`${t.revision} > 0`),
+  ],
+);
+
+/** The selected text provider persists even when its key is removed. */
+export const aiTextSettings = pgTable(
+  "organization_ai_text_settings",
+  {
+    orgId: text("org_id")
+      .primaryKey()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    provider: text("provider", { enum: AI_PROVIDERS }),
+    model: text("model"),
+    revision: integer("revision").notNull().default(0),
+  },
+  (t) => [
+    enumCheck("organization_ai_text_settings_provider_check", t.provider, AI_PROVIDERS),
+    check("organization_ai_text_settings_revision_check", sql`${t.revision} >= 0`),
+    check(
+      "organization_ai_text_settings_model_check",
+      sql`${t.model} IS NULL OR (length(${t.model}) BETWEEN 1 AND 200)`,
+    ),
   ],
 );
 
@@ -78,6 +102,7 @@ export const pipelineRuns = pgTable(
       .references(() => brands.id, { onDelete: "cascade" }),
     /** Originating approved topic, when one exists. Cleared when its draft is permanently deleted. */
     topicId: uuid("topic_id").references(() => topics.id, { onDelete: "set null" }),
+    textSelection: jsonb("text_selection").$type<AiTextSnapshot>(),
     /**
      * A snapshot of the request until its archived draft is permanently
      * deleted, then exactly `{ kind: "redacted" }`. The worker accepts only the

@@ -820,6 +820,13 @@
       "when": 1790775806659,
       "tag": "0117_direct_llm_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1790778483301,
+      "tag": "0118_text_defaults_and_pins",
+      "breakpoints": true
     }
   ]
 }

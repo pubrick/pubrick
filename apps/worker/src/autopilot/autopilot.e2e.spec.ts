@@ -36,6 +36,9 @@ describe.skipIf(!url)("autopilot dispatch e2e", () => {
     await boss.start();
     await boss.createQueue("generate");
     await db.insert(schema.organization).values({ id: orgId, name: "Autopilot E2E", slug: orgId });
+    await db
+      .insert(schema.aiCredentials)
+      .values({ orgId, provider: "google", credentialsEncrypted: "opaque-fixture" });
     const [brand] = await db
       .insert(schema.brands)
       .values({ orgId, name: "Brand" })

@@ -8,7 +8,12 @@ import {
   resolveModel,
   runFailureOf,
 } from "@pubrick/ai";
-import { PermanentError, type TopicSuggestionsJob, TransientError } from "@pubrick/shared";
+import {
+  AiTextSelectionChangedError,
+  PermanentError,
+  type TopicSuggestionsJob,
+  TransientError,
+} from "@pubrick/shared";
 import { z } from "zod";
 import { GenerateRepository } from "../generate/generate.repository";
 import {
@@ -87,14 +92,17 @@ export class SuggestionsService {
   private async generate(job: TopicSuggestionsJob, input: ClaimedInput): Promise<void> {
     let credential: AiCredential | undefined;
     try {
-      credential = await this.credentials.credential(job.orgId);
+      credential = await this.credentials.credential(job.orgId, undefined, {
+        kind: "suggestions",
+        id: job.requestId,
+      });
     } catch (error) {
       if (!(error instanceof PermanentError)) throw error;
       await this.repo.failed(
         job.orgId,
         job.brandId,
         job.requestId,
-        "unreadable_key",
+        error instanceof AiTextSelectionChangedError ? "configuration_changed" : "unreadable_key",
         input.attempt,
       );
       return;
@@ -193,7 +201,13 @@ export class SuggestionsService {
       this.logger.warn(
         `Topic suggestions failed for request ${job.requestId}: ${runFailureOf(error) ?? "model_failed"}`,
       );
-      await this.repo.failed(job.orgId, job.brandId, job.requestId, "model_failed", input.attempt);
+      await this.repo.failed(
+        job.orgId,
+        job.brandId,
+        job.requestId,
+        error instanceof AiTextSelectionChangedError ? "configuration_changed" : "model_failed",
+        input.attempt,
+      );
       // An automatic request has a strict one-call budget. Queue redelivery may
       // safely observe its terminal row, but must never make a second model call.
       if (

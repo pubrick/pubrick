@@ -546,7 +546,7 @@ export class SuggestionsRepository {
     orgId: string,
     brandId: string,
     requestId: string,
-    code: "no_api_key" | "unreadable_key" | "model_failed",
+    code: "configuration_changed" | "no_api_key" | "unreadable_key" | "model_failed",
     expectedAttempt?: number,
   ) {
     await db

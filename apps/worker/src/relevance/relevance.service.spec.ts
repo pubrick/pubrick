@@ -1,4 +1,4 @@
-import { MalformedStoredAiCredentialError } from "@pubrick/shared";
+import { AiTextSelectionChangedError, MalformedStoredAiCredentialError } from "@pubrick/shared";
 import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -85,6 +85,21 @@ describe("RelevanceService", () => {
     );
     return { service, repo, credentials, calls, embedText };
   }
+
+  it("halts an ambiguous historical batch before resolving any provider or making a paid call", async () => {
+    const { service, repo, credentials, calls } = harness("{}");
+    repo.claimBatch.mockRejectedValue(new AiTextSelectionChangedError());
+    await service.handleBatch({ ...job, batchId: "legacy-batch" });
+    expect(credentials.credential).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+    expect(repo.finishBatch).toHaveBeenCalledWith(
+      job.orgId,
+      job.brandId,
+      "legacy-batch",
+      job.itemId,
+      { kind: "failed", code: "configuration_changed", halt: true },
+    );
+  });
 
   it("keeps article instructions in user material, records the physical call, and saves a structured verdict", async () => {
     const { service, repo, calls, embedText } = harness(

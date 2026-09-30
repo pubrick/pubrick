@@ -13,9 +13,22 @@ import {
   type UsageRecord,
   withRunFailure,
 } from "@pubrick/ai";
-import { newsRankScore, schema, withImageCallLock } from "@pubrick/db";
 import {
+  type AiTextTarget,
+  admitAiTextCall,
+  lockAiTextSelection,
+  newsRankScore,
+  pinAiTextTarget,
+  pinnedAiCredential,
+  schema,
+  snapshotAiTextSelection,
+  withImageCallLock,
+} from "@pubrick/db";
+import {
+  AiTextSelectionChangedError,
+  type AiTextSnapshot,
   adaptationLimit,
+  aiTextSnapshotSchema,
   CLAIM_REVIEW_QUEUE,
   decryptJson,
   GENERATE_QUEUE_OPTIONS,
@@ -23,13 +36,13 @@ import {
   isMalformedStoredAiCredential,
   isUnreadableCiphertext,
   LIVE_RUN_STATUSES,
+  legacyTextIdentity,
   MAX_IMAGE_CALLS_PER_HOUR,
   PermanentError,
   type PlatformId,
   PROMPT_ROLES,
   type PromptRole,
   parseStoredAiCredential,
-  preferredCredential,
   type RunFailure,
   type RunStepCheckpoint,
   runInputSchema,
@@ -167,6 +180,7 @@ export type ClaimedRun = {
   guidanceSnapshot: GuidanceSnapshot;
   templateSnapshot: TemplateSnapshot | null;
   createdAt: Date;
+  textSelection?: AiTextSnapshot;
 };
 
 /** The brand and channels one run writes for, in the shape `@pubrick/ai` takes. */
@@ -297,12 +311,8 @@ export class GenerateRepository {
     return db.transaction(async (tx) => {
       // Activation and guidance edits take this row FOR UPDATE first. A claim
       // takes it FOR SHARE before the run row, then reads one complete head set.
-      const [org] = await tx
-        .select({ id: schema.organization.id })
-        .from(schema.organization)
-        .where(eq(schema.organization.id, orgId))
-        .for("share");
-      if (!org) return undefined;
+      const aiState = await lockAiTextSelection(orgId, tx);
+      if (!aiState) return undefined;
       const [row] = await tx
         .select({
           id: schema.pipelineRuns.id,
@@ -312,6 +322,8 @@ export class GenerateRepository {
           guidanceSnapshot: schema.pipelineRuns.guidanceSnapshot,
           templateSnapshot: schema.pipelineRuns.templateSnapshot,
           createdAt: schema.pipelineRuns.createdAt,
+          textSelection: schema.pipelineRuns.textSelection,
+          unrecordedCalls: schema.pipelineRuns.unrecordedCalls,
         })
         .from(schema.pipelineRuns)
         .where(
@@ -329,6 +341,64 @@ export class GenerateRepository {
         )
         .for("update");
       if (!row) return undefined;
+      let textSelection: AiTextSnapshot | undefined;
+      try {
+        if (row.textSelection) {
+          const parsedSelection = aiTextSnapshotSchema.safeParse(row.textSelection);
+          if (!parsedSelection.success)
+            throw new AiTextSelectionChangedError(
+              "This run has invalid AI provenance. Retry it with current Settings.",
+            );
+          textSelection = parsedSelection.data;
+        }
+        if (!textSelection) {
+          const billed = await tx
+            .select({
+              provider: schema.usageLedger.provider,
+              modelId: schema.usageLedger.modelId,
+              step: schema.usageLedger.step,
+            })
+            .from(schema.usageLedger)
+            .where(and(eq(schema.usageLedger.orgId, orgId), eq(schema.usageLedger.runId, runId)));
+          const identity = legacyTextIdentity(
+            billed,
+            Object.keys(row.steps ?? {}).length > 0,
+            row.unrecordedCalls,
+          );
+          if (identity) {
+            const credential = aiState.credentials.find(
+              (key) => key.provider === identity.provider,
+            );
+            if (!credential) throw new AiTextSelectionChangedError();
+            textSelection = {
+              ...identity,
+              credentialId: credential.id,
+              credentialRevision: credential.revision,
+              settingsRevision: aiState.settings.revision,
+            };
+          } else textSelection = snapshotAiTextSelection(aiState);
+        }
+        if (!textSelection) {
+          await tx
+            .update(schema.pipelineRuns)
+            .set({ status: "failed", error: "no_api_key", activeJobId: null, leaseExpiresAt: null })
+            .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)));
+          return undefined;
+        }
+        pinnedAiCredential(aiState, textSelection);
+      } catch (error) {
+        if (!(error instanceof AiTextSelectionChangedError)) throw error;
+        await tx
+          .update(schema.pipelineRuns)
+          .set({
+            status: "failed",
+            error: "configuration_changed",
+            activeJobId: null,
+            leaseExpiresAt: null,
+          })
+          .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)));
+        return undefined;
+      }
 
       const legacyPartial =
         Object.keys(row.steps ?? {}).length > 0 && row.templateSnapshot === null;
@@ -499,6 +569,7 @@ export class GenerateRepository {
           status: "running",
           guidanceSnapshot,
           templateSnapshot,
+          textSelection,
           leaseExpiresAt: leaseExpiry(),
           updatedAt: nowSql(),
         })
@@ -514,6 +585,7 @@ export class GenerateRepository {
         guidanceSnapshot: guidanceSnapshot ?? {},
         templateSnapshot,
         createdAt: row.createdAt,
+        textSelection,
       };
     });
   }
@@ -528,19 +600,30 @@ export class GenerateRepository {
    * discovering it lost.
    */
   async beginStep(orgId: string, runId: string, fence: string, step: string): Promise<boolean> {
-    const rows = await db
-      .update(schema.pipelineRuns)
-      .set({ currentStep: step, leaseExpiresAt: leaseExpiry(), updatedAt: nowSql() })
-      .where(
-        and(
-          eq(schema.pipelineRuns.orgId, orgId),
-          eq(schema.pipelineRuns.id, runId),
-          eq(schema.pipelineRuns.status, "running"),
-          eq(schema.pipelineRuns.activeJobId, fence),
-        ),
-      )
-      .returning({ id: schema.pipelineRuns.id });
-    return rows.length > 0;
+    return db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(orgId, tx);
+      if (!state) return false;
+      const [run] = await tx
+        .select({ textSelection: schema.pipelineRuns.textSelection })
+        .from(schema.pipelineRuns)
+        .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, runId)))
+        .for("update");
+      if (run?.textSelection)
+        pinnedAiCredential(state, aiTextSnapshotSchema.parse(run.textSelection));
+      const rows = await tx
+        .update(schema.pipelineRuns)
+        .set({ currentStep: step, leaseExpiresAt: leaseExpiry(), updatedAt: nowSql() })
+        .where(
+          and(
+            eq(schema.pipelineRuns.orgId, orgId),
+            eq(schema.pipelineRuns.id, runId),
+            eq(schema.pipelineRuns.status, "running"),
+            eq(schema.pipelineRuns.activeJobId, fence),
+          ),
+        )
+        .returning({ id: schema.pipelineRuns.id });
+      return rows.length > 0;
+    });
   }
 
   /**
@@ -849,39 +932,28 @@ export class GenerateRepository {
   /**
    * The org's BYOK key, decrypted.
    *
-   * Nothing records a provider on a run — there is no per-run model choice — so
-   * an org holding keys for both providers gets a deterministic answer rather
-   * than a coin flip: `preferredCredential` (`@pubrick/shared`), the oldest key
-   * it configured, tie-broken by provider name. Deterministic matters more than
-   * clever here, because a resume reaches the same provider the first attempt
-   * billed — for as long as the org's set of keys is unchanged, which is the
-   * whole of the guarantee. `execute` calls this on EVERY delivery, and
-   * `AiCredentialsRepository.delete` fails only the runs still `queued`, so a
-   * `running` run whose chosen key is deleted mid-flight resumes on the other
-   * provider with its earlier steps billed to the first. Nothing on a run
-   * records a provider, so nothing can pin it; see the note on
-   * `preferredCredential`.
-   *
-   * The rule used to be an `ORDER BY … LIMIT 1` only this repository could see,
-   * and the api now needs the same answer for an editor-side call. It is an
-   * ordering rather than a query — an org has at most two rows, one per
-   * provider — so all of them are selected and sorted by the shared comparator,
-   * and `AiCredentialsRepository.credential` sorts by the very same function.
-   * Two `ORDER BY` clauses in two packages would be two things that must agree
-   * with nothing making them.
+   * The workspace selects one text provider and model explicitly. Pipeline
+   * runs and background requests retain their original credential revision.
+   * Every physical provider call admits that revision under the shared lock
+   * order. A changed or missing key refuses further calls; it never switches
+   * providers. Legacy fresh work initializes the oldest existing credential.
    */
-  async credential(orgId: string): Promise<AiCredential | undefined> {
-    const rows = await db
-      .select({
-        provider: schema.aiCredentials.provider,
-        createdAt: schema.aiCredentials.createdAt,
-        credentialsEncrypted: schema.aiCredentials.credentialsEncrypted,
-        defaultModel: schema.aiCredentials.defaultModel,
-      })
-      .from(schema.aiCredentials)
-      .where(eq(schema.aiCredentials.orgId, orgId));
-    const row = preferredCredential(rows);
-    if (!row) return undefined;
+  async credential(
+    orgId: string,
+    snapshot?: AiTextSnapshot,
+    target?: AiTextTarget,
+  ): Promise<AiCredential | undefined> {
+    const selected = await db.transaction(async (tx) => {
+      const state = await lockAiTextSelection(orgId, tx);
+      if (!state) return undefined;
+      const pinned =
+        snapshot ??
+        (target ? await pinAiTextTarget(orgId, tx, state, target) : snapshotAiTextSelection(state));
+      if (!pinned) return undefined;
+      return { row: pinnedAiCredential(state, pinned), pinned };
+    });
+    if (!selected) return undefined;
+    const { row, pinned } = selected;
 
     let apiKey: string;
     let proxyUrl: string | undefined;
@@ -914,7 +986,8 @@ export class GenerateRepository {
     return {
       provider: row.provider,
       apiKey,
-      defaultModel: row.defaultModel,
+      defaultModel: pinned.modelId,
+      admitCall: () => admitAiTextCall(orgId, db, pinned),
       ...(row.provider === "google" && proxyUrl ? { proxyUrl } : {}),
     };
   }

@@ -6,7 +6,9 @@ import {
   type AiCredentialTestResult,
   type AiProviderId,
   type AiTestFailure,
+  type AiTextSettings,
   type CostSummary,
+  DEFAULT_TEXT_MODELS,
   formatUsd,
   type GoogleProxyTestResult,
   hasOrganizationRole,
@@ -15,6 +17,7 @@ import {
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AiTextSettingsForm } from "@/components/ai-text-settings";
 import { AppShell } from "@/components/app-shell";
 import { LanguageCard } from "@/components/language-card";
 import { PaidReplyOrganizationSettings } from "@/components/paid-reply-organization-settings";
@@ -43,6 +46,7 @@ import { applyTheme, readThemePref, type ThemePref } from "@/lib/theme";
  * browser, and so that this sentence can be translated at all.
  */
 const TEST_FAILURE_KEYS: Record<AiTestFailure, string> = {
+  configuration_changed: "aiTestFailConfigurationChanged",
   invalid_key: "aiTestFailInvalidKey",
   model_not_found: "aiTestFailModelNotFound",
   no_structured_output: "aiTestFailNoStructuredOutput",
@@ -201,9 +205,16 @@ export default function SettingsPage() {
   const [spendError, setSpendError] = useState<string | null>(null);
   const [provider, setProvider] = useState<AiProviderId>("google");
   const [keyDrafts, setKeyDrafts] = useState<Partial<Record<AiProviderId, string>>>({});
-  const [modelDrafts, setModelDrafts] = useState<Partial<Record<AiProviderId, string>>>({});
+  const [textSettings, setTextSettings] = useState<AiTextSettings | null>(null);
+  const textSettingsRevision = useRef<number | null>(null);
+  const onTextSettingsChanged = useCallback((value: AiTextSettings) => {
+    if (textSettingsRevision.current !== null && textSettingsRevision.current !== value.revision) {
+      setTestResults({});
+    }
+    textSettingsRevision.current = value.revision;
+    setTextSettings(value);
+  }, []);
   const apiKey = keyDrafts[provider] ?? "";
-  const defaultModel = modelDrafts[provider] ?? "";
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxySaving, setProxySaving] = useState(false);
   const [proxyMessage, setProxyMessage] = useState<"saved" | "removed" | "error" | null>(null);
@@ -287,11 +298,9 @@ export default function SettingsPage() {
     setSaving(true);
     // The field is omitted rather than sent empty: null in that column means
     // "use the provider's own default model", and "" is not a model id.
-    const trimmedModel = defaultModel.trim();
     const body = {
       provider,
       apiKey,
-      ...(trimmedModel === "" ? {} : { defaultModel: trimmedModel }),
     };
     try {
       const saved = await api<AiCredentialPublic>("/api/ai-credentials", {
@@ -304,7 +313,6 @@ export default function SettingsPage() {
         saved,
       ]);
       setKeyDrafts((previous) => ({ ...previous, [provider]: "" }));
-      setModelDrafts((previous) => ({ ...previous, [provider]: "" }));
       setKeySaved(true);
       // A new key makes every earlier verdict meaningless. Same reason the
       // server never caches a test: a green tick must always describe the key
@@ -373,18 +381,27 @@ export default function SettingsPage() {
   }
 
   async function testKey(id: AiProviderId) {
+    const settingsRevision = textSettingsRevision.current;
     const revision = credentialRevisions.current[id] ?? 0;
     setTestResults((prev) => ({ ...prev, [id]: "loading" }));
     try {
       const result = await api<AiCredentialTestResult>(`/api/ai-credentials/${id}/test`, {
         method: "POST",
       });
-      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
+      if (
+        revision !== (credentialRevisions.current[id] ?? 0) ||
+        settingsRevision !== textSettingsRevision.current
+      )
+        return;
       setTestResults((prev) => ({ ...prev, [id]: result }));
       // The test was a real, billed call — the org's spend just moved.
       loadAi();
     } catch (err) {
-      if (revision !== (credentialRevisions.current[id] ?? 0)) return;
+      if (
+        revision !== (credentialRevisions.current[id] ?? 0) ||
+        settingsRevision !== textSettingsRevision.current
+      )
+        return;
       // A REQUEST that failed, not a verdict — see `TestState`. Stored under its
       // own shape so the sentence is rendered as a sentence.
       setTestResults((prev) => ({
@@ -665,6 +682,8 @@ export default function SettingsPage() {
               </p>
             )}
 
+            <AiTextSettingsForm credentials={credentials} onChanged={onTextSettingsChanged} />
+
             {credentials === null ? (
               // Not an EmptyState: an empty state is a verdict, and we do not
               // have one yet. And not a skeleton either once the read has
@@ -681,8 +700,18 @@ export default function SettingsPage() {
                     title={PROVIDER_NAMES[credential.provider] ?? credential.provider}
                     metaClassName="whitespace-normal break-words"
                     meta={
-                      testMeta(credential.provider) ??
-                      (credential.defaultModel || t("aiProviderDefault"))
+                      <div className="whitespace-normal break-words">
+                        <p>
+                          {t("aiTestModel", {
+                            model:
+                              textSettings?.provider === credential.provider
+                                ? (textSettings.modelId ?? DEFAULT_TEXT_MODELS[credential.provider])
+                                : (credential.defaultModel ??
+                                  DEFAULT_TEXT_MODELS[credential.provider]),
+                          })}
+                        </p>
+                        {testMeta(credential.provider)}
+                      </div>
                     }
                     trailing={
                       <>
@@ -692,7 +721,9 @@ export default function SettingsPage() {
                           // Every click is a real, billed call — two physical ones
                           // when the repair retry fires — so an impatient
                           // double-click must not be charged twice.
-                          disabled={testResults[credential.provider] === "loading"}
+                          disabled={
+                            textSettings === null || testResults[credential.provider] === "loading"
+                          }
                           onClick={() => testKey(credential.provider)}
                         >
                           {t("test")}
@@ -780,22 +811,8 @@ export default function SettingsPage() {
                 </p>
               )}
               <Advanced
-                dirty={
-                  defaultModel.trim() !== "" ||
-                  proxyUrl.trim() !== "" ||
-                  Boolean(googleCredential?.proxyConfigured)
-                }
+                dirty={proxyUrl.trim() !== "" || Boolean(googleCredential?.proxyConfigured)}
               >
-                <Input
-                  label={t("aiModelLabel")}
-                  placeholder={t("aiModelPlaceholder")}
-                  value={defaultModel}
-                  disabled={saving}
-                  onChange={(e) =>
-                    setModelDrafts((previous) => ({ ...previous, [provider]: e.target.value }))
-                  }
-                  className="w-full"
-                />
                 <div className="mt-4 border-t border-border-soft pt-4">
                   <Input
                     type="text"
@@ -1115,11 +1132,7 @@ export default function SettingsPage() {
             <Segmented options={themeOptions} value={pref} onChange={changeTheme} />
           </Card>
           <LanguageCard
-            hasUnsavedText={
-              Object.values(keyDrafts).some(Boolean) ||
-              Object.values(modelDrafts).some((value) => value?.trim()) ||
-              proxyUrl !== ""
-            }
+            hasUnsavedText={Object.values(keyDrafts).some(Boolean) || proxyUrl !== ""}
           />
           <Card>
             <h3 className="mb-3 text-base font-semibold text-fg">{t("accountTitle")}</h3>

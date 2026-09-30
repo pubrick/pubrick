@@ -176,7 +176,9 @@ export const newsItemDtoSchema = z.object({
   feedbackDelta: z.number().min(-0.2).max(0.2),
   relevanceReason: z.string().nullable(),
   relevanceUrgency: z.enum(["breaking", "timely", "evergreen"]).nullable(),
-  relevanceErrorCode: z.enum(["no_api_key", "unreadable_key", "model_failed"]).nullable(),
+  relevanceErrorCode: z
+    .enum(["configuration_changed", "no_api_key", "unreadable_key", "model_failed"])
+    .nullable(),
   relevanceScoredAt: z.string().nullable(),
   /** Advisory only, computed from compatible vectors on this returned page. */
   similarStory: z
@@ -262,6 +264,7 @@ export const newsRecheckBatchSchema = z.strictObject({
   errorCode: z
     .enum([
       "no_api_key",
+      "configuration_changed",
       "unreadable_key",
       "invalid_key",
       "model_not_found",

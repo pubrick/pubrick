@@ -1,3 +1,4 @@
+import type { AiTextSnapshot } from "@pubrick/shared";
 import { NEWS_COMMENT_STATUSES, NEWS_FEEDBACK_SIGNALS, NEWS_SOURCE_KINDS } from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
@@ -141,6 +142,7 @@ export const newsItems = pgTable(
   "news_items",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    textSelection: jsonb("text_selection").$type<AiTextSnapshot>(),
     orgId: text("org_id")
       .notNull()
       .references(() => organization.id, { onDelete: "cascade" }),
@@ -175,7 +177,7 @@ export const newsItems = pgTable(
     relevanceReason: text("relevance_reason"),
     relevanceUrgency: text("relevance_urgency", { enum: ["breaking", "timely", "evergreen"] }),
     relevanceErrorCode: text("relevance_error_code", {
-      enum: ["no_api_key", "unreadable_key", "model_failed"],
+      enum: ["configuration_changed", "no_api_key", "unreadable_key", "model_failed"],
     }),
     relevanceScoredAt: timestamp("relevance_scored_at", { withTimezone: true }),
     relevanceAttempts: integer("relevance_attempts").notNull().default(0),
@@ -212,6 +214,7 @@ export const newsItems = pgTable(
     ]),
     enumCheck("news_items_relevance_error_code_check", t.relevanceErrorCode, [
       "no_api_key",
+      "configuration_changed",
       "unreadable_key",
       "model_failed",
     ]),

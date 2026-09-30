@@ -15,6 +15,7 @@ import {
   type AdaptationProposal,
   type AdaptationStatus,
   type AdaptationUpdate,
+  AiTextSelectionChangedError,
   type AiVersionRow,
   type ApiErrorCode,
   adaptationLimit,
@@ -3834,6 +3835,11 @@ export class ContentRepository {
     try {
       credential = await this.credentials.credential(orgId);
     } catch (error) {
+      if (error instanceof AiTextSelectionChangedError)
+        throw conflict(
+          "ai_default_key_missing",
+          "Review the selected text provider in Settings, then retry.",
+        );
       if (!isUnreadableCiphertext(error) && !isMalformedStoredAiCredential(error)) throw error;
       this.logger.error(
         `Editor AI call for org ${orgId} could not read the stored API key: ` +

@@ -14,6 +14,7 @@ export type ClaimReviewOutcome = (typeof CLAIM_REVIEW_OUTCOMES)[number];
 
 /** Safe, user-facing failure codes; never a provider error or credential. */
 export const CLAIM_REVIEW_FAILURES = [
+  "configuration_changed",
   "no_ai_key",
   "no_search_key",
   "automatic_disabled",

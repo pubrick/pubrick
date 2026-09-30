@@ -444,6 +444,7 @@ export type RunListState = (typeof RUN_LIST_STATES)[number];
  * - `unreadable_key` — the stored key would not decrypt.
  */
 export const RUN_FAILURES = [
+  "configuration_changed",
   "cancelled",
   "every_channel_deleted",
   "internal",
