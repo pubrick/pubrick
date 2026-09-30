@@ -15,7 +15,7 @@ platform handoff should be described as automatic delivery.
 | P1 — generation | Five-role generation, source repurposing, reviewed revisions/history, calendar, media/video, roles, Bluesky/Mastodon | Private inbox sources and transcription are extensions of the current bounded source import |
 | P2 — inbound | Feeds, public/private Telegram monitoring, relevance, topic suggestions, hybrid knowledge retrieval, images, reviewed website-to-brand import | X integration and verified social-profile import; richer retrieval evaluation |
 | P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, webhooks, UTM | Write API/MCP, controlled prompt experiments, stock media, evergreen recycling, Telegram decision bot, recurring plans/channel scheduling signals, additional platform metrics |
-| P4 — hosted SaaS | Tenant isolation, usage ledger, public site, verified registration/recovery, durable mail, sandbox subscriptions, plans and resource/dispatch admission | Integrated hosted browser acceptance, real payment sandbox verification, platform-paid AI, operations and support |
+| P4 — hosted SaaS | Tenant isolation, usage ledger, public site, verified registration/recovery, durable mail, sandbox subscriptions, plans and resource/dispatch admission | Real payment sandbox verification, operations and support; platform-paid AI is a later extension |
 | P5 — platform breadth | Several platforms have explicit manual publication workflows | Verified native integrations and broader media formats |
 
 The working reference functionality has been ported across the areas described
@@ -97,8 +97,10 @@ vendor. `packages/billing` now provides official-SDK sandbox and offline fixture
 drivers. Application subscription storage, custom hosted organization routes,
 resource quotas and physical model-call concurrency admission are implemented
 on the integration branch. Encrypted durable authentication mail and manager-only
-workspace data exports are implemented. Integrated browser acceptance and real
-payment sandbox verification remain required before a hosted beta is declared.
+workspace data exports are implemented. The integrated hosted browser journey
+passed against a disposable built stack with a fixture entitlement; this is not
+checkout settlement. Real payment sandbox verification and deployment operations
+remain required before a hosted beta is declared.
 
 Delivery slices:
 
@@ -120,8 +122,10 @@ Delivery slices:
    data-handling policies, and a controlled beta before general availability.
 
 Decisions before live launch: operating entity and payment-provider availability,
-initial AI funding mode, offered plans/limits, deployment region, and support/data
-retention policy. These are unresolved decisions, not implementation promises.
+offered plans/limits, deployment region, and support/data retention policy. The
+development beta uses BYOK with trials disabled; the commercial offering is
+still unconfigured. Platform-paid AI is a later extension.
+The remaining launch decisions are unresolved, not implementation promises.
 
 Acceptance: an external user can register, activate a test subscription, create
 and review a draft, inspect usage, change/cancel a plan, and export their data;

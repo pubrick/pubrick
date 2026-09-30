@@ -78,10 +78,11 @@ media directory and disposable database. No GitHub Actions workflow was dispatch
 ## Remaining acceptance
 
 Hosted controller/module composition now binds seat checks, durable invitation
-mail and deletion tombstones. It remains unregistered while transaction-bound request authority and hosted
-acceptance are integrated. Resource/concurrency admission is covered by the next
-verified milestone below. The hosted user journey
-and full deletion cleanup acceptance remain integration work. Initial trials are disabled. Seller details, domain, plans,
+mail and deletion tombstones. Later integration below registers it in the
+validated application runtime and adds transaction-bound request authority.
+Resource/concurrency admission and durable deletion have local native coverage.
+The hosted browser journey remains an integration acceptance gate. Initial trials
+are disabled. Seller details, domain, plans,
 prices and a real payment sandbox account are operator inputs, not inferred
 product values. No live paid checkout is advertised by the fixture adapter.
 A real versioned release artifact and live commercial launch remain separate
@@ -129,8 +130,148 @@ No live LLM, email, payment, publication or GitHub Actions dispatch was used.
 
 ### Next integration
 
-Hosted runtime activation, transaction-bound request authority, legacy membership
-role union and the hosted browser journey are being prepared separately. The
-completed package does not by itself establish hosted beta acceptance. The fixture
+Hosted runtime activation, transaction-bound request authority and legacy
+membership role union are integrated in the following slice. The completed
+resource package does not by itself establish hosted beta acceptance. The fixture
 billing driver never represents a real paid checkout, and initial trials remain
 disabled. Versioned public release and commercial launch remain acceptance gates.
+
+
+## Hosted runtime and authority integration
+
+Validated hosted configuration now registers billing and custom workspace
+admission in the real Nest application. Missing or malformed operator
+configuration refuses startup. Raw Better Auth organization writers, including
+server-only member addition, cannot bypass this boundary. Self-hosted mode retains
+its explicit billing-disabled behavior; no initial trial is granted.
+
+Successful guards capture an immutable server-derived request authority. The
+Observable subscription enters its asynchronous context, so resource creation,
+queue admission and physical model leases recheck the persisted actor after
+waiting on the shared tenant lock. Revoked/expired sessions, unverified users,
+removed/downgraded members and lost brand grants refuse the next dispatch or write.
+An already admitted physical call may finish; its next retry needs fresh authority.
+Worker system jobs use their separate trusted domain admission. Public read-only
+API keys cannot authorize resource growth or paid calls.
+
+Legacy duplicate membership rows now contribute their recognized roles to the
+application guards, brand access and manager checks, without destructive data
+deduplication. Independent review reproduced five remaining first-row manager
+checks and corrected them, including ordered member locks during Telegram login.
+Raw self-hosted Better Auth invitation permissions remain the SDK's own policy.
+
+### Local evidence before the final assembled gate
+
+Runtime composition passed **14 native cases**, including local SMTP, custom
+invitation acceptance, SDK bypass denial, origin/JSON enforcement, recovery and
+legacy authority. Request authority passed **eight native race cases** plus one
+positive admitted-response case; its focused helpers passed **35 cases**. API
+types and the changed DB package build passed. The assembled workspace at
+`866dd365` then passed **24/24 build and type tasks**. Subsequent manager fixes
+reproduced six failures before **11 focused cases** passed.
+
+Provider review also reproduced false invalid-key reports from HTTP 403. The
+shared classifier, untagged probe fallback and Vertex OAuth now distinguish a
+request refusal from HTTP 401 authentication failure; 403 alone proves neither
+key acceptance nor invalidity. Mocked successful OAuth followed by model 403
+retains one unpriced model receipt; OAuth refusal before model dispatch has none.
+The affected AI tier passed **58 cases**, with one isolated API fallback case.
+The final assembled gate below uses the rebuilt AI package.
+
+### Browser acceptance corrections
+
+The hosted runner uses a disposable database, synthetic secrets, local SMTP and
+authenticated local fixture control. Its deterministic entitlement is test setup,
+not an actual payment. No live model, publication or payment action is performed.
+
+Initial attempts exposed runner faults: an incorrect worker artifact path and a
+synchronous Playwright child that blocked the runner's own SMTP/control listeners.
+Both were fixed; mail capture now runs independently of optional queue diagnostics.
+A subsequent real-browser attempt verified email and exposed a product bug:
+successful hosted login supplied the verification callback URL to the auth SDK,
+which redirected back to verification. Red regressions preceded removal of that
+callback from sign-in; **14 AuthForm tests** passed, preserving default and explicit
+next-page navigation. Further attempts corrected fixture assumptions about the successful brand CTA,
+translated role label and awaiting a persisted channel before navigation. These
+failed attempts are not passing acceptance.
+
+
+### Assembled hosted journey
+
+At `477383df`, the compiled API/worker and production Next artifact passed the
+hosted journey in **35.2 seconds** (**36.8 seconds** including the deliberately
+skipped self-hosted spec). Its build passed **11/11 tasks**, and browser-runner
+TypeScript passed. The journey follows the real authenticated landing CTA rather
+than assuming a signup/login automatically creates a workspace.
+
+Verified actions: local SMTP verification and login; custom empty workspace;
+unpaid brand refusal and raw SDK growth denial; identity-scoped fixture
+entitlement; brand/manual channel; saved and reloaded human draft; manual
+knowledge note; delivered invitation; second independently verified user and
+acceptance; last-seat refusal; expired growth refusal while existing draft reads,
+a complete real archive export and workspace deletion remain available. The
+archive includes the edited draft and knowledge note, and excludes the password.
+
+The fixture entitlement is a deliberate DB setup, not checkout settlement.
+Deletion proves tenant access removal; the synthetic subscription may retain an
+external cancellation obligation because it does not exist in the in-memory
+vendor fixture. Real sandbox checkout/portal/cancellation still require an
+operator payment account. The runner removed its exact container, media and
+servers; all four reserved ports were free afterwards. The user's existing local
+installation and credentials were not changed.
+
+### Final affected backend gate
+
+Against rebuilt package exports, the complete AI tier passed **434 tests in 19
+files**. The affected API tier passed **64 tests in six files**, including **15
+native resource/queue cases** with actual verified DB sessions and the production
+actor callback retained. Anonymous or revoked actors create no admitted write,
+run or enqueue. Existing quota, rollback, crop revision and file cleanup assertions
+remain enforced. No live email, model, payment, publication or Actions dispatch was
+used in this gate. The dependency/type tier passed **19 tasks**. The first full
+Biome run found only two fixture-format differences; commit `01adfd8f` corrected
+those without changing behavior. The subsequent storage gate below reruns the
+full formatting check.
+
+
+### Retained media storage admission
+
+Review found an actual hosted storage bypass: logical deletion removed bytes
+from usage before the worker physically deleted the file. With a stopped worker,
+repeated upload/delete cycles could keep growing retained storage. A native red
+regression preceded the fix; pending and operator-action cleanup proofs now
+retain their captured positive byte sizes until completion. Fresh migration
+0124 adds the nullable proof field, scoped index and positive-value constraint.
+Historical unknown proof sizes refuse media growth; they are never interpreted
+as zero.
+
+Admission checks total live plus retained bytes but verifies the inserted delta
+against live metadata only. Concurrent cleanup acknowledgement therefore does
+not cause a false growth mismatch. A restored identical UUID/tenant/kind is
+counted once, and staging preserves immutable ownership and lease fencing.
+Settings reports only the typed reconciliation-required condition as unknown
+media usage; known subscription state and management actions remain available.
+Unexpected database or counter errors still propagate. Four locales share the
+unknown-usage explanation.
+
+Independent review at `f814b990` found no actionable defect in these boundaries.
+This accounts for committed metadata and retained deletion proofs, **not a hard
+filesystem cap**: process crashes before metadata insertion can leave unowned
+prepared files. The documented recovery requires paused writers, storage
+reconciliation and an operator physical capacity limit.
+
+The assembled source at `f814b990` passed **24/24 build and type tasks**, including
+production web, API and worker artifacts. The assembled affected gate passed
+**86 tests**: DB resource/schema/timestamp **50**, API deletion/admission/status
+**27**, shared billing DTO **1**, and BillingCard **8**. Full Biome checked **990
+files** without changes. The fresh migration also passed the implementation
+worktree historical upgrade/order and constraint inventory checks (**3 tests**);
+its native storage regression included a real private 100-byte file retained
+after logical deletion.
+
+The final production browser journey at `f814b990` passed in **38.2 seconds**
+(**40.7 seconds** including the intentionally skipped self-hosted spec). All
+**11 build tasks** reused the verified artifacts. This repeats the assembled
+journey above against migration 0124 and the nullable billing DTO; fixture
+entitlement still does not prove a real payment checkout. The runner removed
+its exact container/media/processes, and ports 31310–31313 were free afterwards.
