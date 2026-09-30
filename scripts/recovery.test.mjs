@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -261,5 +269,28 @@ test("backup preserves an existing staging directory it did not create", () => {
     assert.throws(() => recover({ action: "backup", project: "isolated", ...state }), /EEXIST/);
     assert.equal(readFileSync(path.join(existingStage, "operator-file"), "utf8"), "must survive");
     assert.ok(!state.calls.some((args) => args.includes("stop")));
-  } finally { state.cleanup(); }
+  } finally {
+    state.cleanup();
+  }
+});
+
+test("backup refuses an outside path whose parent symlink resolves inside the checkout", () => {
+  const state = fixture();
+  const link = path.join(path.dirname(state.cwd), "outside-link");
+  symlinkSync(state.cwd, link, "dir");
+  try {
+    assert.throws(
+      () =>
+        recover({
+          action: "backup",
+          project: "isolated",
+          ...state,
+          directory: path.join(link, "snapshot"),
+        }),
+      /outside the checkout/,
+    );
+    assert.throws(() => statSync(path.join(state.cwd, "snapshot")), /ENOENT/);
+  } finally {
+    state.cleanup();
+  }
 });
