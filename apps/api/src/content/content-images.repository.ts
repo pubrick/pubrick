@@ -290,6 +290,13 @@ export class ContentImagesRepository {
             .limit(1)
             .for("key share");
           if (!organization) throw notFound("content_not_found", "Content item not found");
+          const [brand] = await tx
+            .select({ id: schema.brands.id })
+            .from(schema.brands)
+            .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, preparedItem.brandId)))
+            .limit(1)
+            .for("key share");
+          if (!brand) throw notFound("content_not_found", "Content item not found");
           const [item] = await tx
             .select({
               brandId: schema.contentItems.brandId,
