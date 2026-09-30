@@ -26,6 +26,7 @@ export class BillingService {
   async initialize() {
     await this.catalog.initialize();
     await this.repository.publishCatalog(this.catalog.list());
+    this.catalog.installHistory(await this.repository.history());
   }
   plans() {
     return this.catalog.list().map((plan) => ({

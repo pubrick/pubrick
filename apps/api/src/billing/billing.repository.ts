@@ -12,7 +12,7 @@ import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { CatalogPlan } from "./catalog-core";
-import { attemptRecovery, subscriptionAccess } from "./persistence-policy";
+import { attemptRecovery, entitlementReplacement, subscriptionAccess } from "./persistence-policy";
 import type {
   BillingMapping,
   CheckoutAttempt,
@@ -103,6 +103,19 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
           throw new BillingCoreError("configuration");
       }
     });
+  }
+  async history(): Promise<CatalogPlan[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.billingPlanVersions)
+      .where(identityWhere(schema.billingPlanVersions, this.identity));
+    return rows.map((row) => ({
+      id: row.planId,
+      version: row.version,
+      priceId: row.priceId,
+      limits: row.limits,
+      price: { ...row.price, identity: this.identity, active: true },
+    }));
   }
   private async plan(tx: BillingTransaction, id: string, version: string) {
     const [plan] = await tx
@@ -545,9 +558,10 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   ): Promise<"applied" | "conflict" | "deleted"> {
     return this.db.transaction(async (tx) => {
       const org = await this.organization(orgId, tx);
+      let state: typeof schema.organizationBillingState.$inferSelect | undefined;
       if (org) {
         await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
-        await tx
+        [state] = await tx
           .select()
           .from(schema.organizationBillingState)
           .where(eq(schema.organizationBillingState.orgId, orgId))
@@ -587,6 +601,14 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         )
         .for("update");
       if (existing && existing.orgId !== orgId) throw new BillingCoreError("identity_mismatch");
+      const replacement = entitlementReplacement(
+        state?.subscriptionId ?? null,
+        snapshot.subscriptionId,
+        !!existing,
+        !!state?.access && !!state.accessUntil && state.accessUntil > this.now(),
+      );
+      if (replacement === "cancel_duplicate")
+        await this.cleanup(tx, orgId, snapshot.identity, "subscription", snapshot.subscriptionId);
       const values = {
         orgId,
         ...snapshot.identity,
@@ -599,6 +621,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         periodEnd: new Date(snapshot.periodEnd * 1000),
         cancelAtPeriodEnd: snapshot.cancelAtPeriodEnd,
         revision: (existing?.revision ?? -1) + 1,
+        deleted: existing?.deleted ?? replacement === "cancel_duplicate",
         updatedAt: this.now(),
       };
       await tx
@@ -613,22 +636,22 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
           ],
           set: values,
         });
-      await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
-      await tx
-        .update(schema.organizationBillingState)
-        .set({
-          subscriptionId: snapshot.subscriptionId,
-          planVersionId: storedPlan.id,
-          accessUntil: values.periodEnd,
-          access: subscriptionAccess(
-            snapshot.status,
-            values.periodEnd.getTime(),
-            this.now().getTime(),
-          ),
-          revision: sql`${schema.organizationBillingState.revision}+1`,
-          updatedAt: this.now(),
-        })
-        .where(eq(schema.organizationBillingState.orgId, orgId));
+      if (replacement === "promote")
+        await tx
+          .update(schema.organizationBillingState)
+          .set({
+            subscriptionId: snapshot.subscriptionId,
+            planVersionId: storedPlan.id,
+            accessUntil: values.periodEnd,
+            access: subscriptionAccess(
+              snapshot.status,
+              values.periodEnd.getTime(),
+              this.now().getTime(),
+            ),
+            revision: sql`${schema.organizationBillingState.revision}+1`,
+            updatedAt: this.now(),
+          })
+          .where(eq(schema.organizationBillingState.orgId, orgId));
       await tx
         .update(schema.billingAccounts)
         .set({ revision: account.revision + 1 })

@@ -40,3 +40,15 @@ export function subscriptionAccess(
     periodEndMilliseconds > now
   );
 }
+export function entitlementReplacement(
+  current: string | null,
+  candidate: string,
+  known: boolean,
+  currentLive: boolean,
+): "keep" | "promote" | "cancel_duplicate" {
+  if (current && current !== candidate) {
+    if (known) return "keep";
+    if (currentLive) return "cancel_duplicate";
+  }
+  return "promote";
+}

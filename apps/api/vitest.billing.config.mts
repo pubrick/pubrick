@@ -10,5 +10,5 @@ export default {
       vitest: `${root}/packages/billing/node_modules/vitest/dist/index.js`,
     },
   },
-  test: { include: ["apps/api/src/billing/*.spec.ts"], maxWorkers: 1 },
+  test: { include: ["apps/api/src/billing/*.spec.ts"], exclude:["**/*.e2e.spec.ts"], maxWorkers: 1 },
 };

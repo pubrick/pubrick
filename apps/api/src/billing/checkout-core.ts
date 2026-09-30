@@ -65,7 +65,7 @@ export class CheckoutCore {
   }
   private async execute(initial: CheckoutAttempt): Promise<CheckoutCoreResult> {
     const orgId = initial.orgId;
-    const plan = this.catalog.select(initial.planId);
+    const plan = this.catalog.version(initial.planId, initial.planVersion);
     let attempt = initial;
     this.assertAttempt(orgId, attempt, plan);
     if (attempt.customerId === null) {

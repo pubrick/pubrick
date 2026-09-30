@@ -19,6 +19,7 @@ export class BillingCatalog {
   private readonly definitions: readonly PlanDefinition[];
   private plans: readonly CatalogPlan[] | null = null;
   private initialization: Promise<void> | null = null;
+  private history: readonly CatalogPlan[] = [];
   constructor(
     private readonly driver: BillingDriver,
     definitions: readonly PlanDefinition[],
@@ -88,9 +89,35 @@ export class BillingCatalog {
     return plan;
   }
   forPrice(priceId: string): CatalogPlan {
-    const plan = this.assertReady().find((plan) => plan.priceId === priceId);
+    const plan = [...this.assertReady(), ...this.history].find((plan) => plan.priceId === priceId);
     if (!plan) throw new BillingCoreError("invalid_plan");
     return plan;
+  }
+  version(id: string, version: string): CatalogPlan {
+    const plan = [...this.assertReady(), ...this.history].find(
+      (plan) => plan.id === id && plan.version === version,
+    );
+    if (!plan) throw new BillingCoreError("invalid_plan");
+    return plan;
+  }
+  /** Previously validated persisted catalog versions; never selectable as a new purchase. */
+  installHistory(plans: readonly CatalogPlan[]): void {
+    this.assertReady();
+    for (const plan of plans) {
+      new BillingCatalog(this.driver, [plan]);
+      if (
+        !sameIdentity(plan.price.identity, this.driver.identity) ||
+        plan.priceId !== plan.price.priceId ||
+        !Number.isSafeInteger(plan.price.unitAmount) ||
+        plan.price.unitAmount < 0 ||
+        !Number.isSafeInteger(plan.price.intervalCount) ||
+        plan.price.intervalCount < 1 ||
+        !/[a-z]{3}/.test(plan.price.currency) ||
+        !["day", "week", "month", "year"].includes(plan.price.interval)
+      )
+        throw new BillingCoreError("configuration");
+    }
+    this.history = structuredClone(plans);
   }
   private assertReady(): readonly CatalogPlan[] {
     if (!this.plans) throw new BillingCoreError("not_ready");
