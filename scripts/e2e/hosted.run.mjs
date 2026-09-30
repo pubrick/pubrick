@@ -58,6 +58,36 @@ function start(cmd, args, cwd) {
   children.push(child);
   return child;
 }
+async function startWorker() {
+  const child = spawn(process.execPath, ["dist/main.cjs"], {
+    cwd: "apps/worker",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(child);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Compiled worker did not start")), 180_000);
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      output = (output + chunk.toString()).slice(-4096);
+      if (output.includes("worker started")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      reject(new Error("Compiled worker exited"));
+    });
+  });
+  return child;
+}
 let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= cleanupStack();
@@ -190,7 +220,7 @@ try {
   env.NODE_ENV = "test";
   const api = start(process.execPath, ["dist/main.js"], "apps/api");
   await ready(`${env.API_INTERNAL_URL}/api/health`, api);
-  start(process.execPath, ["dist/main.js"], "apps/worker");
+  const worker = await startWorker();
   const standalone = "apps/web/.next/standalone/apps/web";
   await cp("apps/web/.next/static", `${standalone}/.next/static`, { recursive: true, force: true });
   await cp("apps/web/public", `${standalone}/public`, { recursive: true, force: true });
@@ -199,6 +229,7 @@ try {
   const web = start(process.execPath, ["server.js"], standalone);
   await ready(`${origin}/en/login`, web);
   command("pnpm", ["exec", "playwright", "test", "--config=scripts/e2e/playwright.config.ts"]);
+  if (worker.exitCode !== null) throw new Error("Compiled worker exited during journey");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
