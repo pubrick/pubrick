@@ -251,6 +251,23 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       .set(sourceHeaders)
       .send({ name: "Hosted identity", slug: `hosted-${Date.now()}` })
       .expect(200);
+    // Custom cookie-authenticated writers reject cross-site, missing-origin and non-JSON requests.
+    const rejectedSlug = `csrf-${randomUUID()}`;
+    await owner
+      .post("/api/hosted-admission/create")
+      .send({ name: "CSRF", slug: rejectedSlug })
+      .expect(403);
+    await owner
+      .post("/api/hosted-admission/create")
+      .set({ ...sourceHeaders, "Sec-Fetch-Site": "cross-site" })
+      .send({ name: "CSRF", slug: rejectedSlug })
+      .expect(403);
+    await owner
+      .post("/api/hosted-admission/create")
+      .set(sourceHeaders)
+      .set("Content-Type", "text/plain")
+      .send(JSON.stringify({ name: "CSRF", slug: rejectedSlug }))
+      .expect(403);
     const orgId = organization.body.id;
     const { schema } = await import("@pubrick/db");
     const { eq } = await import("drizzle-orm");
@@ -558,6 +575,7 @@ describe.skipIf(!databaseUrl)("hosted ownership against real auth storage and lo
       expect(JSON.stringify(logger.mock.calls)).not.toContain(email);
       const capabilities = await client.get("/api/auth/pubrick-capabilities").expect(200);
       expect(capabilities.body).toEqual({
+        deploymentMode: "hosted",
         requiresEmailVerification: true,
         passwordRecoveryEnabled: true,
         billingEnabled: true,
