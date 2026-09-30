@@ -7,9 +7,9 @@ import type {
   VerifiedEvent,
 } from "@pubrick/billing";
 import type { createDb } from "@pubrick/db";
-import { type BillingTransaction, schema } from "@pubrick/db";
+import { type BillingTransaction, resolveBillingEntitlement, schema } from "@pubrick/db";
 import { isOrganizationManager, RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
-import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   billingAccountsColumns,
@@ -20,6 +20,7 @@ import {
   billingSubscriptionsColumns,
   organizationBillingStateColumns,
 } from "./billing.projections";
+import type { BillingStatusFacts } from "./billing-status";
 import type { CatalogPlan } from "./catalog-core";
 import {
   attemptRecovery,
@@ -857,19 +858,125 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       return account.customerId;
     });
   }
-  async view(orgId: string) {
-    const [state] = await this.db
-      .select(organizationBillingStateColumns)
-      .from(schema.organizationBillingState)
-      .where(eq(schema.organizationBillingState.orgId, orgId));
-    return state
-      ? {
-          revision: state.revision,
-          access: state.access && !!state.accessUntil && state.accessUntil > this.now(),
-          accessUntil: state.accessUntil,
-          configured: !!state.planVersionId,
-        }
-      : { revision: 0, access: false, accessUntil: null, configured: false };
+  async view(orgId: string, userId: string): Promise<BillingStatusFacts> {
+    return this.db.transaction(async (tx) => {
+      if (!(await this.organization(orgId, tx))) throw new BillingCoreError("invalid_attempt");
+      const [actor] = await tx
+        .select({ role: schema.member.role })
+        .from(schema.member)
+        .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
+        .for("share");
+      if (!actor || !isOrganizationManager(actor.role))
+        throw new BillingCoreError("invalid_attempt");
+      const now = this.now();
+      const entitlement = await resolveBillingEntitlement(orgId, tx, now);
+      const scoped =
+        entitlement.identity !== null &&
+        sameIdentity(entitlement.identity as BillingIdentity, this.identity);
+      const [state] = await tx
+        .select({ subscriptionId: schema.organizationBillingState.subscriptionId })
+        .from(schema.organizationBillingState)
+        .where(eq(schema.organizationBillingState.orgId, orgId));
+      const [subscription] =
+        state?.subscriptionId && scoped
+          ? await tx
+              .select({
+                status: schema.billingSubscriptions.status,
+                cancelAtPeriodEnd: schema.billingSubscriptions.cancelAtPeriodEnd,
+              })
+              .from(schema.billingSubscriptions)
+              .where(
+                and(
+                  eq(schema.billingSubscriptions.orgId, orgId),
+                  eq(schema.billingSubscriptions.subscriptionId, state.subscriptionId),
+                  identityWhere(schema.billingSubscriptions, this.identity),
+                  eq(schema.billingSubscriptions.deleted, false),
+                ),
+              )
+          : [];
+      const [account] = await tx
+        .select({
+          customerId: schema.billingAccounts.customerId,
+          deleted: schema.billingAccounts.deleted,
+        })
+        .from(schema.billingAccounts)
+        .where(
+          and(
+            eq(schema.billingAccounts.orgId, orgId),
+            identityWhere(schema.billingAccounts, this.identity),
+          ),
+        );
+      const [attempt] = await tx
+        .select({ status: schema.billingCheckoutAttempts.status })
+        .from(schema.billingCheckoutAttempts)
+        .where(
+          and(
+            eq(schema.billingCheckoutAttempts.orgId, orgId),
+            identityWhere(schema.billingCheckoutAttempts, this.identity),
+            eq(schema.billingCheckoutAttempts.deleted, false),
+            inArray(schema.billingCheckoutAttempts.status, ["pending", "ready", "operator_action"]),
+          ),
+        );
+      const members = await tx
+        .select({ userId: schema.member.userId, email: schema.user.email })
+        .from(schema.member)
+        .innerJoin(schema.user, eq(schema.member.userId, schema.user.id))
+        .where(eq(schema.member.organizationId, orgId));
+      const memberEmails = new Set(members.map((member) => member.email.toLowerCase()));
+      const pending = await tx
+        .select({ email: schema.invitation.email })
+        .from(schema.invitation)
+        .where(
+          and(
+            eq(schema.invitation.organizationId, orgId),
+            eq(schema.invitation.status, "pending"),
+            gt(schema.invitation.expiresAt, now),
+          ),
+        );
+      const reserved = new Set(
+        pending
+          .map((invite) => invite.email.toLowerCase())
+          .filter((email) => !memberEmails.has(email)),
+      );
+      const [usage] = await tx
+        .select({
+          brands: sql<string>`(SELECT count(*) FROM ${schema.brands} WHERE ${schema.brands.orgId} = ${orgId})`,
+          channels: sql<string>`(SELECT count(*) FROM ${schema.channels} WHERE ${schema.channels.orgId} = ${orgId})`,
+          mediaBytes: sql<string>`(SELECT coalesce(sum(${schema.mediaAssets.byteSize}), 0) FROM ${schema.mediaAssets} WHERE ${schema.mediaAssets.orgId} = ${orgId})`,
+          concurrentJobs: sql<string>`(SELECT count(*) FROM ${schema.pipelineRuns} WHERE ${schema.pipelineRuns.orgId} = ${orgId} AND ${schema.pipelineRuns.status} IN ('queued','running'))`,
+        })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId));
+      const counters = {
+        seats: new Set(members.map((member) => member.userId)).size + reserved.size,
+        brands: Number(usage?.brands ?? 0),
+        channels: Number(usage?.channels ?? 0),
+        mediaBytes: Number(usage?.mediaBytes ?? 0),
+        concurrentJobs: Number(usage?.concurrentJobs ?? 0),
+      };
+      if (Object.values(counters).some((value) => !Number.isSafeInteger(value) || value < 0))
+        throw new BillingCoreError("retry_required");
+      return {
+        configured: scoped && entitlement.planId !== null,
+        live: scoped && (entitlement.decision === "active" || entitlement.decision === "trial"),
+        subscriptionStatus: (subscription?.status as SubscriptionSnapshot["status"]) ?? null,
+        plan:
+          scoped && entitlement.planId && entitlement.version
+            ? { id: entitlement.planId, version: entitlement.version }
+            : null,
+        limits: scoped ? entitlement.limits : null,
+        usage: counters,
+        accessUntil: scoped ? entitlement.accessUntil : null,
+        cancelAtPeriodEnd: subscription?.cancelAtPeriodEnd ?? false,
+        canManage: true,
+        pending: attempt?.status === "pending" || attempt?.status === "ready",
+        blocked:
+          account?.deleted === true ||
+          attempt?.status === "operator_action" ||
+          (entitlement.identity !== null && !scoped),
+        customer: !!account?.customerId && !account.deleted,
+      };
+    });
   }
   async getCleanupAttempt(id: string) {
     const [row] = await this.db

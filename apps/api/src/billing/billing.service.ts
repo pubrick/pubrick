@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type BillingDriver, BillingError } from "@pubrick/billing";
 import type { BillingRepository } from "./billing.repository";
+import { billingStatus } from "./billing-status";
 import { BillingCatalog } from "./catalog-core";
 import { CheckoutCore } from "./checkout-core";
 import { CleanupCore, CleanupOperatorRequired } from "./cleanup-core";
@@ -41,8 +42,13 @@ export class BillingService {
       intervalCount: plan.price.intervalCount,
     }));
   }
-  status(orgId: string) {
-    return this.repository.view(orgId);
+  async status(orgId: string, userId: string) {
+    // Accessing the validated catalog refuses reads if initialization is unavailable.
+    this.catalog.list();
+    return billingStatus(
+      await this.repository.view(orgId, userId),
+      this.driver.identity.provider === "stripe",
+    );
   }
   start(orgId: string, userId: string, planId: string, locale: string) {
     return this.checkout.start(orgId, userId, planId, locale);

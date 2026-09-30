@@ -44,8 +44,8 @@ async function result<T>(action: () => Promise<T>): Promise<T> {
 @BrandScope({ kind: "org", roles: "manager" })
 export class BillingController {
   constructor(@Inject(BillingService) private readonly billing: BillingService) {}
-  @Get() status(@OrgId() orgId: string) {
-    return result(() => this.billing.status(orgId));
+  @Get("status") status(@OrgId() orgId: string, @UserId() userId: string) {
+    return result(() => this.billing.status(orgId, userId));
   }
   @Post("checkout")
   @HttpCode(200)

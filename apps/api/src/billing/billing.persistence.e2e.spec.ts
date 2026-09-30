@@ -230,6 +230,8 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
         kind: "subscription.changed",
         resourceId: subscriptionId,
       });
+      // Injected test clocks must not predate the receipt's real database default.
+      clock = new Date(Math.max(clock.getTime(), Date.now() + 1000));
       const claim = await repository.claim(id),
         mapping = await repository.mapping(identity, account?.customerId ?? "", subscriptionId);
       if (!claim || !mapping) throw new Error("fixture");
@@ -262,6 +264,22 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
       resolveBillingEntitlement(tenant.orgId, tx, clock),
     );
     expect(entitlement).toMatchObject({ decision: "active", identity, limits: plan.limits });
+    const status = await new BillingService(
+      driver,
+      catalog,
+      repository,
+      "http://localhost:31300",
+    ).status(tenant.orgId, tenant.userId);
+    expect(status).toMatchObject({
+      mode: "test",
+      funding: "byok",
+      status: "active",
+      plan: { id: plan.id, version: plan.version },
+      limits: plan.limits,
+      canManage: true,
+      checkoutAvailable: false,
+      portalAvailable: false,
+    });
   });
   it("allows owner/admin capabilities within supported combined roles", async () => {
     const tenant = await org("owner,author");
@@ -365,6 +383,96 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     expect(
       failedAgain.every((row) => row.attempts === 2 && row.next.getTime() >= now + 91000),
     ).toBe(true);
+  });
+  it("returns tenant-scoped exact usage including distinct pending reserved seats", async () => {
+    const tenant = await org("owner,author"),
+      other = await org();
+    await db.insert(schema.member).values({
+      id: randomUUID(),
+      organizationId: tenant.orgId,
+      userId: tenant.userId,
+      role: "author",
+    });
+    await db.insert(schema.invitation).values([
+      {
+        id: randomUUID(),
+        organizationId: tenant.orgId,
+        email: "Reserved@Example.test",
+        status: "pending",
+        expiresAt: new Date(clock.getTime() + 3600000),
+        inviterId: tenant.userId,
+      },
+      {
+        id: randomUUID(),
+        organizationId: tenant.orgId,
+        email: "reserved@example.test",
+        status: "pending",
+        expiresAt: new Date(clock.getTime() + 3600000),
+        inviterId: tenant.userId,
+      },
+      {
+        id: randomUUID(),
+        organizationId: tenant.orgId,
+        email: `${tenant.userId}@example.test`.toUpperCase(),
+        status: "pending",
+        expiresAt: new Date(clock.getTime() + 3600000),
+        inviterId: tenant.userId,
+      },
+      {
+        id: randomUUID(),
+        organizationId: tenant.orgId,
+        email: "expired@example.test",
+        status: "pending",
+        expiresAt: new Date(clock.getTime() - 1),
+        inviterId: tenant.userId,
+      },
+    ]);
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId: tenant.orgId, name: "Usage fixture" })
+      .returning({ id: schema.brands.id });
+    if (!brand) throw new Error("fixture");
+    await db.insert(schema.brands).values({ orgId: other.orgId, name: "Other tenant" });
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId: tenant.orgId,
+        brandId: brand.id,
+        platform: "dzen",
+        name: "Usage channel",
+      })
+      .returning({ id: schema.channels.id });
+    if (!channel) throw new Error("fixture");
+    await db.insert(schema.mediaAssets).values({
+      orgId: tenant.orgId,
+      brandId: brand.id,
+      name: "Usage media",
+      byteSize: 1234,
+      width: 1,
+      height: 1,
+    });
+    await db.insert(schema.pipelineRuns).values(
+      (["queued", "running", "succeeded"] as const).map((status) => ({
+        orgId: tenant.orgId,
+        brandId: brand.id,
+        input: { kind: "brief" as const, text: "Usage fixture", channelIds: [channel.id] },
+        status,
+      })),
+    );
+    const service = new BillingService(driver, catalog, repository, "http://localhost:31300");
+    expect(await service.status(tenant.orgId, tenant.userId)).toMatchObject({
+      status: "unconfigured",
+      usage: { seats: 2, brands: 1, channels: 1, mediaBytes: 1234, concurrentJobs: 2 },
+      plan: null,
+      limits: null,
+      accessUntil: null,
+      canManage: true,
+      checkoutAvailable: false,
+      portalAvailable: false,
+    });
+    await expect(service.status(tenant.orgId, other.userId)).rejects.toMatchObject({
+      code: "invalid_attempt",
+    });
   });
   it("refuses restored fixture inventory only for its exact configured identity", async () => {
     const restoredIdentity = {

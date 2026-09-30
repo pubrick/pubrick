@@ -177,3 +177,24 @@ SDK timeout bounds each network call; it is not a claim that the whole unit or a
 blocked database completes within one timeout. No mutation is abandoned halfway.
 Scheduler diagnostics expose only closed domain codes and aggregate deferred or
 failed status; logging never includes provider messages, secrets or raw bodies.
+
+## Billing status read contract
+
+Manager-only `GET /api/billing` returns sandbox `mode: "test"`, `funding: "byok"`,
+closed status, immutable `{ id, version }` plan, validated limits, usage, ISO expiry,
+cancellation flag and action availability. The repository rechecks the actor and
+scope under the organization admission lock. Current state must match the
+configured provider/environment/account; an old restored account cannot advertise
+new purchase or portal actions. A pending checkout never grants access or limits.
+Fixture purchase/portal URLs are simulator fixtures, so both actions are unavailable
+in the browser even when a fixture customer exists.
+
+`usage.seats` counts distinct member user IDs plus distinct lowercased pending,
+unexpired invitation emails not already represented by member emails. This matches
+the hosted admission domain's canonical stored addresses. Brands/channels are
+actual organization rows; media is the sum of stored asset bytes.
+`usage.concurrentJobs` currently counts only genuine queued/running pipeline rows.
+It does not claim to cover every infrastructure job, AI auxiliary operation, or a
+future durable reservation ledger; that admission integration is a separate gate.
+No customer IDs, subscription IDs, secrets, external URLs or raw provider facts
+are exposed by this status DTO.
