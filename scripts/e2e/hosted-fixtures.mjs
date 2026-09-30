@@ -77,10 +77,20 @@ export async function startHostedFixtures({ databaseUrl, origin, smtpPort, contr
             if (link.origin === origin) links.push(link.href);
           }
         }
-        const jobs = await pool.query(
-          "SELECT state, output->>'code' AS code, output->>'reason' AS reason FROM pgboss.job WHERE name IN ('auth-mail','auth-mail-dlq') ORDER BY created_on LIMIT 10",
-        );
-        response.end(JSON.stringify({ links, captured: messages.length, jobs: jobs.rows }));
+        let jobs = [];
+        let queueDiagnostic = null;
+        try {
+          const result = await pool.query(
+            "SELECT state, output->>'code' AS code, output->>'reason' AS reason FROM pgboss.job WHERE name IN ('auth-mail','auth-mail-dlq') ORDER BY created_on LIMIT 10",
+          );
+          jobs = result.rows;
+        } catch (error) {
+          queueDiagnostic =
+            typeof error?.code === "string" && /^[A-Z0-9_]+$/.test(error.code)
+              ? error.code
+              : "fixture_failure";
+        }
+        response.end(JSON.stringify({ links, captured: messages.length, jobs, queueDiagnostic }));
         return;
       }
       if (request.method !== "POST" || !["/entitlement", "/expire"].includes(url.pathname)) {

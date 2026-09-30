@@ -36,8 +36,13 @@ async function mailLink(page: Page, email: string, part: string) {
             links: string[];
             captured: number;
             jobs: unknown[];
+            queueDiagnostic: string | null;
           };
-          diagnostics = { captured: body.captured, jobs: body.jobs };
+          diagnostics = {
+            captured: body.captured,
+            jobs: body.jobs,
+            queueDiagnostic: body.queueDiagnostic,
+          };
           link = body.links.at(-1);
           return Boolean(link);
         },
