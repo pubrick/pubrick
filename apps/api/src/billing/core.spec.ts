@@ -75,11 +75,16 @@ const attempt: CheckoutAttempt = {
   customerId: null,
   customerKey: "org_server:customer:1",
   checkoutKey: "org_server:checkout:1",
+  successUrl: "http://localhost:31300/en/settings",
+  cancelUrl: "http://localhost:31300/en/settings",
   email: "verified@example.test",
 };
 function checkoutStore(): CheckoutStore {
   return {
-    begin: vi.fn().mockResolvedValue({ kind: "attempt", attempt }),
+    begin: vi.fn().mockImplementation(async (_org, _user, _plan, _identity, preferredUrls) => ({
+      kind: "attempt",
+      attempt: { ...attempt, ...preferredUrls },
+    })),
     attachCustomer: vi.fn().mockImplementation(async (_org, current, customerId) => ({
       ...current,
       customerId,
@@ -120,6 +125,10 @@ it("records durable attempts before customer/checkout I/O and reuses their persi
     "user_verified",
     catalog.select(plan.id),
     identity,
+    {
+      successUrl: "http://localhost:31300/ru/settings",
+      cancelUrl: "http://localhost:31300/ru/settings",
+    },
   );
   expect(customer).toHaveBeenCalledWith({
     orgReference: "org_server",

@@ -12,6 +12,7 @@ export type CatalogPlan = Readonly<PlanDefinition & { price: PriceSnapshot }>;
 export class BillingCatalog {
   private readonly definitions: readonly PlanDefinition[];
   private plans: readonly CatalogPlan[] | null = null;
+  private initialization: Promise<void> | null = null;
   constructor(
     private readonly driver: BillingDriver,
     definitions: readonly PlanDefinition[],
@@ -39,8 +40,16 @@ export class BillingCatalog {
     }
     this.definitions = structuredClone(definitions);
   }
-  async initialize(): Promise<void> {
+  initialize(): Promise<void> {
+    if (this.initialization) return this.initialization;
     this.plans = null;
+    const initialization = this.load().finally(() => {
+      if (this.initialization === initialization) this.initialization = null;
+    });
+    this.initialization = initialization;
+    return initialization;
+  }
+  private async load(): Promise<void> {
     const identity = await this.driver.validateAccount();
     if (!sameIdentity(identity, this.driver.identity))
       throw new BillingCoreError("identity_mismatch");

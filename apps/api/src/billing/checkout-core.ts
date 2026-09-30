@@ -40,7 +40,11 @@ export class CheckoutCore {
     if (!orgId || !userId || !["en", "es", "ru", "pt"].includes(locale))
       throw new BillingCoreError("invalid_attempt");
     const plan = this.catalog.select(planId);
-    const begun = await this.store.begin(orgId, userId, plan, this.catalog.identity);
+    const preferredUrl = `${this.origin}/${locale}/settings`;
+    const begun = await this.store.begin(orgId, userId, plan, this.catalog.identity, {
+      successUrl: preferredUrl,
+      cancelUrl: preferredUrl,
+    });
     if (begun.kind === "ready") return begun;
     let attempt = begun.attempt;
     this.assertAttempt(orgId, attempt, plan);
@@ -55,18 +59,25 @@ export class CheckoutCore {
       const attached = await this.store.attachCustomer(orgId, attempt, customer.customerId);
       if (!attached) return { kind: "pending" };
       this.assertAttempt(orgId, attached, plan);
+      if (
+        attached.successUrl !== attempt.successUrl ||
+        attached.cancelUrl !== attempt.cancelUrl ||
+        attached.id !== attempt.id ||
+        attached.customerKey !== attempt.customerKey ||
+        attached.checkoutKey !== attempt.checkoutKey
+      )
+        throw new BillingCoreError("invalid_attempt");
       if (attached.customerId !== customer.customerId)
         throw new BillingCoreError("identity_mismatch");
       attempt = attached;
     }
     if (!attempt.customerId) throw new BillingCoreError("invalid_attempt");
-    const returnUrl = `${this.origin}/${locale}/settings`;
     const session = await this.driver.createCheckout({
       customerId: attempt.customerId,
       priceId: attempt.priceId,
       idempotencyKey: attempt.checkoutKey,
-      successUrl: returnUrl,
-      cancelUrl: returnUrl,
+      successUrl: attempt.successUrl,
+      cancelUrl: attempt.cancelUrl,
     });
     return (await this.store.complete(orgId, attempt, session))
       ? { kind: "ready", session }
@@ -84,6 +95,25 @@ export class CheckoutCore {
       attempt.priceId !== plan.priceId ||
       !attempt.customerKey ||
       !attempt.checkoutKey
+    )
+      throw new BillingCoreError("invalid_attempt");
+    this.assertReturnUrl(attempt.successUrl);
+    this.assertReturnUrl(attempt.cancelUrl);
+  }
+  private assertReturnUrl(raw: string): void {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw new BillingCoreError("invalid_attempt");
+    }
+    if (
+      url.origin !== this.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/(en|es|ru|pt)\/settings$/.test(url.pathname)
     )
       throw new BillingCoreError("invalid_attempt");
   }

@@ -13,6 +13,8 @@ IDs/versions and capacity limits are server policy; currency, amount and recurri
 interval come from authoritative price retrieval. Initial current versions are
 supported; persistent historical/deprecated versions require the subsequent
 catalog repository before real plan changes are exposed.
+Overlapping initialization calls share one in-flight result; subsequent failed
+initialization closes the catalog instead of racing an earlier successful load.
 
 `CheckoutCore.start(orgId, userId, planId, locale)` selects that catalog and asks
 `CheckoutStore.begin` to atomically authorize the authenticated owner/admin and
@@ -22,6 +24,11 @@ The customer mapping must commit before checkout. Revision conflicts return
 `pending`; SDK ambiguity keeps the durable attempt for reconciliation. Successful
 checkout URLs are saved before returning `ready` and never grant subscription
 access. Store authorization must run even when returning a saved ready result.
+The store persists the preferred return URLs only when creating an attempt and
+keeps them immutable across retries, including locale changes. Stored URLs must
+match the configured public origin and a supported locale's Settings path.
+Restoring an unresolved attempt under a different origin requires reconciliation;
+it cannot reuse the idempotency key with a changed return URL.
 
 ## Durable receipt and reconciliation
 

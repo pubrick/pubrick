@@ -18,6 +18,8 @@ export type CheckoutAttempt = Readonly<{
   customerId: string | null;
   customerKey: string;
   checkoutKey: string;
+  successUrl: string;
+  cancelUrl: string;
   email?: string;
 }>;
 export interface CheckoutStore {
@@ -27,6 +29,8 @@ export interface CheckoutStore {
     userId: string,
     plan: CatalogPlan,
     identity: BillingIdentity,
+    /** Persist once for a new attempt; existing attempts keep their original URLs. */
+    preferredUrls: Readonly<{ successUrl: string; cancelUrl: string }>,
   ): Promise<
     { kind: "attempt"; attempt: CheckoutAttempt } | { kind: "ready"; session: SessionResult }
   >;
