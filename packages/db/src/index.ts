@@ -19,4 +19,5 @@ export type {
   PaidReplyTransaction,
 } from "./paid-reply-admission.js";
 export { admitPaidReplyAttempt } from "./paid-reply-admission.js";
+export * from "./resource-admission.js";
 export * as schema from "./schema/index.js";
