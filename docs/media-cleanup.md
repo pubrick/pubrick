@@ -51,22 +51,11 @@ attempts issues a new fenced attempt; never change its organization/kind proof.
 ## Restore and rollout
 
 Apply migration 0123 before enabling the worker module and transactional deletion
-bindings. It also gives five existing billing/physical-call CHECK constraints
-canonical names, retaining exactly their old predicates. Replacement uses
-`NOT VALID` to avoid scanning populated billing history under the startup lock;
-new writes are checked immediately. Operators may subsequently validate each
-named constraint during a maintenance window with `ALTER TABLE … VALIDATE
-CONSTRAINT …` (checkout status, receipt kind/status, subscription status and
-physical-call kind). Their unchanged predicates already guarded existing rows.
+bindings. It also renames five existing billing/physical-call CHECK constraints to
+canonical names with `ALTER TABLE … RENAME CONSTRAINT`. Their predicates and
+validated status remain unchanged; no table scan or later validation is needed.
 
-```sql
-ALTER TABLE billing_checkout_attempts VALIDATE CONSTRAINT billing_checkout_attempts_status_check;
-ALTER TABLE billing_receipts VALIDATE CONSTRAINT billing_receipts_kind_check;
-ALTER TABLE billing_receipts VALIDATE CONSTRAINT billing_receipts_status_check;
-ALTER TABLE billing_subscriptions VALIDATE CONSTRAINT billing_subscriptions_status_check;
-ALTER TABLE hosted_ai_call_leases VALIDATE CONSTRAINT hosted_ai_call_leases_kind_check;
-```
- API fast-path unlink may remain: the durable worker then sees `ENOENT`
+API fast-path unlink may remain: the durable worker then sees `ENOENT`
 and completes the same request. Billing expiry never blocks deletion or cleanup.
 
 Stop API and workers before restoring database and media snapshots, as required

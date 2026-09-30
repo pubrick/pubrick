@@ -18,15 +18,10 @@ CREATE TABLE "media_cleanup_work" (
 	CONSTRAINT "media_cleanup_work_last_error_check" CHECK ("media_cleanup_work"."last_error" in ('asset_exists', 'lease_exhausted', 'permission', 'storage_unavailable', 'invalid_path'))
 );
 --> statement-breakpoint
-ALTER TABLE "billing_checkout_attempts" DROP CONSTRAINT "billing_checkout_status_check";--> statement-breakpoint
-ALTER TABLE "billing_receipts" DROP CONSTRAINT "billing_receipt_kind_check";--> statement-breakpoint
-ALTER TABLE "billing_receipts" DROP CONSTRAINT "billing_receipt_status_check";--> statement-breakpoint
-ALTER TABLE "billing_subscriptions" DROP CONSTRAINT "billing_subscription_status_check";--> statement-breakpoint
-ALTER TABLE "hosted_ai_call_leases" DROP CONSTRAINT "hosted_ai_call_kind_check";--> statement-breakpoint
+ALTER TABLE "billing_checkout_attempts" RENAME CONSTRAINT "billing_checkout_status_check" TO "billing_checkout_attempts_status_check";--> statement-breakpoint
+ALTER TABLE "billing_receipts" RENAME CONSTRAINT "billing_receipt_kind_check" TO "billing_receipts_kind_check";--> statement-breakpoint
+ALTER TABLE "billing_receipts" RENAME CONSTRAINT "billing_receipt_status_check" TO "billing_receipts_status_check";--> statement-breakpoint
+ALTER TABLE "billing_subscriptions" RENAME CONSTRAINT "billing_subscription_status_check" TO "billing_subscriptions_status_check";--> statement-breakpoint
+ALTER TABLE "hosted_ai_call_leases" RENAME CONSTRAINT "hosted_ai_call_kind_check" TO "hosted_ai_call_leases_kind_check";--> statement-breakpoint
 CREATE INDEX "media_cleanup_pending_idx" ON "media_cleanup_work" USING btree ("next_attempt_at","asset_id") WHERE "media_cleanup_work"."state" = 'pending';--> statement-breakpoint
 CREATE INDEX "media_cleanup_completed_idx" ON "media_cleanup_work" USING btree ("completed_at","asset_id") WHERE "media_cleanup_work"."state" = 'completed';--> statement-breakpoint
-ALTER TABLE "billing_checkout_attempts" ADD CONSTRAINT "billing_checkout_attempts_status_check" CHECK ("billing_checkout_attempts"."status" IN ('pending','ready','closed','operator_action')) NOT VALID;--> statement-breakpoint
-ALTER TABLE "billing_receipts" ADD CONSTRAINT "billing_receipts_kind_check" CHECK ("billing_receipts"."kind" IN ('subscription.changed','checkout.completed','invoice.changed')) NOT VALID;--> statement-breakpoint
-ALTER TABLE "billing_receipts" ADD CONSTRAINT "billing_receipts_status_check" CHECK ("billing_receipts"."status" IN ('pending','processing','complete','ignored','retry','operator_action')) NOT VALID;--> statement-breakpoint
-ALTER TABLE "billing_subscriptions" ADD CONSTRAINT "billing_subscriptions_status_check" CHECK ("billing_subscriptions"."status" IN ('active','trialing','past_due','unpaid','canceled','incomplete','incomplete_expired','paused')) NOT VALID;--> statement-breakpoint
-ALTER TABLE "hosted_ai_call_leases" ADD CONSTRAINT "hosted_ai_call_leases_kind_check" CHECK ("hosted_ai_call_leases"."kind" in ('text', 'image', 'embedding', 'probe')) NOT VALID;

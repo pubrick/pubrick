@@ -523,7 +523,8 @@ describe("every enum CHECK reaches the database through a migration", () => {
   );
   /**
    * The LAST word on each named constraint, in migration order: a set can be
-   * widened by a later `DROP CONSTRAINT` + `ADD CONSTRAINT`, and the earlier
+   * widened by a later `DROP CONSTRAINT` + `ADD CONSTRAINT`, or renamed with
+   * `RENAME CONSTRAINT` while preserving its exact known values. The earlier
    * statement is then history rather than the state of the database.
    */
   const inMigrations = new Map<string, string[]>();
@@ -531,16 +532,22 @@ describe("every enum CHECK reaches the database through a migration", () => {
     .filter((f) => f.endsWith(".sql"))
     .sort()) {
     const sql = readFileSync(path.join(migrationsDir, file), "utf8");
-    // Follow drops as well as enum additions. A later migration can replace an
+    // Follow drops and renames as well as enum additions. A later migration can replace an
     // enum pin with a different CHECK (for example, custom knowledge categories).
     // Scanning additions alone would mistake the historical enum for live SQL.
     // Match an enum's leading column (including nullable enums), not an IN
     // nested inside a wider state check such as a paid attempt's live fields.
     for (const match of sql.matchAll(
-      /\bDROP CONSTRAINT "([^"]+)"|\bCONSTRAINT "([^"]+)" CHECK \("[^"]+"\."[^"]+"(?: IS NULL OR "[^"]+"\."[^"]+")?\s+in\s*\(([^)]*)\)\)/gi,
+      /\bRENAME CONSTRAINT "([^"]+)" TO "([^"]+)"|\bDROP CONSTRAINT "([^"]+)"|\bCONSTRAINT "([^"]+)" CHECK \("[^"]+"\."[^"]+"(?: IS NULL OR "[^"]+"\."[^"]+")?\s+in\s*\(([^)]*)\)\)/gi,
     )) {
-      const [, dropped, added, list] = match;
-      if (dropped) {
+      const [, renamedFrom, renamedTo, dropped, added, list] = match;
+      if (renamedFrom && renamedTo) {
+        const knownValues = inMigrations.get(renamedFrom);
+        if (knownValues) {
+          inMigrations.delete(renamedFrom);
+          inMigrations.set(renamedTo, knownValues);
+        }
+      } else if (dropped) {
         inMigrations.delete(dropped);
       } else if (added && list) {
         inMigrations.set(
