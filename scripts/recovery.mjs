@@ -202,8 +202,11 @@ export function recover({
           fail("Runtime media volume differs from Compose configuration.");
       }
       if (existsSync(destination)) fail("Backup destination already exists.");
-      staged = `${destination}.partial-${process.pid}`;
-      mkdirSync(staged, { mode: 0o700 });
+      const stagingPath = `${destination}.partial-${process.pid}`;
+      mkdirSync(stagingPath, { mode: 0o700 });
+      // Cleanup owns this path only after exclusive creation succeeds. A stale
+      // PID-reused directory or user file must survive an EEXIST refusal.
+      staged = stagingPath;
       restart = writers.filter((service) => running.includes(service));
       if (restart.length) dc(["stop", "--timeout", "120", ...restart]);
       // Compose config is resolved before and again after quiescing. Refuse an
