@@ -18,7 +18,9 @@ Caller-provided addresses are never used as actor identity. An invitation is
 accepted only by its current verified recipient; consumed invitations additionally
 bind replay to the original user ID through `hosted_invitation_acceptances`.
 
-The controller validates its request DTOs and passes an explicit organization ID.
+The API service uses maintained Zod email validation and rejects unrecognized
+actor fields in invitation requests. Repository callers are internal and must
+use that validated boundary. The controller validates its request DTOs and passes an explicit organization ID.
 Create and invitation acceptance do not require an active organization. Other
 mutations require existing membership and the permissions below. The repository
 is still authoritative if an upstream guard or active organization changes.
@@ -80,7 +82,7 @@ member's role; it never inserts another membership or escalates its role.
 `maxOwnedWorkspaces` limits current owned organizations.
 `maxCreationsPerDay` limits account creations in a rolling 24-hour window,
 including workspaces subsequently deleted. The durable creation claim stores
-only user ID and timestamp. Old claims are pruned during creation; idle accounts'
+only user ID and timestamp. Only the acting account’s old claims are pruned during creation; idle accounts'
 expired claims may remain until the next sweep/creation, and operations must run
 periodic expiry cleanup before claiming strict physical 24-hour retention.
 Deletion does not create a permanent lifetime ban. No legacy member deduplication
@@ -94,8 +96,8 @@ lock cycles caused by bulk updates to other accounts' sessions.
 
 ## Integration and verification
 
-Migration 0121 must be generated after the predecessor Vertex migration 0120 is
-frozen; schema source alone is not a deployed feature. Composition, raw SDK denial,
+Migration 0121 adds only the account claims and accepted-recipient tables after
+Vertex migration0120. Composition, raw SDK denial,
 request validation, billing and the transaction outbox bridge belong to the API
 integration. The new domain service is deliberately not independently enabled.
 

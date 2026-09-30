@@ -10,6 +10,7 @@ import {
   type HostedAdmissionLocale,
   HostedAdmissionRepository,
 } from "@pubrick/db";
+import { hostedInviteInputSchema } from "./hosted-admission.contracts";
 
 /** The module binds the database-only billing and durable-mail ports at composition time. */
 export class HostedAdmissionService {
@@ -34,7 +35,13 @@ export class HostedAdmissionService {
     actor: HostedAdmissionActor,
     input: { email: string; role: string; locale: HostedAdmissionLocale; resendId?: string },
   ) {
-    return this.invoke(() => this.repository.invite(orgId, actor, input));
+    const parsed = hostedInviteInputSchema.safeParse(input);
+    if (!parsed.success)
+      throw new BadRequestException({
+        code: "invalid_input",
+        message: "Workspace action could not be completed.",
+      });
+    return this.invoke(() => this.repository.invite(orgId, actor, parsed.data));
   }
   accept(orgId: string, actor: HostedAdmissionActor, invitationId: string) {
     return this.invoke(() => this.repository.accept(orgId, actor, invitationId));

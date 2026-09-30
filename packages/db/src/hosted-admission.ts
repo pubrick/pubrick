@@ -127,9 +127,10 @@ export class HostedAdmissionRepository {
       .select({ id: member.id, userId: member.userId, role: member.role })
       .from(member)
       .where(and(eq(member.organizationId, orgId), eq(member.userId, userId)));
-    if (!rows.length) throw new HostedAdmissionError("forbidden");
+    const first = rows[0];
+    if (!first) throw new HostedAdmissionError("forbidden");
     // Preserve legacy rows, combining permission roles for the same account.
-    return { id: rows[0].id, role: rows.map((row) => row.role).join(",") };
+    return { id: first.id, role: rows.map((row) => row.role).join(",") };
   }
   private async lockAccountQuota(
     tx: HostedAdmissionTransaction,
@@ -196,9 +197,12 @@ export class HostedAdmissionRepository {
       await tx
         .delete(hostedAccountCreationClaims)
         .where(
-          lt(
-            hostedAccountCreationClaims.createdAt,
-            new Date(now.getTime() - HOSTED_CREATION_WINDOW_MS),
+          and(
+            eq(hostedAccountCreationClaims.userId, actor.userId),
+            lt(
+              hostedAccountCreationClaims.createdAt,
+              new Date(now.getTime() - HOSTED_CREATION_WINDOW_MS),
+            ),
           ),
         );
       const owned = await tx
@@ -252,14 +256,10 @@ export class HostedAdmissionRepository {
     orgId: string,
     actor: HostedAdmissionActor,
     input: { email: string; role: string; locale: HostedAdmissionLocale; resendId?: string },
-  ): Promise<{ invitationId: string }> {
+  ): Promise<{ invitationId: string; email: string; expiresAt: Date }> {
     const email = canonicalEmail(input.email.trim());
     const invitedRole = normalizeHostedRoles(input.role);
-    if (
-      email.length > 320 ||
-      !email.includes("@") ||
-      !["en", "es", "ru", "pt"].includes(input.locale)
-    )
+    if (!email || email.length > 320 || !["en", "es", "ru", "pt"].includes(input.locale))
       throw new HostedAdmissionError("invalid_input");
     return this.db.transaction(async (tx) => {
       await this.lockOrganization(tx, orgId);
@@ -318,16 +318,20 @@ export class HostedAdmissionRepository {
         );
       const id = randomUUID();
       const expiresAt = new Date(now.getTime() + HOSTED_INVITATION_LIFETIME_MS);
-      await tx.insert(invitation).values({
-        id,
-        organizationId: orgId,
-        email,
-        role: invitedRole,
-        status: "pending",
-        expiresAt,
-        createdAt: now,
-        inviterId: actor.userId,
-      });
+      const [persisted] = await tx
+        .insert(invitation)
+        .values({
+          id,
+          organizationId: orgId,
+          email,
+          role: invitedRole,
+          status: "pending",
+          expiresAt,
+          createdAt: now,
+          inviterId: actor.userId,
+        })
+        .returning({ id: invitation.id, email: invitation.email, expiresAt: invitation.expiresAt });
+      if (!persisted) throw new Error("Invitation insertion returned no row");
       await this.ports.enqueueInvitation(tx, {
         invitationId: id,
         organizationId: orgId,
@@ -337,7 +341,7 @@ export class HostedAdmissionRepository {
         inviterId: actor.userId,
         locale: input.locale,
       });
-      return { invitationId: id };
+      return { invitationId: persisted.id, email: persisted.email, expiresAt: persisted.expiresAt };
     });
   }
 
@@ -373,13 +377,14 @@ export class HostedAdmissionRepository {
           .select({ userId: hostedInvitationAcceptances.userId })
           .from(hostedInvitationAcceptances)
           .where(eq(hostedInvitationAcceptances.invitationId, invitationId));
-        if (claim?.userId !== actor.userId || !existing.length)
+        const acceptedMember = existing[0];
+        if (claim?.userId !== actor.userId || !acceptedMember)
           throw new HostedAdmissionError("invitation_unavailable");
         await tx
           .update(session)
           .set({ activeOrganizationId: orgId })
           .where(eq(session.id, actor.sessionId));
-        return { organizationId: orgId, memberId: existing[0].id };
+        return { organizationId: orgId, memberId: acceptedMember.id };
       }
       if (
         inv.status !== "pending" ||
@@ -471,6 +476,7 @@ export class HostedAdmissionRepository {
       await this.lockOrganization(tx, orgId);
       await this.actor(tx, actor, new Date());
       const acting = await this.membership(tx, orgId, actor.userId);
+      if (!isManager(acting.role)) throw new HostedAdmissionError("forbidden");
       const members = await tx
         .select({ id: member.id, userId: member.userId, role: member.role })
         .from(member)
@@ -507,6 +513,9 @@ export class HostedAdmissionRepository {
     const nextRole = normalizeHostedRoles(role);
     await this.db.transaction(async (tx) => {
       await this.lockOrganization(tx, orgId);
+      await this.preflightActor(tx, actor);
+      const initialMembership = await this.membership(tx, orgId, actor.userId);
+      if (!isManager(initialMembership.role)) throw new HostedAdmissionError("forbidden");
       const members = await tx
         .select({ id: member.id, userId: member.userId, role: member.role })
         .from(member)

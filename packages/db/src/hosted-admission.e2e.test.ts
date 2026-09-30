@@ -132,6 +132,7 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .where(
         and(eq(schema.invitation.organizationId, orgId), eq(schema.invitation.status, "pending")),
       );
+    if (!pending) throw new Error("Missing pending invitation fixture");
     refuseMail = true;
     try {
       await expect(
@@ -149,7 +150,7 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .select({ status: schema.invitation.status })
       .from(schema.invitation)
       .where(eq(schema.invitation.id, pending.id));
-    expect(original.status).toBe("pending");
+    expect(original?.status).toBe("pending");
     const replacement = await repo.invite(orgId, owner, {
       email: pending.email.toUpperCase(),
       role: "member",
@@ -201,6 +202,7 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .where(
         and(eq(schema.invitation.organizationId, orgId), eq(schema.invitation.status, "pending")),
       );
+    if (!second) throw new Error("Missing second invitation fixture");
     await repo.accept(orgId, recipient, second.id);
     const [membership] = await connection.db
       .select({ role: schema.member.role })
@@ -208,7 +210,7 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .where(
         and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, recipient.userId)),
       );
-    expect(membership.role).toBe("editor");
+    expect(membership?.role).toBe("editor");
   });
   it("locks current role, keeps the last owner, and rolls back failed tombstone", async () => {
     const owner = await account();
@@ -218,6 +220,7 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .select({ id: schema.member.id })
       .from(schema.member)
       .where(eq(schema.member.organizationId, orgId));
+    if (!membership) throw new Error("Missing owner membership fixture");
     await expect(repo.remove(orgId, owner, membership.id)).rejects.toThrow("last_owner");
     refuseDeletion = true;
     try {
@@ -383,17 +386,15 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
       .set({ email: recipient.email.toUpperCase() })
       .where(eq(schema.user.id, owner.userId));
     const id = randomUUID();
-    await connection.db
-      .insert(schema.invitation)
-      .values({
-        id,
-        organizationId: orgId,
-        email: recipient.email,
-        role: "member",
-        status: "pending",
-        expiresAt: new Date(Date.now() + 60000),
-        inviterId: owner.userId,
-      });
+    await connection.db.insert(schema.invitation).values({
+      id,
+      organizationId: orgId,
+      email: recipient.email,
+      role: "member",
+      status: "pending",
+      expiresAt: new Date(Date.now() + 60000),
+      inviterId: owner.userId,
+    });
     limit = 1;
     await expect(repository().accept(orgId, recipient, id)).rejects.toThrow("seat_limit");
     expect(
@@ -406,23 +407,45 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
     ).toHaveLength(0);
     limit = 10;
   });
-  it("prunes only the acting account's expired creation claims",async()=>{
-    limit=10;const actor=await account();const other=await account();const old=new Date(Date.now()-25*3600000);
-    await connection.db.insert(schema.hostedAccountCreationClaims).values([{userId:actor.userId,createdAt:old},{userId:other.userId,createdAt:old}]);
+  it("prunes only the acting account's expired creation claims", async () => {
+    limit = 10;
+    const actor = await account();
+    const other = await account();
+    const old = new Date(Date.now() - 25 * 3600000);
+    await connection.db.insert(schema.hostedAccountCreationClaims).values([
+      { userId: actor.userId, createdAt: old },
+      { userId: other.userId, createdAt: old },
+    ]);
     await workspace(actor);
-    const rows=await connection.db.select({userId:schema.hostedAccountCreationClaims.userId,createdAt:schema.hostedAccountCreationClaims.createdAt}).from(schema.hostedAccountCreationClaims).where(eq(schema.hostedAccountCreationClaims.userId,other.userId));
-    expect(rows).toHaveLength(1);expect(rows[0].createdAt).toEqual(old);
+    const rows = await connection.db
+      .select({
+        userId: schema.hostedAccountCreationClaims.userId,
+        createdAt: schema.hostedAccountCreationClaims.createdAt,
+      })
+      .from(schema.hostedAccountCreationClaims)
+      .where(eq(schema.hostedAccountCreationClaims.userId, other.userId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.createdAt).toEqual(old);
   });
-  it("denies non-manager mutation before disclosing target existence",async()=>{
-    limit=10;const owner=await account();const outsider=await account();const ordinary=await account();const orgId=await workspace(owner);
-    const memberId=randomUUID();await connection.db.insert(schema.member).values({id:memberId,organizationId:orgId,userId:ordinary.userId,role:"member"});
-    for(const actor of [outsider,ordinary]){
-      for(const target of [memberId,randomUUID()]){
-        await expect(repository().updateRole(orgId,actor,target,"editor")).rejects.toThrow("forbidden");
-        await expect(repository().remove(orgId,actor,target)).rejects.toThrow("forbidden");
+  it("denies non-manager mutation before disclosing target existence", async () => {
+    limit = 10;
+    const owner = await account();
+    const outsider = await account();
+    const ordinary = await account();
+    const orgId = await workspace(owner);
+    const memberId = randomUUID();
+    await connection.db
+      .insert(schema.member)
+      .values({ id: memberId, organizationId: orgId, userId: ordinary.userId, role: "member" });
+    for (const actor of [outsider, ordinary]) {
+      for (const target of [memberId, randomUUID()]) {
+        await expect(repository().updateRole(orgId, actor, target, "editor")).rejects.toThrow(
+          "forbidden",
+        );
+        await expect(repository().remove(orgId, actor, target)).rejects.toThrow("forbidden");
       }
     }
-    for(const id of [randomUUID()])await expect(repository().cancel(orgId,outsider,id)).rejects.toThrow("forbidden");
+    for (const id of [randomUUID()])
+      await expect(repository().cancel(orgId, outsider, id)).rejects.toThrow("forbidden");
   });
-
 });

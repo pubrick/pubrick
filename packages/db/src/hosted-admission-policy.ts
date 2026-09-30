@@ -1,3 +1,9 @@
+import {
+  hasOrganizationRole,
+  isOrganizationManager,
+  ORGANIZATION_ROLES,
+  type OrganizationRole,
+} from "@pubrick/shared";
 export type HostedAdmissionCode =
   | "unauthenticated"
   | "forbidden"
@@ -22,10 +28,10 @@ export interface HostedCreationPolicy {
 export const HOSTED_CREATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const HOSTED_INVITATION_LIFETIME_MS = 48 * 60 * 60 * 1000;
 export function hasRole(role: string, expected: string): boolean {
-  return role.split(",").includes(expected);
+  return hasOrganizationRole(role, [expected as OrganizationRole]);
 }
 export function isManager(role: string): boolean {
-  return hasRole(role, "owner") || hasRole(role, "admin");
+  return isOrganizationManager(role);
 }
 export function canonicalEmail(email: string): string {
   return email.toLowerCase();
@@ -83,10 +89,7 @@ export function normalizeHostedRoles(value: string | readonly string[]): string 
         .filter(Boolean),
     ),
   ];
-  if (
-    !roles.length ||
-    roles.some((role) => !["owner", "admin", "member", "author", "editor"].includes(role))
-  )
+  if (!roles.length || roles.some((role) => !ORGANIZATION_ROLES.some((known) => known === role)))
     throw new HostedAdmissionError("invalid_input");
   return roles.join(",");
 }
