@@ -72,6 +72,8 @@ platforms remain unavailable until a safe publishing workflow is implemented.
 Features land phase by phase — see the current [development roadmap](docs/roadmap.md)
 and the original [product design](docs/specs/0001-product-design.md).
 Versioned image deployment and publication are described in [Releases](docs/releases.md).
+For the hosted development mode, see [operator checks and recovery](docs/hosted-operations.md);
+real payment-account acceptance and public SaaS launch remain pending.
 Report security vulnerabilities through the [private reporting process](SECURITY.md).
 
 Public RSS syndication is available for selected published posts; see

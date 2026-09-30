@@ -275,3 +275,47 @@ The final production browser journey at `f814b990` passed in **38.2 seconds**
 journey above against migration 0124 and the nullable billing DTO; fixture
 entitlement still does not prove a real payment checkout. The runner removed
 its exact container/media/processes, and ports 31310–31313 were free afterwards.
+
+
+### Main integration follow-up
+
+Owner-authorized fast-forward integration of `474e28a4` reached remote `main`.
+The automatic CI run [36760009141](https://github.com/pubrick/pubrick/actions/runs/36760009141)
+passed lint, build, types and root script tests. Its web tier passed **1,505
+tests** and failed one environment-declaration guard: the server workspace
+export route reads `API_INTERNAL_URL`, which was declared for build but omitted
+from the Turbo test environment. Later task tiers were not completed by that
+failed run; it is not a passing whole CI gate.
+
+The same guard failure was reproduced locally (**1 failed, 6 passed**) before
+adding the variable to `tasks.test.env`. The unchanged guard and export-route
+contracts then passed **9 tests** in two files. This corrects environment
+forwarding and cache identity without weakening the gate or changing the route.
+No remote rerun or manual Actions dispatch was requested. A further main push
+requires fresh owner authorization for the reviewed follow-up HEAD.
+
+
+### Operator status milestone
+
+Implemented in `53c645df` (author worktree `204e9a3e`): `pnpm ops:status`
+requires the explicit project and matching absolute checkout. It verifies ordered
+Compose overlays, configured and runtime API/worker billing identity, PostgreSQL
+user/database and internal DB targets. It reads only fixed aggregate fields in a
+read-only transaction with statement/lock/subprocess bounds. Secrets, tenant IDs,
+mail contents and raw driver errors are excluded. This is an operational snapshot,
+not provider readiness or proof of delivery/payment.
+
+Independent review identified unordered-overlay acceptance and stale worker
+identity acceptance; both were corrected before integration with regressions.
+The source author passed **11 offline contracts** and an explicit **25.17-second
+native acceptance** using real migration 0124 and pg-boss queues. The native
+fixture included unknown/completed media proofs, terminal billing cleanup and
+live/expired physical-call fences. Its exact Compose resources and temporary
+dependencies were removed.
+
+After integration, the root script suite passed **34 tests**, with **2 explicit
+opt-in native checks skipped**; their skips are not native evidence. Full Biome
+checked **993 files** without changes. The export environment follow-up above
+passed its **9 affected web contracts**. No remote rerun or manual Actions
+dispatch was performed. The operator runbook links existing identity, billing,
+media and backup/recovery procedures without inventing support or retention policy.

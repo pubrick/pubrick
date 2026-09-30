@@ -42,6 +42,8 @@
       "env": [
         "CI",
         "TEST_DATABASE_URL",
+        // The server export route reads the internal API origin at runtime and in tests.
+        "API_INTERNAL_URL",
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",
         "GOOGLE_API_PROXY",
