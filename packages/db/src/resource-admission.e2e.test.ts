@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BillingTransaction } from "./billing-entitlement.js";
 import { createDb } from "./client.js";
 import { stageMediaCleanup } from "./media-cleanup.js";
+import { getTenantMediaStorageUsage } from "./media-storage-usage.js";
 import { runMigrations } from "./migrate.js";
 import {
   withTenantResourceAdmission,
@@ -31,6 +35,7 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
   let connection: ReturnType<typeof createDb>;
   const orgIds: string[] = [];
   const planIds: string[] = [];
+  const mediaDirectories: string[] = [];
   beforeAll(async () => {
     await runMigrations(url as string);
     connection = createDb(url as string);
@@ -51,6 +56,7 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
         .delete(schema.billingPlanVersions)
         .where(eq(schema.billingPlanVersions.id, id));
     await connection.pool.end();
+    for (const directory of mediaDirectories) await rm(directory, { recursive: true, force: true });
   });
   async function fixture(limits: Partial<schema.BillingLimits> = {}) {
     const orgId = randomUUID();
@@ -229,6 +235,10 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
     const { orgId, brandId } = await fixture();
     const [asset] = await connection.db.transaction((tx) => media(tx, orgId, brandId, 100));
     if (!asset) throw new Error("Missing asset");
+    const directory = await mkdtemp(path.join(tmpdir(), "pubrick-storage-proof-"));
+    mediaDirectories.push(directory);
+    const file = path.join(directory, `${asset.id}.jpg`);
+    await writeFile(file, Buffer.alloc(100));
     await connection.db.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${orgId}))`,
@@ -247,6 +257,7 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
       ),
     ).rejects.toMatchObject({ code: "resource_limit" });
     expect(insert).not.toHaveBeenCalled();
+    expect(await readFile(file)).toHaveLength(100);
     // Cleanup remains stopped/unavailable even after retries become operator-owned.
     await connection.db
       .update(schema.mediaCleanupWork)
@@ -262,6 +273,7 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
       ),
     ).rejects.toMatchObject({ code: "resource_limit" });
     // The worker's successful unlink/ENOENT acknowledgement is the only release boundary.
+    await unlink(file);
     await connection.db
       .update(schema.mediaCleanupWork)
       .set({ state: "completed", completedAt: new Date() })
@@ -274,6 +286,63 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
       insert,
     );
     expect(insert).toHaveBeenCalledOnce();
+  });
+  it("counts restored live ownership once and refuses unknown historical proof bytes", async () => {
+    const { orgId, brandId } = await fixture();
+    const [asset] = await connection.db.transaction((tx) => media(tx, orgId, brandId, 40));
+    if (!asset) throw new Error("Missing asset");
+    await connection.db.transaction((tx) => stageMediaCleanup(orgId, tx));
+    expect(await connection.db.transaction((tx) => getTenantMediaStorageUsage(orgId, tx))).toBe(40);
+    const unknownId = randomUUID();
+    await connection.db
+      .insert(schema.mediaCleanupWork)
+      .values({ assetId: unknownId, orgId, kind: "video" });
+    await expect(
+      connection.db.transaction((tx) => getTenantMediaStorageUsage(orgId, tx)),
+    ).rejects.toMatchObject({ code: "storage_reconciliation_required" });
+    const insert = vi.fn((tx: BillingTransaction) => media(tx, orgId, brandId, 1));
+    await expect(
+      withTenantResourceAdmission(
+        orgId,
+        connection.db,
+        hosted,
+        { resource: "mediaBytes", additional: 1 },
+        insert,
+      ),
+    ).rejects.toMatchObject({ code: "storage_reconciliation_required" });
+    expect(insert).not.toHaveBeenCalled();
+    await connection.db
+      .update(schema.mediaCleanupWork)
+      .set({ state: "completed", completedAt: new Date() })
+      .where(eq(schema.mediaCleanupWork.assetId, unknownId));
+    expect(await connection.db.transaction((tx) => getTenantMediaStorageUsage(orgId, tx))).toBe(40);
+    // Foreign tenant proofs cannot affect the target quota.
+    const other = await fixture();
+    await connection.db
+      .insert(schema.mediaCleanupWork)
+      .values({ assetId: randomUUID(), orgId: other.orgId, kind: "image" });
+    expect(await connection.db.transaction((tx) => getTenantMediaStorageUsage(orgId, tx))).toBe(40);
+  });
+  it("accepts exact live growth while a cleanup acknowledgement reduces retained bytes", async () => {
+    const { orgId, brandId } = await fixture();
+    const assetId = randomUUID();
+    await connection.db
+      .insert(schema.mediaCleanupWork)
+      .values({ assetId, orgId, kind: "image", byteSize: 90n });
+    await withTenantResourceAdmission(
+      orgId,
+      connection.db,
+      hosted,
+      { resource: "mediaBytes", additional: 10 },
+      async (tx) => {
+        await connection.db
+          .update(schema.mediaCleanupWork)
+          .set({ state: "completed", completedAt: new Date() })
+          .where(eq(schema.mediaCleanupWork.assetId, assetId));
+        return media(tx, orgId, brandId, 10);
+      },
+    );
+    expect(await connection.db.transaction((tx) => getTenantMediaStorageUsage(orgId, tx))).toBe(10);
   });
   it("scopes real brands, channels and media aggregates to the target tenant", async () => {
     const target = await fixture();

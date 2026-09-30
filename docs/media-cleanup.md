@@ -75,3 +75,46 @@ poller and every resource/workspace deletion path are wired to this protocol.
 Workspace, brand and individual media deletion stage ownership proofs in the same database transaction before deleting metadata. A rollback preserves both metadata and files and rolls back the cleanup proof. API responses complete after the database commit; filesystem deletion is asynchronous and does not turn a successful deletion into a retry. Individual attachment conflicts remain authoritative foreign-key refusals.
 
 The worker performs one nonoverlapping batch at startup and every 10 seconds. Shutdown stops new polls and awaits the active batch. Failed polls log only a closed error code. API and worker must share `MEDIA_STORAGE_DIR` and the same filesystem: Compose already binds both to `/data/media` on the shared media volume. Native development defaults to `.data/media` under each process working directory; when running API and worker from different directories, configure the same absolute path for both. Pending cleanup is operational data excluded from workspace downloads; full instance recovery retains it with the database, and restored workers remain stopped until operator review.
+
+## Storage occupancy and migration 0124
+
+Hosted storage admission counts live media bytes **plus** the byte sizes retained
+by pending and `operator_action` deletion proofs. Deleting metadata does not free
+storage: only a successful physical unlink (or target `ENOENT` on a verified,
+accessible storage root) followed by the fenced completed acknowledgement does.
+An API fast-path unlink therefore conservatively retains occupancy until the
+worker confirms it. Completed proofs consume no quota. A restored live UUID
+with the same organization and kind is counted once, from its live metadata.
+
+Migration 0124 adds a nullable positive `bigint` byte size and an organization
+index to retained proofs. New transactional staging copies the actual normalized
+asset size. Older proofs remain unknown; this migration does not invent sizes,
+scan the filesystem, or run an unbounded historical backfill. Matching live
+metadata already supplies their occupancy, and re-staging that owned live asset
+records its size. Unmatched unknown proofs, or nonpositive live metadata, refuse
+hosted media growth with `storage_reconciliation_required`. Self-hosted growth
+keeps its existing behavior. Other resources and deletion remain available.
+
+Restore or upgrade operators should let pending cleanup finish on the correctly
+mounted volume first. For terminal unknown requests, stop API and workers, verify
+the ownership proof and canonical UUID/kind path against the shared volume, and
+measure the existing file before assigning its positive size to that **same**
+proof. Never infer zero from a missing or inaccessible storage root, assign an
+estimated size, change ownership, or delete a pending proof to free quota.
+Requeue repaired terminal requests with a cleared lease/token and reset attempts;
+normal cleanup then records completion. Restart workers after review. The new
+positive CHECK is `NOT VALID` to avoid scanning the historical queue on startup;
+it checks new writes immediately. An operator can later run
+`ALTER TABLE media_cleanup_work VALIDATE CONSTRAINT media_cleanup_work_byte_size_check;`.
+NULL represents unknown and remains allowed after validation.
+
+Quota admission uses total retained occupancy, while exact insertion-delta checks
+compare live metadata only. A concurrent cleanup acknowledgement can reduce
+retained bytes without falsely rejecting a valid normalized insertion. No database
+locks are held for file deletion or operator size inspection.
+
+This accounting covers committed media and durable deletion proofs. A process
+crash after preparing a file but before committing its asset row can still leave
+an unowned flat-UUID file; it has no recoverable tenant proof. This is not a hard
+filesystem capacity guarantee or an automatic orphan sweep. Operators must
+monitor disk capacity and reconcile those files during a stopped-instance audit.

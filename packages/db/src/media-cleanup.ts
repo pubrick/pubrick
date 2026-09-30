@@ -57,11 +57,11 @@ export async function stageMediaCleanup(
   // Drizzle's insert-select builder requires every table column at runtime, including
   // defaults. Explicit SQL keeps defaults database-owned and metadata entirely server-side.
   await tx.execute(sql`
-    INSERT INTO ${mediaCleanupWork} (asset_id, org_id, kind)
-    SELECT ${mediaAssets.id}, ${mediaAssets.orgId}, ${mediaAssets.kind}
+    INSERT INTO ${mediaCleanupWork} (asset_id, org_id, kind, byte_size)
+    SELECT ${mediaAssets.id}, ${mediaAssets.orgId}, ${mediaAssets.kind}, CASE WHEN ${mediaAssets.byteSize} > 0 THEN ${mediaAssets.byteSize} ELSE NULL END
     FROM ${mediaAssets} WHERE ${filter}
     ON CONFLICT (asset_id) DO UPDATE SET
-      state = 'pending', attempts = 0, next_attempt_at = now(),
+      byte_size = excluded.byte_size, state = 'pending', attempts = 0, next_attempt_at = now(),
       lease_until = NULL, lease_token = NULL, last_error = NULL, completed_at = NULL
     WHERE ${mediaCleanupWork.orgId} = excluded.org_id
       AND ${mediaCleanupWork.kind} = excluded.kind

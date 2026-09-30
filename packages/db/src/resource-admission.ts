@@ -3,6 +3,7 @@ import { eq, sql } from "drizzle-orm";
 import type { BillingTransaction } from "./billing-entitlement.js";
 import { authorizeBillingGrowth, type BillingGrowthIdentity } from "./billing-growth.js";
 import type { createDb } from "./client.js";
+import { MediaStorageUsageError, readTenantMediaStorageUsage } from "./media-storage-usage.js";
 import { organization } from "./schema/auth.js";
 import { brands, channels } from "./schema/content.js";
 import { mediaAssets } from "./schema/media.js";
@@ -24,7 +25,8 @@ export class ResourceAdmissionError extends Error {
       | "target_unavailable"
       | "invalid_growth"
       | "growth_mismatch"
-      | "authority_revoked",
+      | "authority_revoked"
+      | "storage_reconciliation_required",
     readonly resource: TenantResourceGrowth["resource"],
   ) {
     super(code);
@@ -101,7 +103,25 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
   // for durable system-owned jobs, never deriving actor identity from job payloads.
   if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
     throw new ResourceAdmissionError("authority_revoked", input.resource);
-  const occupied = await resourceUsage(orgId, tx, input.resource);
+  let occupied: number;
+  let growthBaseline: number;
+  try {
+    if (input.resource === "mediaBytes") {
+      const usage = await readTenantMediaStorageUsage(orgId, tx);
+      occupied = usage.bytes;
+      growthBaseline = usage.liveBytes;
+    } else {
+      occupied = await resourceUsage(orgId, tx, input.resource);
+      growthBaseline = occupied;
+    }
+  } catch (error) {
+    if (error instanceof MediaStorageUsageError)
+      throw new ResourceAdmissionError(
+        error.code === "storage_reconciliation_required" ? error.code : "invalid_growth",
+        input.resource,
+      );
+    throw error;
+  }
   if (!Number.isSafeInteger(occupied + input.additional))
     throw new ResourceAdmissionError("invalid_growth", input.resource);
   await authorizeBillingGrowth(orgId, tx, mode.identity, {
@@ -114,7 +134,7 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
     throw new ResourceAdmissionError("authority_revoked", input.resource);
   const result = await insert(tx);
   const actual = await resourceUsage(orgId, tx, input.resource);
-  if (actual !== occupied + input.additional)
+  if (actual !== growthBaseline + input.additional)
     throw new ResourceAdmissionError("growth_mismatch", input.resource);
   return result;
 }

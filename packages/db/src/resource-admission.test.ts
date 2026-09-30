@@ -38,7 +38,7 @@ function fixture(usage: readonly string[], organizationExists = true) {
           const count = new PgDialect().sqlToQuery(selected);
           statements.push(count);
           calls.push("count");
-          return Promise.resolve([{ occupied: usage[index++] }]);
+          return Promise.resolve([{ occupied: usage[index++], retained: "0", unknown: "0" }]);
         },
       }),
     }),

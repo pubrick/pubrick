@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, check, index, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { enumCheck } from "./enum-check.js";
 
 export const MEDIA_CLEANUP_ERRORS = [
@@ -17,6 +17,7 @@ export const mediaCleanupWork = pgTable(
     assetId: uuid("asset_id").primaryKey(),
     orgId: text("org_id").notNull(),
     kind: text("kind", { enum: ["image", "video"] }).notNull(),
+    byteSize: bigint("byte_size", { mode: "bigint" }),
     state: text("state", { enum: ["pending", "completed", "operator_action"] })
       .notNull()
       .default("pending"),
@@ -29,6 +30,8 @@ export const mediaCleanupWork = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (t) => [
+    index("media_cleanup_storage_idx").on(t.orgId, t.assetId).where(sql`${t.state} <> 'completed'`),
+    check("media_cleanup_work_byte_size_check", sql`${t.byteSize} > 0`),
     index("media_cleanup_pending_idx")
       .on(t.nextAttemptAt, t.assetId)
       .where(sql`${t.state} = 'pending'`),
