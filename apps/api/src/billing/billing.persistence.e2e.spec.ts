@@ -364,40 +364,46 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
       db
         .insert(schema.billingSubscriptions)
         .values({ ...subscription, status: "unknown_future_status" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      cause: { code: "23514", constraint: "billing_subscription_status_check" },
+    });
     await expect(
       db
         .insert(schema.billingSubscriptions)
         .values({ ...subscription, status: "active", environment: "live" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      cause: { code: "23514", constraint: "billing_subscriptions_environment_check" },
+    });
     await expect(
       db
         .insert(schema.billingSubscriptions)
         .values({ ...subscription, status: "active", provider: "unknown_provider" }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({
+      cause: { code: "23514", constraint: "billing_subscriptions_provider_check" },
+    });
     await expect(
-      db
-        .insert(schema.billingReceipts)
-        .values({
-          ...identity,
-          eventId: "evt_constraint",
-          kind: "subscription.changed",
-          resourceId: "sub_constraint",
-          status: "unknown_future_status",
-        }),
-    ).rejects.toThrow();
+      db.insert(schema.billingReceipts).values({
+        ...identity,
+        eventId: "evt_constraint",
+        kind: "subscription.changed",
+        resourceId: "sub_constraint",
+        status: "unknown_future_status",
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: "23514", constraint: "billing_receipt_status_check" },
+    });
     await expect(
-      db
-        .insert(schema.billingCleanup)
-        .values({
-          ...identity,
-          orgId: tenant.orgId,
-          kind: "subscription",
-          resourceId: "sub_constraint",
-          idempotencyKey: "constraint",
-          status: "unknown_future_status",
-        }),
-    ).rejects.toThrow();
+      db.insert(schema.billingCleanup).values({
+        ...identity,
+        orgId: tenant.orgId,
+        kind: "subscription",
+        resourceId: "sub_constraint",
+        idempotencyKey: "constraint",
+        status: "unknown_future_status",
+      }),
+    ).rejects.toMatchObject({
+      cause: { code: "23514", constraint: "billing_cleanup_status_check" },
+    });
   });
   it("closes permanent/exhausted receipt retries and keeps cleanup obligations visible", async () => {
     const id = await repository.receive({
