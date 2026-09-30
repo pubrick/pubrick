@@ -53,6 +53,22 @@ describe.skipIf(!url)("topic bank e2e", () => {
     return { agent, orgId: org.body.id as string, userId: signUp.body.user.id as string };
   }
 
+  async function configureText(agent: request.Agent) {
+    await agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: "synthetic-topics-fixture-key" })
+      .expect(200);
+    const settings = await agent.get("/api/ai-credentials/text-settings").expect(200);
+    await agent
+      .put("/api/ai-credentials/text-settings")
+      .send({
+        provider: "google",
+        model: "gemini-3.8-flash",
+        expectedRevision: settings.body.revision,
+      })
+      .expect(200);
+  }
+
   it("returns only the server-saved inspiration snapshot to the owning brand", async () => {
     const owner = await orgAgent();
     const outsider = await orgAgent();
@@ -300,6 +316,7 @@ describe.skipIf(!url)("topic bank e2e", () => {
 
   it("scopes topics and feedback, imports news once, and runs only approved topics", async () => {
     const owner = await orgAgent();
+    await configureText(owner.agent);
     const other = await orgAgent();
     const brand = await owner.agent.post("/api/brands").send({ name: "Newsroom" }).expect(201);
     const second = await owner.agent.post("/api/brands").send({ name: "Second" }).expect(201);
@@ -743,6 +760,7 @@ describe.skipIf(!url)("topic bank e2e", () => {
 
   it("saves a topic format and keywords, uses them for direct runs, and revokes approval on edits", async () => {
     const owner = await orgAgent();
+    await configureText(owner.agent);
     const other = await orgAgent();
     const brand = await owner.agent.post("/api/brands").send({ name: "Guides" }).expect(201);
     const channel = await owner.agent
@@ -825,6 +843,7 @@ describe.skipIf(!url)("topic bank e2e", () => {
 
   it("refuses a direct run if the approved topic changes after its first read", async () => {
     const owner = await orgAgent();
+    await configureText(owner.agent);
     const brand = await owner.agent.post("/api/brands").send({ name: "Race guard" }).expect(201);
     const channel = await owner.agent
       .post("/api/channels")

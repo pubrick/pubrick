@@ -165,6 +165,20 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
       .send({ brandId: grantedBrand, url: sourceUrl })
       .expect(200);
     expect(preview.body.material).toBe("A source reviewed by the author.");
+    const secret = "sk-test-never-return-this-1234567890";
+    await owner.agent
+      .put("/api/ai-credentials")
+      .send({ provider: "google", apiKey: secret })
+      .expect(200);
+    const settings = await owner.agent.get("/api/ai-credentials/text-settings").expect(200);
+    await owner.agent
+      .put("/api/ai-credentials/text-settings")
+      .send({
+        provider: "google",
+        model: "gemini-3.8-flash",
+        expectedRevision: settings.body.revision,
+      })
+      .expect(200);
     const run = await author.agent
       .post("/api/runs")
       .send({
@@ -177,11 +191,6 @@ describe.skipIf(!url)("editorial capabilities over HTTP", () => {
     expect(run.body.input.material).toBe(preview.body.material);
     expect(run.body.input.sourceUrl).toBe(sourceUrl);
 
-    const secret = "sk-test-never-return-this-1234567890";
-    await owner.agent
-      .put("/api/ai-credentials")
-      .send({ provider: "google", apiKey: secret })
-      .expect(200);
     const availability = { configured: true, googleConfigured: true };
     for (const actor of [author, editor, legacyMember, owner]) {
       const answer = await actor.agent.get("/api/ai-credentials/availability").expect(200);

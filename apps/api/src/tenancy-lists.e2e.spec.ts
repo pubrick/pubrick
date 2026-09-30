@@ -484,6 +484,19 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     identify: id,
     seed: async (agent) => {
       const { brandId, channelId } = await brandWithChannel(agent);
+      await agent
+        .put("/api/ai-credentials")
+        .send({ provider: "google", apiKey: "synthetic-tenancy-fixture-key" })
+        .expect(200);
+      const settings = await agent.get("/api/ai-credentials/text-settings").expect(200);
+      await agent
+        .put("/api/ai-credentials/text-settings")
+        .send({
+          provider: "google",
+          model: "gemini-3.8-flash",
+          expectedRevision: settings.body.revision,
+        })
+        .expect(200);
       const run = await agent
         .post("/api/runs")
         .send({ brandId, brief: "Write about our new release", channelIds: [channelId] })
