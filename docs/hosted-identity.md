@@ -1,7 +1,8 @@
 # Hosted identity development
 
-This slice implements verified email ownership and recovery, **not a complete
-hosted subscription service**. Do not announce a paid SaaS or expose this stage as
+This slice implements verified email ownership and recovery. Hosted application
+startup now also binds the validated billing and atomic workspace admission modules;
+this remains a sandbox development stage, **not a complete live subscription service**. Do not announce a paid SaaS or expose this stage as
 an unlimited public service. Billing admission, trial/organization admission,
 quotas, reconciliation, public legal/support policies and hosted operations remain
 requirements in [the hosted beta design](plans/hosted-beta.md). The billing slice
@@ -19,6 +20,7 @@ verification for existing users.
 `PUBRICK_DEPLOYMENT_MODE=hosted` requires:
 
 - Explicit `SIGNUP_MODE=open` and enabled auth rate limiting.
+- Complete operator billing configuration as described in [hosted billing](../apps/api/src/billing/README.md). Missing billing configuration refuses hosted startup, including local tests. There is no identity-only runtime bypass.
 - Matching `WEB_ORIGIN` / `BETTER_AUTH_URL` origins (Compose derives both from
   `PUBLIC_ORIGIN`). HTTPS is required when `NODE_ENV=production`, as in the API image.
 - An operator-configured SMTP host, authentication credentials and sender address.
@@ -133,3 +135,21 @@ tokens, revoked sessions and non-enumerating SMTP failures. Run the database
 identity tier against a disposable Postgres via `TEST_DATABASE_URL`, never against
 an installation containing user data. A hosted beta still needs a full external
 signup → subscription → first-draft journey and recovery rehearsal before launch.
+
+## SDK organization boundary
+
+In hosted applications, raw Better Auth organization creation, invitations, resend,
+acceptance/rejection/cancellation, member addition/removal, role changes, leaving and
+deletion return `HOSTED_ORGANIZATION_MUTATION_REQUIRED`. Use Pubrick's custom
+workspace actions, which verify ownership, serialize limits and enqueue mail or
+external cleanup in the domain transaction. Read-only organization/invitation
+lookups, setting the active organization and manager-authorized name/slug updates
+remain SDK operations. Server-only `auth.api.addMember` is also denied by the
+SDK's operation ID; an unknown future organization writer stays closed. Self-hosted
+SDK organization operations retain their existing behavior.
+
+Identity integration fixtures must configure a local, operator-owned fixture catalog
+and use custom workspace routes. Invitations require a seeded or independently
+verified active entitlement; no trial is automatically granted. Fixture payments
+are restricted to loopback nonproduction operation, and sandbox capability flags
+explicitly avoid a live-payment claim.

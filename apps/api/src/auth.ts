@@ -17,6 +17,7 @@ export { authMailer } from "./auth-mail-runtime";
 import { originMismatchPlugin } from "./auth-origin.plugin";
 import { ipAddressHeadersFor } from "./auth-policy";
 import { signupGate } from "./auth-signup-gate";
+import { billingConfig } from "./billing-runtime-config";
 import { db } from "./db";
 import { env, identity } from "./env";
 import { findInitialOrganizationId } from "./org/initial-org";
@@ -247,7 +248,10 @@ export const auth = betterAuth({
   // values instead of `Invalid origin`. See auth-origin.plugin.ts.
   plugins: [
     originMismatchPlugin(env.WEB_ORIGIN),
-    hostedIdentityPlugin(identity.hosted, !!mailer),
+    hostedIdentityPlugin(identity.hosted, !!mailer, {
+      enabled: billingConfig.enabled,
+      testMode: billingConfig.enabled && billingConfig.identity.environment === "sandbox",
+    }),
     organization(ORGANIZATION_OPTIONS),
   ],
 });

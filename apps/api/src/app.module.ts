@@ -4,6 +4,7 @@ import { AiCredentialsModule } from "./ai-credentials/ai-credentials.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { auth, authMailer } from "./auth";
 import { AutopilotModule } from "./autopilot/autopilot.module";
+import { billingConfig } from "./billing-runtime-config";
 import { BrandAccessModule } from "./brand-access/brand-access.module";
 import { BrandsModule } from "./brands/brands.module";
 import { CalendarModule } from "./calendar/calendar.module";
@@ -13,6 +14,7 @@ import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
+import { HostedAdmissionModule } from "./hosted-admission/hosted-admission.module";
 import { KnowledgeModule } from "./knowledge/knowledge.module";
 import { MediaModule } from "./media/media.module";
 import { NotificationsModule } from "./notifications/notifications.module";
@@ -33,6 +35,7 @@ import { WorkspaceDataModule } from "./workspace-data/workspace-data.module";
 @Module({
   imports: [
     AuthModule.forRoot({ auth }),
+    HostedAdmissionModule.forRoot(billingConfig),
     AnalyticsModule,
     AutopilotModule,
     QueueModule,
