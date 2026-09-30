@@ -15,7 +15,11 @@ import type { MediaRepository } from "./media.repository";
 const controls = vi.hoisted(() => ({
   mode: {
     mode: "hosted",
-    identity: { provider: "stripe", environment: "sandbox", accountId: "acct_writer_operator" },
+    identity: {
+      provider: "stripe" as const,
+      environment: "sandbox",
+      accountId: "acct_writer_operator",
+    },
   } as TenantResourceQuotaMode,
   afterCropWrite: undefined as (() => Promise<void>) | undefined,
 }));
@@ -93,7 +97,7 @@ describe.skipIf(!url)("native API resource writers", () => {
     const planId = randomUUID();
     planIds.push(planId);
     const identity = {
-      provider: "stripe",
+      provider: "stripe" as const,
       environment: "sandbox",
       accountId: "acct_writer_operator",
     };

@@ -108,7 +108,13 @@ describe.skipIf(!url)("native deletion cleanup boundaries", () => {
     const f = await fixture();
     await connection.db
       .insert(schema.contentItems)
-      .values({ orgId: f.orgId, brandId: f.brandId, title: "Attached", coverMediaId: f.assetId });
+      .values({
+        orgId: f.orgId,
+        brandId: f.brandId,
+        title: "Attached",
+        body: "Fixture draft",
+        coverMediaId: f.assetId,
+      });
     await expect(media.delete(f.orgId, f.assetId)).rejects.toMatchObject({ status: 409 });
     expect(await proofs(f.orgId)).toHaveLength(0);
     expect(await readFile(path.join(mediaDir, `${f.assetId}.jpg`), "utf8")).toBe("fixture");
@@ -147,15 +153,13 @@ describe.skipIf(!url)("native deletion cleanup boundaries", () => {
     await connection.db
       .insert(schema.user)
       .values({ id: userId, name: "Owner", email: `${userId}@example.test`, emailVerified: true });
-    await connection.db
-      .insert(schema.session)
-      .values({
-        id: sessionId,
-        userId,
-        token: randomUUID(),
-        expiresAt: new Date(Date.now() + 3600000),
-        activeOrganizationId: f.orgId,
-      });
+    await connection.db.insert(schema.session).values({
+      id: sessionId,
+      userId,
+      token: randomUUID(),
+      expiresAt: new Date(Date.now() + 3600000),
+      activeOrganizationId: f.orgId,
+    });
     await connection.db
       .insert(schema.member)
       .values({ id: randomUUID(), organizationId: f.orgId, userId, role: "owner" });

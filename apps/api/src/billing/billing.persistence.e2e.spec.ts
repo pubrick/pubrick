@@ -315,7 +315,7 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
         ...identity,
         customerId: "cus_page",
         subscriptionId: index === 25 ? healthy : `sub_failed_${suffix}_${index}`,
-        status: "canceled",
+        status: "canceled" as const,
         priceId: plan.priceId,
         planVersionId: storedPlan.id,
         periodStart: new Date(now),
@@ -515,9 +515,9 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     await expect(
       db
         .insert(schema.billingSubscriptions)
-        .values({ ...subscription, status: "unknown_future_status" }),
+        .values({ ...subscription, status: sql`${"unknown_future_status"}` }),
     ).rejects.toMatchObject({
-      cause: { code: "23514", constraint: "billing_subscription_status_check" },
+      cause: { code: "23514", constraint: "billing_subscriptions_status_check" },
     });
     await expect(
       db
@@ -529,7 +529,7 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     await expect(
       db
         .insert(schema.billingSubscriptions)
-        .values({ ...subscription, status: "active", provider: "unknown_provider" }),
+        .values({ ...subscription, status: "active", provider: sql`${"unknown_provider"}` }),
     ).rejects.toMatchObject({
       cause: { code: "23514", constraint: "billing_subscriptions_provider_check" },
     });
@@ -539,10 +539,10 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
         eventId: "evt_constraint",
         kind: "subscription.changed",
         resourceId: "sub_constraint",
-        status: "unknown_future_status",
+        status: sql`${"unknown_future_status"}`,
       }),
     ).rejects.toMatchObject({
-      cause: { code: "23514", constraint: "billing_receipt_status_check" },
+      cause: { code: "23514", constraint: "billing_receipts_status_check" },
     });
     await expect(
       db.insert(schema.billingCleanup).values({
@@ -551,7 +551,7 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
         kind: "subscription",
         resourceId: "sub_constraint",
         idempotencyKey: "constraint",
-        status: "unknown_future_status",
+        status: sql`${"unknown_future_status"}`,
       }),
     ).rejects.toMatchObject({
       cause: { code: "23514", constraint: "billing_cleanup_status_check" },
