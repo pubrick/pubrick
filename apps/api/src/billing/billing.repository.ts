@@ -8,11 +8,26 @@ import type {
 } from "@pubrick/billing";
 import type { createDb } from "@pubrick/db";
 import { type BillingTransaction, schema } from "@pubrick/db";
-import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
+import { isOrganizationManager, RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { and, asc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import {
+  billingAccountsColumns,
+  billingCheckoutAttemptsColumns,
+  billingCleanupColumns,
+  billingPlanVersionsColumns,
+  billingReceiptsColumns,
+  billingSubscriptionsColumns,
+  organizationBillingStateColumns,
+} from "./billing.projections";
 import type { CatalogPlan } from "./catalog-core";
-import { attemptRecovery, entitlementReplacement, subscriptionAccess } from "./persistence-policy";
+import {
+  attemptRecovery,
+  billingRetry,
+  entitlementReplacement,
+  MAX_BILLING_ATTEMPTS,
+  subscriptionAccess,
+} from "./persistence-policy";
 import type {
   BillingMapping,
   CheckoutAttempt,
@@ -85,7 +100,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         };
         await tx.insert(schema.billingPlanVersions).values(value).onConflictDoNothing();
         const [stored] = await tx
-          .select()
+          .select(billingPlanVersionsColumns)
           .from(schema.billingPlanVersions)
           .where(
             and(
@@ -106,7 +121,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   async history(): Promise<CatalogPlan[]> {
     const rows = await this.db
-      .select()
+      .select(billingPlanVersionsColumns)
       .from(schema.billingPlanVersions)
       .where(identityWhere(schema.billingPlanVersions, this.identity));
     return rows.map((row) => ({
@@ -119,7 +134,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   private async plan(tx: BillingTransaction, id: string, version: string) {
     const [plan] = await tx
-      .select()
+      .select(billingPlanVersionsColumns)
       .from(schema.billingPlanVersions)
       .where(
         and(
@@ -133,7 +148,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   private async account(orgId: string, tx: BillingTransaction) {
     const [row] = await tx
-      .select()
+      .select(billingAccountsColumns)
       .from(schema.billingAccounts)
       .where(eq(schema.billingAccounts.orgId, orgId))
       .for("update");
@@ -142,7 +157,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   private async attemptView(row: AttemptRow, tx: BillingTransaction): Promise<CheckoutAttempt> {
     const [plan] = await tx
-      .select()
+      .select(billingPlanVersionsColumns)
       .from(schema.billingPlanVersions)
       .where(eq(schema.billingPlanVersions.id, row.planVersionId));
     if (!plan) throw new BillingCoreError("invalid_plan");
@@ -178,12 +193,12 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
         .for("share");
-      if (!member || !["owner", "admin"].includes(member.role))
+      if (!member || !isOrganizationManager(member.role))
         throw new BillingCoreError("invalid_attempt");
       const storedPlan = await this.plan(tx, plan.id, plan.version);
       await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
       const [state] = await tx
-        .select()
+        .select(organizationBillingStateColumns)
         .from(schema.organizationBillingState)
         .where(eq(schema.organizationBillingState.orgId, orgId))
         .for("update");
@@ -201,11 +216,11 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
             customerIssuedAt: now,
             customerRecoveryDeadline: new Date(now.getTime() + RECOVERY_MS),
           })
-          .returning();
+          .returning(billingAccountsColumns);
       }
       if (!account || account.deleted) throw new BillingCoreError("invalid_attempt");
       let [row] = await tx
-        .select()
+        .select(billingCheckoutAttemptsColumns)
         .from(schema.billingCheckoutAttempts)
         .where(
           and(
@@ -231,7 +246,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
             issuedAt: now,
             recoveryDeadline: new Date(now.getTime() + RECOVERY_MS),
           })
-          .returning();
+          .returning(billingCheckoutAttemptsColumns);
       if (!row) throw new BillingCoreError("invalid_attempt");
       return this.leaseAttempt(row, account, tx, now, true);
     });
@@ -278,7 +293,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         updatedAt: now,
       })
       .where(eq(schema.billingCheckoutAttempts.id, row.id))
-      .returning();
+      .returning(billingCheckoutAttemptsColumns);
     if (!leased) throw new BillingCoreError("invalid_attempt");
     return { kind: "attempt", attempt: await this.attemptView(leased, tx) };
   }
@@ -293,7 +308,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       const account = await this.account(hint.orgId, tx);
       if (!account || account.deleted) return null;
       const [row] = await tx
-        .select()
+        .select(billingCheckoutAttemptsColumns)
         .from(schema.billingCheckoutAttempts)
         .where(eq(schema.billingCheckoutAttempts.id, id))
         .for("update");
@@ -338,14 +353,14 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       if (org) {
         await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
         await tx
-          .select()
+          .select(organizationBillingStateColumns)
           .from(schema.organizationBillingState)
           .where(eq(schema.organizationBillingState.orgId, orgId))
           .for("update");
       }
       const account = await this.account(orgId, tx);
       const [row] = await tx
-        .select()
+        .select(billingCheckoutAttemptsColumns)
         .from(schema.billingCheckoutAttempts)
         .where(
           and(
@@ -375,7 +390,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         .update(schema.billingCheckoutAttempts)
         .set({ customerId, revision: row.revision + 1, updatedAt: this.now() })
         .where(eq(schema.billingCheckoutAttempts.id, row.id))
-        .returning();
+        .returning(billingCheckoutAttemptsColumns);
       return updated ? this.attemptView(updated, tx) : null;
     });
   }
@@ -385,14 +400,14 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       if (org) {
         await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
         await tx
-          .select()
+          .select(organizationBillingStateColumns)
           .from(schema.organizationBillingState)
           .where(eq(schema.organizationBillingState.orgId, orgId))
           .for("update");
       }
       const account = await this.account(orgId, tx);
       const [row] = await tx
-        .select()
+        .select(billingCheckoutAttemptsColumns)
         .from(schema.billingCheckoutAttempts)
         .where(
           and(
@@ -484,7 +499,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     return this.db.transaction(async (tx) => {
       const now = this.now();
       const [row] = await tx
-        .select()
+        .select(billingReceiptsColumns)
         .from(schema.billingReceipts)
         .where(
           and(
@@ -500,6 +515,18 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         )
         .for("update", { skipLocked: true });
       if (!row) return null;
+      if (row.attempts >= MAX_BILLING_ATTEMPTS) {
+        await tx
+          .update(schema.billingReceipts)
+          .set({
+            status: "operator_action",
+            errorCode: "retry_exhausted",
+            leaseToken: null,
+            leaseExpiresAt: null,
+          })
+          .where(eq(schema.billingReceipts.id, id));
+        return null;
+      }
       const token = randomUUID();
       await tx
         .update(schema.billingReceipts)
@@ -529,7 +556,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   ): Promise<BillingMapping | null> {
     this.assertIdentity(identity);
     const [row] = await this.db
-      .select()
+      .select(billingAccountsColumns)
       .from(schema.billingAccounts)
       .where(
         and(
@@ -562,7 +589,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       if (org) {
         await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
         [state] = await tx
-          .select()
+          .select(organizationBillingStateColumns)
           .from(schema.organizationBillingState)
           .where(eq(schema.organizationBillingState.orgId, orgId))
           .for("update");
@@ -591,7 +618,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         return "conflict";
       const storedPlan = await this.plan(tx, plan.id, plan.version);
       const [existing] = await tx
-        .select()
+        .select(billingSubscriptionsColumns)
         .from(schema.billingSubscriptions)
         .where(
           and(
@@ -664,34 +691,41 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     });
   }
   async ignored(claim: ReceiptClaim, reason: "nonowned" | "deleted" | "pending_relationship") {
+    if (reason === "pending_relationship") {
+      await this.retry(claim, reason);
+      return;
+    }
     await this.db
       .update(schema.billingReceipts)
-      .set({
-        status: reason === "pending_relationship" ? "retry" : "ignored",
-        errorCode: reason,
-        leaseToken: null,
-        leaseExpiresAt: null,
-        nextAttemptAt: new Date(this.now().getTime() + 60_000),
-      })
+      .set({ status: "ignored", errorCode: reason, leaseToken: null, leaseExpiresAt: null })
       .where(this.receiptFence(claim));
   }
   async retry(claim: ReceiptClaim, code: string) {
-    await this.db
-      .update(schema.billingReceipts)
-      .set({
-        status: "retry",
-        errorCode: code,
-        leaseToken: null,
-        leaseExpiresAt: null,
-        nextAttemptAt: new Date(this.now().getTime() + 60_000),
-      })
-      .where(this.receiptFence(claim));
+    await this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select({ attempts: schema.billingReceipts.attempts })
+        .from(schema.billingReceipts)
+        .where(this.receiptFence(claim))
+        .for("update");
+      if (!row) return;
+      const decision = billingRetry(code, row.attempts);
+      await tx
+        .update(schema.billingReceipts)
+        .set({
+          status: decision.status,
+          errorCode: code,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: new Date(this.now().getTime() + decision.delayMs),
+        })
+        .where(this.receiptFence(claim));
+    });
   }
   /** Root calls this inside the SAME transaction that removes organization.
    * It must acquire advisory -> org UPDATE before entering; no after-delete hook. */
   async tombstoneInTx(orgId: string, tx: BillingTransaction): Promise<void> {
     await tx
-      .select()
+      .select(organizationBillingStateColumns)
       .from(schema.organizationBillingState)
       .where(eq(schema.organizationBillingState.orgId, orgId))
       .for("update");
@@ -702,7 +736,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       .set({ deleted: true, revision: account.revision + 1, updatedAt: this.now() })
       .where(eq(schema.billingAccounts.orgId, orgId));
     const attempts = await tx
-      .select()
+      .select(billingCheckoutAttemptsColumns)
       .from(schema.billingCheckoutAttempts)
       .where(eq(schema.billingCheckoutAttempts.orgId, orgId))
       .orderBy(asc(schema.billingCheckoutAttempts.id))
@@ -725,7 +759,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
       );
     }
     const subscriptions = await tx
-      .select()
+      .select(billingSubscriptionsColumns)
       .from(schema.billingSubscriptions)
       .where(eq(schema.billingSubscriptions.orgId, orgId))
       .orderBy(asc(schema.billingSubscriptions.id))
@@ -770,7 +804,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
         .for("share");
-      if (!member || !["owner", "admin"].includes(member.role))
+      if (!member || !isOrganizationManager(member.role))
         throw new BillingCoreError("invalid_attempt");
       const account = await this.account(orgId, tx);
       if (!account || account.deleted || !account.customerId)
@@ -780,7 +814,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   async view(orgId: string) {
     const [state] = await this.db
-      .select()
+      .select(organizationBillingStateColumns)
       .from(schema.organizationBillingState)
       .where(eq(schema.organizationBillingState.orgId, orgId));
     return state
@@ -794,7 +828,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   }
   async getCleanupAttempt(id: string) {
     const [row] = await this.db
-      .select()
+      .select(billingCheckoutAttemptsColumns)
       .from(schema.billingCheckoutAttempts)
       .where(eq(schema.billingCheckoutAttempts.id, id));
     return row ?? null;
@@ -802,7 +836,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   async recordCleanupCustomer(id: string, customerId: string) {
     return this.db.transaction(async (tx) => {
       const [hint] = await tx
-        .select()
+        .select(billingCheckoutAttemptsColumns)
         .from(schema.billingCheckoutAttempts)
         .where(eq(schema.billingCheckoutAttempts.id, id));
       if (!hint) return;
@@ -835,7 +869,7 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     return this.db.transaction(async (tx) => {
       const now = this.now();
       const [row] = await tx
-        .select()
+        .select(billingCleanupColumns)
         .from(schema.billingCleanup)
         .where(
           and(
@@ -850,6 +884,18 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
         )
         .for("update", { skipLocked: true });
       if (!row) return null;
+      if (row.attempts >= MAX_BILLING_ATTEMPTS) {
+        await tx
+          .update(schema.billingCleanup)
+          .set({
+            status: "operator_action",
+            errorCode: "retry_exhausted",
+            leaseToken: null,
+            leaseExpiresAt: null,
+          })
+          .where(eq(schema.billingCleanup.id, id));
+        return null;
+      }
       const token = randomUUID();
       await tx
         .update(schema.billingCleanup)
@@ -869,38 +915,95 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     status: "complete" | "retry" | "operator_action",
     code: string | null,
   ) {
+    await this.db.transaction(async (tx) => {
+      const fence = and(
+        eq(schema.billingCleanup.id, id),
+        eq(schema.billingCleanup.leaseToken, lease),
+        sql`${schema.billingCleanup.leaseExpiresAt} > ${this.now()}`,
+      );
+      const [row] = await tx
+        .select({ attempts: schema.billingCleanup.attempts })
+        .from(schema.billingCleanup)
+        .where(fence)
+        .for("update");
+      if (!row) return;
+      const decision =
+        status === "retry"
+          ? billingRetry(code ?? "unavailable", row.attempts)
+          : { status, delayMs: 0 };
+      await tx
+        .update(schema.billingCleanup)
+        .set({
+          status: decision.status,
+          errorCode: code,
+          leaseToken: null,
+          leaseExpiresAt: null,
+          nextAttemptAt: new Date(this.now().getTime() + decision.delayMs),
+        })
+        .where(fence);
+    });
+  }
+  /** Commit a fair, bounded page and advance EVERY selected row before external I/O. */
+  async periodicSubscriptionIds() {
+    return this.db.transaction(async (tx) => {
+      const now = this.now(),
+        next = new Date(now.getTime() + 300000);
+      const rows = await tx
+        .select({
+          id: schema.billingSubscriptions.id,
+          subscriptionId: schema.billingSubscriptions.subscriptionId,
+          revision: schema.billingSubscriptions.revision,
+          reconcileAttempts: schema.billingSubscriptions.reconcileAttempts,
+        })
+        .from(schema.billingSubscriptions)
+        .where(
+          and(
+            identityWhere(schema.billingSubscriptions, this.identity),
+            eq(schema.billingSubscriptions.deleted, false),
+            lte(schema.billingSubscriptions.nextReconcileAt, now),
+          ),
+        )
+        .orderBy(
+          asc(schema.billingSubscriptions.nextReconcileAt),
+          asc(schema.billingSubscriptions.id),
+        )
+        .limit(25)
+        .for("update", { skipLocked: true });
+      for (const row of rows)
+        await tx
+          .update(schema.billingSubscriptions)
+          .set({
+            nextReconcileAt: next,
+            reconcileAttempts: Math.min(MAX_BILLING_ATTEMPTS, row.reconcileAttempts + 1),
+          })
+          .where(eq(schema.billingSubscriptions.id, row.id));
+      return rows.map((row) => ({
+        ...row,
+        reconcileAttempts: Math.min(MAX_BILLING_ATTEMPTS, row.reconcileAttempts + 1),
+        nextReconcileAt: next,
+      }));
+    });
+  }
+  async finishSubscriptionAttempt(
+    claim: { id: string; nextReconcileAt: Date; reconcileAttempts: number },
+    code: string | null,
+  ) {
+    // Known subscriptions remain periodically repairable even after a permanent inbox failure.
+    const delay = code ? billingRetry(code, claim.reconcileAttempts).delayMs : 300000;
     await this.db
-      .update(schema.billingCleanup)
+      .update(schema.billingSubscriptions)
       .set({
-        status,
-        errorCode: code,
-        leaseToken: null,
-        leaseExpiresAt: null,
-        nextAttemptAt: new Date(this.now().getTime() + 60_000),
+        nextReconcileAt: new Date(this.now().getTime() + delay),
+        reconcileAttempts: code ? claim.reconcileAttempts : 0,
+        lastReconcileError: code,
       })
       .where(
         and(
-          eq(schema.billingCleanup.id, id),
-          eq(schema.billingCleanup.leaseToken, lease),
-          sql`${schema.billingCleanup.leaseExpiresAt} > ${this.now()}`,
+          eq(schema.billingSubscriptions.id, claim.id),
+          eq(schema.billingSubscriptions.nextReconcileAt, claim.nextReconcileAt),
+          identityWhere(schema.billingSubscriptions, this.identity),
         ),
       );
-  }
-  async periodicSubscriptionIds() {
-    return this.db
-      .select({
-        subscriptionId: schema.billingSubscriptions.subscriptionId,
-        revision: schema.billingSubscriptions.revision,
-      })
-      .from(schema.billingSubscriptions)
-      .where(
-        and(
-          identityWhere(schema.billingSubscriptions, this.identity),
-          eq(schema.billingSubscriptions.deleted, false),
-        ),
-      )
-      .orderBy(asc(schema.billingSubscriptions.updatedAt))
-      .limit(25);
   }
   async bumpAttempt(id: string, closed: boolean) {
     await this.db

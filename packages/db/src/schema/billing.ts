@@ -116,6 +116,9 @@ export const billingSubscriptions = pgTable(
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull(),
     revision: integer("revision").notNull().default(0),
     deleted: boolean("deleted").notNull().default(false),
+    nextReconcileAt: timestamp("next_reconcile_at", { withTimezone: true }).defaultNow().notNull(),
+    reconcileAttempts: integer("reconcile_attempts").notNull().default(0),
+    lastReconcileError: text("last_reconcile_error"),
     ...times(),
   },
   (t) => [
@@ -126,6 +129,11 @@ export const billingSubscriptions = pgTable(
       t.subscriptionId,
     ),
     index("billing_subscription_org_idx").on(t.orgId),
+    index("billing_subscription_reconcile_due_idx").on(t.nextReconcileAt, t.id),
+    check(
+      "billing_subscription_reconcile_attempts_check",
+      sql`${t.reconcileAttempts} BETWEEN 0 AND 12`,
+    ),
     check("billing_subscription_revision_nonnegative", sql`${t.revision} >= 0`),
   ],
 );
@@ -208,6 +216,7 @@ export const billingReceipts = pgTable(
     ...times(),
   },
   (t) => [
+    check("billing_receipt_attempts_check", sql`${t.attempts} BETWEEN 0 AND 12`),
     uniqueIndex("billing_receipt_event_identity_idx").on(
       t.provider,
       t.environment,
@@ -243,6 +252,7 @@ export const billingCleanup = pgTable(
     ...times(),
   },
   (t) => [
+    check("billing_cleanup_attempts_check", sql`${t.attempts} BETWEEN 0 AND 12`),
     uniqueIndex("billing_cleanup_resource_identity_idx").on(
       t.provider,
       t.environment,

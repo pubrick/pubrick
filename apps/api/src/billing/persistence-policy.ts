@@ -52,3 +52,38 @@ export function entitlementReplacement(
   }
   return "promote";
 }
+
+/** The domain shares Better Auth's supported comma-separated role semantics. */
+export { isOrganizationManager as billingManagerRole } from "@pubrick/shared";
+export const MAX_BILLING_ATTEMPTS = 12;
+const permanentBillingErrors = new Set([
+  "configuration",
+  "authentication",
+  "invalid_request",
+  "invalid_signature",
+  "unsupported_account",
+  "environment_mismatch",
+  "unsupported_event",
+  "invalid_response",
+  "not_found",
+  "idempotency_conflict",
+  "invalid_plan",
+  "invalid_attempt",
+  "identity_mismatch",
+]);
+export function billingRetry(
+  code: string,
+  attempts: number,
+): { status: "retry" | "operator_action"; delayMs: number } {
+  const bounded =
+    Number.isSafeInteger(attempts) && attempts >= 1
+      ? Math.min(attempts, MAX_BILLING_ATTEMPTS)
+      : MAX_BILLING_ATTEMPTS;
+  return {
+    status:
+      permanentBillingErrors.has(code) || bounded >= MAX_BILLING_ATTEMPTS
+        ? "operator_action"
+        : "retry",
+    delayMs: Math.min(3600000, 30000 * 2 ** (bounded - 1)),
+  };
+}

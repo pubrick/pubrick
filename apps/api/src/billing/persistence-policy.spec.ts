@@ -53,15 +53,24 @@ it("keeps historical subscriptions from overwriting the selected entitlement", a
   expect(entitlementReplacement("sub_current", "sub_current", true, true)).toBe("promote");
   expect(entitlementReplacement("sub_expired", "sub_next", false, false)).toBe("promote");
 });
-it("bounds permanent/exhausted retries and backs off transient failures",async()=>{
- const { billingRetry }=await import("./persistence-policy");
- expect(billingRetry("timeout",1)).toEqual({status:"retry",delayMs:30000});
- expect(billingRetry("timeout",2)).toEqual({status:"retry",delayMs:60000});
- expect(billingRetry("unavailable",11)).toEqual({status:"retry",delayMs:3600000});
- expect(billingRetry("timeout",12).status).toBe("operator_action");
- for(const code of ["authentication","identity_mismatch","invalid_plan","idempotency_conflict"])expect(billingRetry(code,1).status).toBe("operator_action");
+it("bounds permanent/exhausted retries and backs off transient failures", async () => {
+  const { billingRetry } = await import("./persistence-policy");
+  expect(billingRetry("timeout", 1)).toEqual({ status: "retry", delayMs: 30000 });
+  expect(billingRetry("timeout", 2)).toEqual({ status: "retry", delayMs: 60000 });
+  expect(billingRetry("unavailable", 11)).toEqual({ status: "retry", delayMs: 3600000 });
+  expect(billingRetry("timeout", 12).status).toBe("operator_action");
+  for (const code of [
+    "authentication",
+    "identity_mismatch",
+    "invalid_plan",
+    "idempotency_conflict",
+  ])
+    expect(billingRetry(code, 1).status).toBe("operator_action");
 });
-it("recognizes manager capability within supported comma-separated roles",async()=>{
- const { billingManagerRole }=await import("./persistence-policy");
- expect(billingManagerRole("owner,author")).toBe(true);expect(billingManagerRole("admin,editor")).toBe(true);expect(billingManagerRole("member,author")).toBe(false);expect(billingManagerRole("unknown,editor")).toBe(false);
+it("recognizes manager capability within supported comma-separated roles", async () => {
+  const { billingManagerRole } = await import("./persistence-policy");
+  expect(billingManagerRole("owner,author")).toBe(true);
+  expect(billingManagerRole("admin,editor")).toBe(true);
+  expect(billingManagerRole("member,author")).toBe(false);
+  expect(billingManagerRole("unknown,editor")).toBe(false);
 });

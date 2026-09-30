@@ -64,6 +64,12 @@ subscriptions cannot replace a newer selected subscription; conflicting new
 subscriptions while current access is live create cancellation obligations.
 Pending relationships retry, and independent bounded periodic scans reconcile
 pending checkouts and existing subscriptions even when a webhook never arrives.
+Subscription pages advance a durable `nextReconcileAt` before provider I/O, so
+failed earlier pages cannot starve newer subscriptions. Ready checkout reads
+likewise advance before lookup. Receipt/cleanup retries use exponential delays
+from 30 seconds to one hour, stop after 12 attempts, and send permanent failures
+to retained `operator_action` state. Known subscriptions remain periodically
+repairable with capped counters; their authoritative status still controls access.
 
 ## Deletion and cleanup
 

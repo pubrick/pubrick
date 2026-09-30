@@ -26,7 +26,13 @@ export async function resolveBillingEntitlement(
   now: Date,
 ): Promise<BillingEntitlement> {
   const [state] = await tx
-    .select()
+    .select({
+      revision: organizationBillingState.revision,
+      planVersionId: organizationBillingState.planVersionId,
+      subscriptionId: organizationBillingState.subscriptionId,
+      access: organizationBillingState.access,
+      accessUntil: organizationBillingState.accessUntil,
+    })
     .from(organizationBillingState)
     .where(eq(organizationBillingState.orgId, orgId))
     .for("update");
@@ -42,7 +48,16 @@ export async function resolveBillingEntitlement(
   };
   if (!state?.planVersionId) return empty;
   const [plan] = await tx
-    .select()
+    .select({
+      id: billingPlanVersions.id,
+      provider: billingPlanVersions.provider,
+      environment: billingPlanVersions.environment,
+      accountId: billingPlanVersions.accountId,
+      planId: billingPlanVersions.planId,
+      version: billingPlanVersions.version,
+      priceId: billingPlanVersions.priceId,
+      limits: billingPlanVersions.limits,
+    })
     .from(billingPlanVersions)
     .where(eq(billingPlanVersions.id, state.planVersionId));
   if (
@@ -56,7 +71,12 @@ export async function resolveBillingEntitlement(
     return { ...empty, decision: "expired" };
   const [subscription] = state.subscriptionId
     ? await tx
-        .select()
+        .select({
+          status: billingSubscriptions.status,
+          deleted: billingSubscriptions.deleted,
+          planVersionId: billingSubscriptions.planVersionId,
+          priceId: billingSubscriptions.priceId,
+        })
         .from(billingSubscriptions)
         .where(
           and(

@@ -4,8 +4,8 @@ import { createDb, resolveBillingEntitlement, runMigrations, schema } from "@pub
 import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { BillingService } from "./billing.service";
 import { BillingRepository } from "./billing.repository";
+import { BillingService } from "./billing.service";
 import { BillingCatalog } from "./catalog-core";
 import { CheckoutCore } from "./checkout-core";
 import { CleanupCore } from "./cleanup-core";
@@ -53,7 +53,7 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
   const catalog = new BillingCatalog(driver, [plan]);
   let clock = new Date();
   const repository = new BillingRepository(db, identity, () => clock);
-  async function org(role="owner") {
+  async function org(role = "owner") {
     const orgId = `org_${randomUUID()}`,
       userId = `user_${randomUUID()}`;
     await db.insert(schema.user).values({
@@ -262,28 +262,112 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     );
     expect(entitlement).toMatchObject({ decision: "active", identity, limits: plan.limits });
   });
-  it("allows owner/admin capabilities within supported combined roles",async()=>{
-    const tenant=await org("owner,author");
-    await new CheckoutCore(driver,catalog,repository,"http://localhost:31300").start(tenant.orgId,tenant.userId,plan.id,"en");
-    expect(await repository.authorizedCustomer(tenant.orgId,tenant.userId)).toMatch(/^cus_/);
-    await db.update(schema.member).set({role:"member,author"}).where(eq(schema.member.organizationId,tenant.orgId));
-    await expect(repository.authorizedCustomer(tenant.orgId,tenant.userId)).rejects.toThrow("invalid_attempt");
+  it("allows owner/admin capabilities within supported combined roles", async () => {
+    const tenant = await org("owner,author");
+    await new CheckoutCore(driver, catalog, repository, "http://localhost:31300").start(
+      tenant.orgId,
+      tenant.userId,
+      plan.id,
+      "en",
+    );
+    expect(await repository.authorizedCustomer(tenant.orgId, tenant.userId)).toMatch(/^cus_/);
+    await db
+      .update(schema.member)
+      .set({ role: "member,author" })
+      .where(eq(schema.member.organizationId, tenant.orgId));
+    await expect(repository.authorizedCustomer(tenant.orgId, tenant.userId)).rejects.toThrow(
+      "invalid_attempt",
+    );
   });
-  it("advances a failed subscription page durably so subscription26 is still reconciled",async()=>{
-    const tenant=await org();const [storedPlan]=await db.select({id:schema.billingPlanVersions.id}).from(schema.billingPlanVersions).where(eq(schema.billingPlanVersions.accountId,identity.accountId));if(!storedPlan)throw new Error("fixture");
-    const now=clock.getTime();const suffix=randomUUID().replaceAll("-","");const healthy=`sub_healthy_${suffix}`;
-    await db.insert(schema.billingSubscriptions).values(Array.from({length:26},(_,index)=>({orgId:tenant.orgId,...identity,customerId:"cus_page",subscriptionId:index===25?healthy:`sub_failed_${suffix}_${index}`,status:"canceled",priceId:plan.priceId,planVersionId:storedPlan.id,periodStart:new Date(now),periodEnd:new Date(now+3600000),cancelAtPeriodEnd:false,nextReconcileAt:new Date(now-3600000+index*1000)})));
-    const pageDriver=new FixtureBillingDriver({accountId:identity.accountId,origin:"http://localhost:31300",subscriptions:[{identity,customerId:"cus_page",subscriptionId:healthy,priceId:plan.priceId,status:"active",periodStart:Math.floor(now/1000),periodEnd:Math.floor(now/1000)+3600,cancelAtPeriodEnd:false}]});
-    const retrieve=vi.spyOn(pageDriver,"retrieveSubscription");const service=new BillingService(pageDriver,catalog,repository,"http://localhost:31300");
-    await service.sweep();expect(retrieve.mock.calls.some(([id])=>id===healthy)).toBe(false);
-    await service.sweep();expect(retrieve.mock.calls.some(([id])=>id===healthy)).toBe(true);
+  it("advances a failed subscription page durably so subscription26 is still reconciled", async () => {
+    const tenant = await org();
+    const [storedPlan] = await db
+      .select({ id: schema.billingPlanVersions.id })
+      .from(schema.billingPlanVersions)
+      .where(eq(schema.billingPlanVersions.accountId, identity.accountId));
+    if (!storedPlan) throw new Error("fixture");
+    const now = clock.getTime();
+    const suffix = randomUUID().replaceAll("-", "");
+    const healthy = `sub_healthy_${suffix}`;
+    await db
+      .insert(schema.billingSubscriptions)
+      .values(
+        Array.from({ length: 26 }, (_, index) => ({
+          orgId: tenant.orgId,
+          ...identity,
+          customerId: "cus_page",
+          subscriptionId: index === 25 ? healthy : `sub_failed_${suffix}_${index}`,
+          status: "canceled",
+          priceId: plan.priceId,
+          planVersionId: storedPlan.id,
+          periodStart: new Date(now),
+          periodEnd: new Date(now + 3600000),
+          cancelAtPeriodEnd: false,
+          nextReconcileAt: new Date(now - 3600000 + index * 1000),
+        })),
+      );
+    const pageDriver = new FixtureBillingDriver({
+      accountId: identity.accountId,
+      origin: "http://localhost:31300",
+      subscriptions: [
+        {
+          identity,
+          customerId: "cus_page",
+          subscriptionId: healthy,
+          priceId: plan.priceId,
+          status: "active",
+          periodStart: Math.floor(now / 1000),
+          periodEnd: Math.floor(now / 1000) + 3600,
+          cancelAtPeriodEnd: false,
+        },
+      ],
+    });
+    const retrieve = vi.spyOn(pageDriver, "retrieveSubscription");
+    const service = new BillingService(pageDriver, catalog, repository, "http://localhost:31300");
+    await service.sweep();
+    expect(retrieve.mock.calls.some(([id]) => id === healthy)).toBe(false);
+    await service.sweep();
+    expect(retrieve.mock.calls.some(([id]) => id === healthy)).toBe(true);
   });
-  it("closes permanent/exhausted receipt retries and keeps cleanup obligations visible",async()=>{
-    const id=await repository.receive({identity,eventId:`evt_${randomUUID().replaceAll("-","")}`,kind:"subscription.changed",resourceId:"sub_refused"});clock=new Date(Math.max(Date.now(),clock.getTime()));
-    await db.update(schema.billingReceipts).set({attempts:11}).where(eq(schema.billingReceipts.id,id));const claim=await repository.claim(id);if(!claim)throw new Error("fixture");await repository.retry(claim,"timeout");
-    const [receipt]=await db.select({status:schema.billingReceipts.status,attempts:schema.billingReceipts.attempts}).from(schema.billingReceipts).where(eq(schema.billingReceipts.id,id));expect(receipt).toEqual({status:"operator_action",attempts:12});
-    const [cleanup]=await db.insert(schema.billingCleanup).values({orgId:"org_deleted_retry",...identity,kind:"subscription",resourceId:`sub_${randomUUID().replaceAll("-","")}`,idempotencyKey:`cleanup:${randomUUID()}`}).returning({id:schema.billingCleanup.id});if(!cleanup)throw new Error("fixture");clock=new Date(Math.max(Date.now(),clock.getTime()));const leased=await repository.claimCleanup(cleanup.id);if(!leased)throw new Error("fixture");await repository.finishCleanup(leased.id,leased.leaseToken,"retry","authentication");
-    const [obligation]=await db.select({status:schema.billingCleanup.status,errorCode:schema.billingCleanup.errorCode}).from(schema.billingCleanup).where(eq(schema.billingCleanup.id,leased.id));expect(obligation).toEqual({status:"operator_action",errorCode:"authentication"});
+  it("closes permanent/exhausted receipt retries and keeps cleanup obligations visible", async () => {
+    const id = await repository.receive({
+      identity,
+      eventId: `evt_${randomUUID().replaceAll("-", "")}`,
+      kind: "subscription.changed",
+      resourceId: "sub_refused",
+    });
+    clock = new Date(Math.max(Date.now(), clock.getTime()));
+    await db
+      .update(schema.billingReceipts)
+      .set({ attempts: 11 })
+      .where(eq(schema.billingReceipts.id, id));
+    const claim = await repository.claim(id);
+    if (!claim) throw new Error("fixture");
+    await repository.retry(claim, "timeout");
+    const [receipt] = await db
+      .select({ status: schema.billingReceipts.status, attempts: schema.billingReceipts.attempts })
+      .from(schema.billingReceipts)
+      .where(eq(schema.billingReceipts.id, id));
+    expect(receipt).toEqual({ status: "operator_action", attempts: 12 });
+    const [cleanup] = await db
+      .insert(schema.billingCleanup)
+      .values({
+        orgId: "org_deleted_retry",
+        ...identity,
+        kind: "subscription",
+        resourceId: `sub_${randomUUID().replaceAll("-", "")}`,
+        idempotencyKey: `cleanup:${randomUUID()}`,
+      })
+      .returning({ id: schema.billingCleanup.id });
+    if (!cleanup) throw new Error("fixture");
+    clock = new Date(Math.max(Date.now(), clock.getTime()));
+    const leased = await repository.claimCleanup(cleanup.id);
+    if (!leased) throw new Error("fixture");
+    await repository.finishCleanup(leased.id, leased.leaseToken, "retry", "authentication");
+    const [obligation] = await db
+      .select({ status: schema.billingCleanup.status, errorCode: schema.billingCleanup.errorCode })
+      .from(schema.billingCleanup)
+      .where(eq(schema.billingCleanup.id, leased.id));
+    expect(obligation).toEqual({ status: "operator_action", errorCode: "authentication" });
   });
-
 });

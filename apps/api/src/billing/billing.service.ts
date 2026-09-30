@@ -74,6 +74,8 @@ export class BillingService {
       for (const row of due.attempts) {
         try {
           if (row.checkoutId) {
+            // Advance before lookup: one refused page cannot starve later checkouts.
+            await this.repository.bumpAttempt(row.id, false);
             const checkout = await this.driver.retrieveCheckout(row.checkoutId);
             if (checkout.subscriptionId) {
               const id = await this.repository.receive({
@@ -94,13 +96,22 @@ export class BillingService {
         }
       }
       for (const row of await this.repository.periodicSubscriptionIds()) {
-        const id = await this.repository.receive({
-          identity: this.driver.identity,
-          eventId: `periodic_subscription_${row.subscriptionId}_${Math.floor(Date.now() / 60_000)}`,
-          kind: "subscription.changed",
-          resourceId: row.subscriptionId,
-        });
-        await this.reconcile.process(id).catch(() => {});
+        let code: string | null = null;
+        try {
+          const id = await this.repository.receive({
+            identity: this.driver.identity,
+            eventId: `periodic_subscription_${row.subscriptionId}_${Math.floor(Date.now() / 60_000)}`,
+            kind: "subscription.changed",
+            resourceId: row.subscriptionId,
+          });
+          await this.reconcile.process(id);
+        } catch (error) {
+          code =
+            error instanceof BillingError || error instanceof BillingCoreError
+              ? error.code
+              : "unavailable";
+        }
+        await this.repository.finishSubscriptionAttempt(row, code);
       }
       for (const row of due.cleanup) {
         const claim = await this.repository.claimCleanup(row.id);
