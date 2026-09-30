@@ -347,6 +347,8 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     // the durable refused receipts are reused, rather than fresh SDK failures being thrown.
     clock = new Date(now + 31000);
     await service.sweep();
+    // Earlier fixtures share this account; bounded pages can include their due rows.
+    await service.sweep();
     const retried = await db
       .select({
         attempts: schema.billingSubscriptions.reconcileAttempts,

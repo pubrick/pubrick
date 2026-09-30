@@ -1,5 +1,5 @@
 {
-  "id": "7716c8e8-dce0-4b1e-b05c-52350675f63b",
+  "id": "c0dc061b-5a50-4f06-aef7-a03b3df29046",
   "prevId": "5badb096-6284-4754-a34e-b783701500a3",
   "version": "7",
   "dialect": "postgresql",
@@ -1940,6 +1940,14 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_accounts_provider_check": {
+          "name": "billing_accounts_provider_check",
+          "value": "\"billing_accounts\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_accounts_environment_check": {
+          "name": "billing_accounts_environment_check",
+          "value": "\"billing_accounts\".\"environment\" = 'sandbox'"
+        },
         "billing_account_revision_nonnegative": {
           "name": "billing_account_revision_nonnegative",
           "value": "\"billing_accounts\".\"revision\" >= 0"
@@ -2198,6 +2206,14 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_checkout_attempts_provider_check": {
+          "name": "billing_checkout_attempts_provider_check",
+          "value": "\"billing_checkout_attempts\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_checkout_attempts_environment_check": {
+          "name": "billing_checkout_attempts_environment_check",
+          "value": "\"billing_checkout_attempts\".\"environment\" = 'sandbox'"
+        },
         "billing_checkout_status_check": {
           "name": "billing_checkout_status_check",
           "value": "\"billing_checkout_attempts\".\"status\" IN ('pending','ready','closed','operator_action')"
@@ -2381,6 +2397,18 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_cleanup_provider_check": {
+          "name": "billing_cleanup_provider_check",
+          "value": "\"billing_cleanup\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_cleanup_environment_check": {
+          "name": "billing_cleanup_environment_check",
+          "value": "\"billing_cleanup\".\"environment\" = 'sandbox'"
+        },
+        "billing_cleanup_attempts_check": {
+          "name": "billing_cleanup_attempts_check",
+          "value": "\"billing_cleanup\".\"attempts\" BETWEEN 0 AND 12"
+        },
         "billing_cleanup_kind_check": {
           "name": "billing_cleanup_kind_check",
           "value": "\"billing_cleanup\".\"kind\" IN ('attempt','subscription')"
@@ -2545,6 +2573,14 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_plan_versions_provider_check": {
+          "name": "billing_plan_versions_provider_check",
+          "value": "\"billing_plan_versions\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_plan_versions_environment_check": {
+          "name": "billing_plan_versions_environment_check",
+          "value": "\"billing_plan_versions\".\"environment\" = 'sandbox'"
+        },
         "billing_plan_version_positive": {
           "name": "billing_plan_version_positive",
           "value": "length(btrim(\"billing_plan_versions\".\"version\")) BETWEEN 1 AND 100"
@@ -2708,6 +2744,18 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_receipts_provider_check": {
+          "name": "billing_receipts_provider_check",
+          "value": "\"billing_receipts\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_receipts_environment_check": {
+          "name": "billing_receipts_environment_check",
+          "value": "\"billing_receipts\".\"environment\" = 'sandbox'"
+        },
+        "billing_receipt_attempts_check": {
+          "name": "billing_receipt_attempts_check",
+          "value": "\"billing_receipts\".\"attempts\" BETWEEN 0 AND 12"
+        },
         "billing_receipt_kind_check": {
           "name": "billing_receipt_kind_check",
           "value": "\"billing_receipts\".\"kind\" IN ('subscription.changed','checkout.completed','invoice.changed')"
@@ -2816,6 +2864,26 @@
           "notNull": true,
           "default": false
         },
+        "next_reconcile_at": {
+          "name": "next_reconcile_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reconcile_attempts": {
+          "name": "reconcile_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_reconcile_error": {
+          "name": "last_reconcile_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2879,6 +2947,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "billing_subscription_reconcile_due_idx": {
+          "name": "billing_subscription_reconcile_due_idx",
+          "columns": [
+            {
+              "expression": "next_reconcile_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -2900,9 +2989,25 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
+        "billing_subscriptions_provider_check": {
+          "name": "billing_subscriptions_provider_check",
+          "value": "\"billing_subscriptions\".\"provider\" IN ('stripe','fixture')"
+        },
+        "billing_subscriptions_environment_check": {
+          "name": "billing_subscriptions_environment_check",
+          "value": "\"billing_subscriptions\".\"environment\" = 'sandbox'"
+        },
+        "billing_subscription_reconcile_attempts_check": {
+          "name": "billing_subscription_reconcile_attempts_check",
+          "value": "\"billing_subscriptions\".\"reconcile_attempts\" BETWEEN 0 AND 12"
+        },
         "billing_subscription_revision_nonnegative": {
           "name": "billing_subscription_revision_nonnegative",
           "value": "\"billing_subscriptions\".\"revision\" >= 0"
+        },
+        "billing_subscription_status_check": {
+          "name": "billing_subscription_status_check",
+          "value": "\"billing_subscriptions\".\"status\" IN ('active','trialing','past_due','unpaid','canceled','incomplete','incomplete_expired','paused')"
         }
       },
       "isRLSEnabled": false
