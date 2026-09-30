@@ -13,7 +13,7 @@ import * as schema from "./schema/index.js";
 
 const url = process.env.TEST_DATABASE_URL;
 const identity = {
-  provider: "stripe",
+  provider: "stripe" as const,
   environment: "sandbox",
   accountId: "acct_resource_operator",
 };

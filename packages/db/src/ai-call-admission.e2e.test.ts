@@ -7,7 +7,11 @@ import { runMigrations } from "./migrate.js";
 import * as schema from "./schema/index.js";
 
 const url = process.env.TEST_DATABASE_URL;
-const identity = { provider: "stripe", environment: "sandbox", accountId: "acct_lease_operator" };
+const identity = {
+  provider: "stripe" as const,
+  environment: "sandbox",
+  accountId: "acct_lease_operator",
+};
 const hosted = { mode: "hosted", identity } as const;
 describe.skipIf(!url)("native physical model call admission", () => {
   let connection: ReturnType<typeof createDb>;
