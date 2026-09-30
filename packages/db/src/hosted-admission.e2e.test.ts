@@ -406,4 +406,23 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
     ).toHaveLength(0);
     limit = 10;
   });
+  it("prunes only the acting account's expired creation claims",async()=>{
+    limit=10;const actor=await account();const other=await account();const old=new Date(Date.now()-25*3600000);
+    await connection.db.insert(schema.hostedAccountCreationClaims).values([{userId:actor.userId,createdAt:old},{userId:other.userId,createdAt:old}]);
+    await workspace(actor);
+    const rows=await connection.db.select({userId:schema.hostedAccountCreationClaims.userId,createdAt:schema.hostedAccountCreationClaims.createdAt}).from(schema.hostedAccountCreationClaims).where(eq(schema.hostedAccountCreationClaims.userId,other.userId));
+    expect(rows).toHaveLength(1);expect(rows[0].createdAt).toEqual(old);
+  });
+  it("denies non-manager mutation before disclosing target existence",async()=>{
+    limit=10;const owner=await account();const outsider=await account();const ordinary=await account();const orgId=await workspace(owner);
+    const memberId=randomUUID();await connection.db.insert(schema.member).values({id:memberId,organizationId:orgId,userId:ordinary.userId,role:"member"});
+    for(const actor of [outsider,ordinary]){
+      for(const target of [memberId,randomUUID()]){
+        await expect(repository().updateRole(orgId,actor,target,"editor")).rejects.toThrow("forbidden");
+        await expect(repository().remove(orgId,actor,target)).rejects.toThrow("forbidden");
+      }
+    }
+    for(const id of [randomUUID()])await expect(repository().cancel(orgId,outsider,id)).rejects.toThrow("forbidden");
+  });
+
 });
