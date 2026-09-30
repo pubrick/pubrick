@@ -5,6 +5,7 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { HostedAdmissionController } from "./hosted-admission.controller";
 import { HostedAdmissionService } from "./hosted-admission.service";
+import { HOSTED_BROWSER_ORIGIN, HostedBrowserGuard } from "./hosted-browser.guard";
 
 const service = {
   create: vi.fn(async () => ({ organizationId: "committed-org" })),
@@ -17,7 +18,11 @@ const service = {
 };
 @Module({
   controllers: [HostedAdmissionController],
-  providers: [{ provide: HostedAdmissionService, useValue: service }],
+  providers: [
+    { provide: HostedAdmissionService, useValue: service },
+    { provide: HOSTED_BROWSER_ORIGIN, useValue: "http://localhost:31300" },
+    HostedBrowserGuard,
+  ],
 })
 class TestModule {}
 
@@ -45,6 +50,7 @@ describe("hosted workspace HTTP contracts", () => {
   it("takes actor identity from the guarded session and returns the committed workspace ID", async () => {
     const response = await request(app.getHttpServer())
       .post("/api/hosted-admission/create")
+      .set("Origin", "http://localhost:31300")
       .set("x-test-session", "verified")
       .send({ name: "Workspace", slug: "workspace" });
     expect(response.status).toBe(200);
@@ -58,6 +64,7 @@ describe("hosted workspace HTTP contracts", () => {
     const before = service.create.mock.calls.length;
     const response = await request(app.getHttpServer())
       .post("/api/hosted-admission/create")
+      .set("Origin", "http://localhost:31300")
       .set("x-test-session", "verified")
       .send({ name: "Workspace", slug: "workspace", userId: "attacker" });
     expect(response.status).toBe(400);
@@ -67,6 +74,7 @@ describe("hosted workspace HTTP contracts", () => {
     const before = service.create.mock.calls.length;
     const response = await request(app.getHttpServer())
       .post("/api/hosted-admission/create")
+      .set("Origin", "http://localhost:31300")
       .send({ name: "Workspace", slug: "workspace" });
     expect(response.status).toBe(401);
     expect(service.create.mock.calls).toHaveLength(before);
@@ -74,6 +82,7 @@ describe("hosted workspace HTTP contracts", () => {
   it("returns persisted invitation facts required by the Settings confirmation", async () => {
     const response = await request(app.getHttpServer())
       .post("/api/hosted-admission/invite")
+      .set("Origin", "http://localhost:31300")
       .set("x-test-session", "verified")
       .send({
         orgId: "selected-org",
@@ -91,9 +100,29 @@ describe("hosted workspace HTTP contracts", () => {
   it("returns a JSON acknowledgment for a void mutation", async () => {
     const response = await request(app.getHttpServer())
       .post("/api/hosted-admission/cancel")
+      .set("Origin", "http://localhost:31300")
       .set("x-test-session", "verified")
       .send({ orgId: "selected-org", invitationId: "committed-invite" });
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ ok: true });
+  });
+  it("refuses foreign origins and form requests before a lifecycle mutation", async () => {
+    const before = service.cancel.mock.calls.length;
+    for (const origin of ["http://evil.example.test", "http://localhost:31301"]) {
+      const response = await request(app.getHttpServer())
+        .post("/api/hosted-admission/cancel")
+        .set("Origin", origin)
+        .set("x-test-session", "verified")
+        .send({ orgId: "selected-org", invitationId: "committed-invite" });
+      expect(response.status).toBe(403);
+    }
+    const form = await request(app.getHttpServer())
+      .post("/api/hosted-admission/cancel")
+      .set("Origin", "http://localhost:31300")
+      .set("x-test-session", "verified")
+      .type("form")
+      .send({ orgId: "selected-org", invitationId: "committed-invite" });
+    expect(form.status).toBe(403);
+    expect(service.cancel.mock.calls).toHaveLength(before);
   });
 });

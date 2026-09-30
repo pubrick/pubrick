@@ -6,6 +6,7 @@ import { BillingRepository } from "../billing/billing.repository";
 import { QueueService } from "../queue/queue.service";
 import { HostedAdmissionController } from "./hosted-admission.controller";
 import { HostedAdmissionService } from "./hosted-admission.service";
+import { HOSTED_BROWSER_ORIGIN, HostedBrowserGuard } from "./hosted-browser.guard";
 
 @Module({})
 // biome-ignore lint/complexity/noStaticOnlyClass: Nest dynamic module composition.
@@ -17,6 +18,8 @@ export class HostedAdmissionModule {
       imports: [BillingModule.forRoot(config)],
       controllers: [HostedAdmissionController],
       providers: [
+        { provide: HOSTED_BROWSER_ORIGIN, useValue: config.publicOrigin },
+        HostedBrowserGuard,
         {
           provide: HostedAdmissionService,
           inject: [BillingRepository, QueueService],

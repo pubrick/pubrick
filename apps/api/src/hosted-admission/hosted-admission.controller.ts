@@ -6,12 +6,14 @@ import {
   Post,
   Req,
   UnauthorizedException,
+  UseGuards,
 } from "@nestjs/common";
 import type { HostedAdmissionActor } from "@pubrick/db";
 import { z } from "zod";
 import { NotOrgScoped } from "../org/not-org-scoped.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { HostedAdmissionService } from "./hosted-admission.service";
+import { HostedBrowserGuard } from "./hosted-browser.guard";
 
 const id = z.string().min(1).max(128);
 const org = z.object({ orgId: id }).strict();
@@ -39,6 +41,7 @@ function actor(request: SessionRequest): HostedAdmissionActor {
 }
 
 @Controller("hosted-admission")
+@UseGuards(HostedBrowserGuard)
 @NotOrgScoped(
   "Account-scoped workspace lifecycle: the repository revalidates body organization membership in its transaction, including pre-membership create and accept.",
 )
