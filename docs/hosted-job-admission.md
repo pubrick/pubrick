@@ -1,0 +1,7 @@
+# Hosted generation queue admission
+
+All three production `pipelineRuns` insert paths — manual API, calendar worker and autopilot worker — serialize on the shared tenant run-admission advisory. Hosted paths take organization SHARE directly, read actual queued/running rows, and check central billing `concurrentJobs` before selector settings, credentials, slots, topics or other child locks. The subscription and configured operator identity remain server authoritative. Billing growth uses database time before and after acquiring its state row so a blocked transaction cannot grant expired access.
+
+Self-hosted paths preserve the existing three-run cap. Hosted plans replace that static cap with their configured limit; existing hourly image generation safeguards and brand autopilot budgets still apply. Queue admission and physical model-call leases are separate controls: waiting jobs are not physical HTTP calls, and each SDK dispatch still needs its own lease.
+
+A refused API request creates no run or queue job and returns the common closed quota response (402 subscription, 409 capacity, 503 operator mismatch). Calendar refusal does not mutate its slot or topic; later scans can retry after entitlement/capacity changes. Autopilot refusal creates no run, dispatch or topic claim, but completes existing manual attempts and scanner audit bookkeeping using the compatible `org_busy` decision; a sanitized debug code distinguishes subscription or operator failure from exhausted capacity. No new decision enum or migrations are introduced.

@@ -15,6 +15,7 @@ import {
 import { and, asc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { admitHostedJob, workerJobQuotaMode } from "../hosted-job-admission";
 import { quietHour } from "./rules";
 
 const SCAN_LIMIT = 100;
@@ -169,14 +170,17 @@ export class AutopilotService {
     attemptId?: string,
     scan?: ScanContext,
   ): Promise<AutopilotDecision> {
+    const mode = workerJobQuotaMode();
     return db.transaction(async (tx) => {
       // The same org lock as manual and calendar generation. It serializes
       // quota, budget admission and concurrency checks across worker replicas.
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
-      const aiState = await lockAiTextSelection(orgId, tx);
-      if (!aiState) return "disabled";
+      const quotaRefusal = await admitHostedJob(tx, orgId, mode);
+      if (quotaRefusal === "organization_unavailable") return "disabled";
+      const aiState = quotaRefusal ? undefined : await lockAiTextSelection(orgId, tx);
+      if (!aiState && !quotaRefusal) return "disabled";
       if (scan) {
         const [existing] = await tx
           .select({ decision: schema.autopilotScanEvents.decision })
@@ -243,6 +247,11 @@ export class AutopilotService {
         }
         return decision;
       };
+      if (quotaRefusal) {
+        this.logger.debug(`Autopilot admission deferred: ${quotaRefusal}`);
+        return finish("org_busy");
+      }
+      if (!aiState) return finish("no_ai_key");
       const configs = await tx
         .select({
           enabled: schema.autopilotConfigs.enabled,
@@ -347,7 +356,8 @@ export class AutopilotService {
             inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           ),
         );
-      if ((activeOrg[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) return finish("org_busy");
+      if (mode.mode === "self-hosted" && (activeOrg[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS)
+        return finish("org_busy");
       const channels = config.channelIds.length
         ? await tx
             .select({ id: schema.channels.id })

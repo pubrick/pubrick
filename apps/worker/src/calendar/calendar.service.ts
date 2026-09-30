@@ -17,6 +17,7 @@ import {
 import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
+import { admitHostedJob, workerJobQuotaMode } from "../hosted-job-admission";
 import { holdOrganization } from "../organization-lock";
 
 const SCAN_LIMIT = 100;
@@ -53,11 +54,17 @@ export class CalendarService {
   }
 
   async trigger(boss: PgBoss, orgId: string, slotId: string): Promise<void> {
+    const mode = workerJobQuotaMode();
     await db.transaction(async (tx) => {
       // Same admission lock as POST /api/runs, taken before claiming a slot.
       await tx.execute(
         sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
       );
+      const quotaRefusal = await admitHostedJob(tx, orgId, mode);
+      if (quotaRefusal) {
+        this.logger.debug(`Calendar admission deferred: ${quotaRefusal}`);
+        return;
+      }
       if (!(await holdOrganization(tx, orgId))) return;
       const rows = await tx
         .select({
@@ -142,7 +149,7 @@ export class CalendarService {
             inArray(schema.pipelineRuns.status, [...LIVE_RUN_STATUSES]),
           ),
         );
-      if ((active[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) {
+      if (mode.mode === "self-hosted" && (active[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) {
         await tx
           .update(schema.calendarSlots)
           .set({ retryAfter: new Date(Date.now() + 5 * 60_000) })

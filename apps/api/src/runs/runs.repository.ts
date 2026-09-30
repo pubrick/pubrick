@@ -1,5 +1,11 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { lockAiTextSelection, schema, snapshotAiTextSelection } from "@pubrick/db";
+import {
+  authorizeBillingGrowth,
+  lockAiTextSelection,
+  schema,
+  snapshotAiTextSelection,
+  type TenantResourceQuotaMode,
+} from "@pubrick/db";
 import {
   type ApiErrorCode,
   COVER_SUPPORTED_PLATFORMS,
@@ -23,6 +29,7 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 import { ZodValidationPipe } from "../validation.pipe";
 
 /**
@@ -361,12 +368,21 @@ export class RunsRepository {
   private async admit(
     tx: Tx,
     orgId: string,
+    mode: TenantResourceQuotaMode,
     generateCover = false,
     generateInlineImages = false,
   ): Promise<void> {
     await tx.execute(
       sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
     );
+    if (mode.mode === "hosted") {
+      const [org] = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId))
+        .for("share");
+      if (!org) throw notFound("not_found", "Organization not found");
+    }
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })
       .from(schema.pipelineRuns)
@@ -377,7 +393,13 @@ export class RunsRepository {
         ),
       );
     const inFlight = rows[0]?.count ?? 0;
-    if (inFlight >= MAX_CONCURRENT_RUNS) {
+    if (mode.mode === "hosted") {
+      await authorizeBillingGrowth(orgId, tx, mode.identity, {
+        resource: "concurrentJobs",
+        occupied: inFlight,
+        additional: 1,
+      });
+    } else if (inFlight >= MAX_CONCURRENT_RUNS) {
       throw conflict(
         "run_limit_reached",
         `This organization already has ${MAX_CONCURRENT_RUNS} generation runs queued or running; wait for one to finish or cancel it`,
@@ -447,107 +469,114 @@ export class RunsRepository {
     const brief = (data.brief ?? "").trim() === "" ? null : (data.brief as string);
     const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
 
-    const id = await db.transaction(async (tx) => {
-      const aiState = await lockAiTextSelection(orgId, tx);
-      if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
-      if (
-        !aiState.settings.provider ||
-        !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
-      )
-        throw conflict(
-          "ai_default_key_missing",
-          "The selected text provider has no key. Review Settings before generating text.",
-        );
-      const textSelection = snapshotAiTextSelection(aiState);
-      if (!textSelection)
-        throw conflict(
-          "ai_default_key_missing",
-          "Add an AI key in Settings before generating text.",
-        );
-      await this.admit(tx, orgId, data.generateCover, data.generateInlineImages);
-      // A topic id can only come from a server-side check under this same
-      // transaction. The public RunCreate body has no topicId field.
-      const topicId = beforeInsert ? await beforeInsert(tx) : null;
-      // Capture a bounded, deterministic by-value snapshot under the same
-      // transaction as admission and enqueue. Both sides of the join carry the
-      // tenant predicate; the item supplies the brand boundary.
-      const editorialFeedback = data.useEditorialFeedback
-        ? (
-            await tx
-              .select({ id: schema.editorialNotes.id, note: schema.editorialNotes.note })
-              .from(schema.editorialNotes)
-              .innerJoin(
-                schema.contentItems,
-                eq(schema.editorialNotes.contentItemId, schema.contentItems.id),
-              )
-              .where(
-                and(
-                  eq(schema.editorialNotes.orgId, orgId),
-                  eq(schema.contentItems.orgId, orgId),
-                  eq(schema.contentItems.brandId, data.brandId),
-                ),
-              )
-              .orderBy(desc(schema.editorialNotes.createdAt), desc(schema.editorialNotes.id))
-              .limit(5)
-          ).map(({ id, note }) => ({
-            id,
-            // A split surrogate pair is not valid JSONB text in PostgreSQL.
-            note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
-          }))
-        : undefined;
-      const inserted = await tx
-        .insert(schema.pipelineRuns)
-        .values({
-          orgId,
-          brandId: data.brandId,
-          topicId,
-          textSelection,
-          // MATERIAL decides the kind: a brief is an instruction ABOUT the
-          // material, not a second thing to work from, so a request carrying
-          // both is a source run with `text` set. A `sourceUrl` with no material
-          // has nothing to attribute and is dropped — the belt behind the
-          // compose screen's own inline refusal.
-          input:
-            material === null
-              ? // The refine guarantees at least one of the two is non-blank, so
-                // with no material the brief is non-null. This is the one place
-                // that guarantee is invisible to the compiler.
-                {
-                  kind: "brief",
-                  ...(data.title !== undefined && { title: data.title }),
-                  text: brief as string,
-                  channelIds: data.channelIds,
-                  ...(data.generateCover && { generateCover: true }),
-                  ...(data.generateInlineImages && { generateInlineImages: true }),
-                  ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
-                  ...(data.useEditorialFeedback && {
-                    useEditorialFeedback: true,
-                    editorialFeedback,
-                  }),
-                  ...(data.contentType && { contentType: data.contentType }),
-                }
-              : {
-                  kind: "source",
-                  ...(data.title !== undefined && { title: data.title }),
-                  text: brief,
-                  sourceUrl: data.sourceUrl ?? null,
-                  material,
-                  channelIds: data.channelIds,
-                  ...(data.generateCover && { generateCover: true }),
-                  ...(data.generateInlineImages && { generateInlineImages: true }),
-                  ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
-                  ...(data.useEditorialFeedback && {
-                    useEditorialFeedback: true,
-                    editorialFeedback,
-                  }),
-                  ...(data.contentType && { contentType: data.contentType }),
-                },
-        })
-        .returning({ id: schema.pipelineRuns.id });
-      const runId = inserted[0]?.id as string;
-      await this.queue.enqueueGenerate(tx, { id: runId, orgId });
-      return runId;
-    });
+    const mode = tenantQuotaMode();
+    const id = await withQuotaErrors(() =>
+      db.transaction(async (tx) => {
+        // Hosted billing locks precede selector credential/settings and topic/brand child locks.
+        if (mode.mode === "hosted")
+          await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
+        const aiState = await lockAiTextSelection(orgId, tx);
+        if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
+        if (
+          !aiState.settings.provider ||
+          !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
+        )
+          throw conflict(
+            "ai_default_key_missing",
+            "The selected text provider has no key. Review Settings before generating text.",
+          );
+        const textSelection = snapshotAiTextSelection(aiState);
+        if (!textSelection)
+          throw conflict(
+            "ai_default_key_missing",
+            "Add an AI key in Settings before generating text.",
+          );
+        if (mode.mode === "self-hosted")
+          await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
+        // A topic id can only come from a server-side check under this same
+        // transaction. The public RunCreate body has no topicId field.
+        const topicId = beforeInsert ? await beforeInsert(tx) : null;
+        // Capture a bounded, deterministic by-value snapshot under the same
+        // transaction as admission and enqueue. Both sides of the join carry the
+        // tenant predicate; the item supplies the brand boundary.
+        const editorialFeedback = data.useEditorialFeedback
+          ? (
+              await tx
+                .select({ id: schema.editorialNotes.id, note: schema.editorialNotes.note })
+                .from(schema.editorialNotes)
+                .innerJoin(
+                  schema.contentItems,
+                  eq(schema.editorialNotes.contentItemId, schema.contentItems.id),
+                )
+                .where(
+                  and(
+                    eq(schema.editorialNotes.orgId, orgId),
+                    eq(schema.contentItems.orgId, orgId),
+                    eq(schema.contentItems.brandId, data.brandId),
+                  ),
+                )
+                .orderBy(desc(schema.editorialNotes.createdAt), desc(schema.editorialNotes.id))
+                .limit(5)
+            ).map(({ id, note }) => ({
+              id,
+              // A split surrogate pair is not valid JSONB text in PostgreSQL.
+              note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
+            }))
+          : undefined;
+        const inserted = await tx
+          .insert(schema.pipelineRuns)
+          .values({
+            orgId,
+            brandId: data.brandId,
+            topicId,
+            textSelection,
+            // MATERIAL decides the kind: a brief is an instruction ABOUT the
+            // material, not a second thing to work from, so a request carrying
+            // both is a source run with `text` set. A `sourceUrl` with no material
+            // has nothing to attribute and is dropped — the belt behind the
+            // compose screen's own inline refusal.
+            input:
+              material === null
+                ? // The refine guarantees at least one of the two is non-blank, so
+                  // with no material the brief is non-null. This is the one place
+                  // that guarantee is invisible to the compiler.
+                  {
+                    kind: "brief",
+                    ...(data.title !== undefined && { title: data.title }),
+                    text: brief as string,
+                    channelIds: data.channelIds,
+                    ...(data.generateCover && { generateCover: true }),
+                    ...(data.generateInlineImages && { generateInlineImages: true }),
+                    ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
+                    ...(data.useEditorialFeedback && {
+                      useEditorialFeedback: true,
+                      editorialFeedback,
+                    }),
+                    ...(data.contentType && { contentType: data.contentType }),
+                  }
+                : {
+                    kind: "source",
+                    ...(data.title !== undefined && { title: data.title }),
+                    text: brief,
+                    sourceUrl: data.sourceUrl ?? null,
+                    material,
+                    channelIds: data.channelIds,
+                    ...(data.generateCover && { generateCover: true }),
+                    ...(data.generateInlineImages && { generateInlineImages: true }),
+                    ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
+                    ...(data.useEditorialFeedback && {
+                      useEditorialFeedback: true,
+                      editorialFeedback,
+                    }),
+                    ...(data.contentType && { contentType: data.contentType }),
+                  },
+          })
+          .returning({ id: schema.pipelineRuns.id });
+        const runId = inserted[0]?.id as string;
+        await this.queue.enqueueGenerate(tx, { id: runId, orgId });
+        return runId;
+      }),
+    );
 
     return this.get(orgId, id);
   }

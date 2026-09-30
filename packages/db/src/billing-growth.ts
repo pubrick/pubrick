@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import type { BillingEntitlement, BillingTransaction } from "./billing-entitlement.js";
 import { resolveBillingEntitlement } from "./billing-entitlement.js";
 import type { BillingLimits } from "./schema/billing.js";
@@ -58,7 +59,6 @@ export async function authorizeBillingGrowth(
   tx: BillingTransaction,
   configuredIdentity: BillingGrowthIdentity,
   input: { resource: BillingResource; occupied: number; additional: number },
-  now = new Date(),
 ): Promise<void> {
   if (input.additional === 0) {
     // Still validate numeric invariants without acquiring a billing row for no growth.
@@ -71,8 +71,24 @@ export async function authorizeBillingGrowth(
     );
     return;
   }
+  const before = await tx.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+  const entitlement = await resolveBillingEntitlement(
+    orgId,
+    tx,
+    new Date(before.rows[0]?.now ?? 0),
+  );
+  // Waiting for the billing row must not extend access past the actual database clock.
+  const after = await tx.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+  const now = new Date(after.rows[0]?.now ?? 0);
+  if (
+    !Number.isFinite(now.getTime()) ||
+    now.getTime() === 0 ||
+    !entitlement.accessUntil ||
+    entitlement.accessUntil <= now
+  )
+    entitlement.decision = "expired";
   assertBillingGrowth(
-    await resolveBillingEntitlement(orgId, tx, now),
+    entitlement,
     configuredIdentity,
     input.resource,
     input.occupied,
