@@ -341,6 +341,23 @@ describe.skipIf(!url)("durable billing persistence on a disposable database", ()
     ).toBe(true);
     await service.sweep();
     expect(retrieve.mock.calls.some(([id]) => id === healthy)).toBe(true);
+    // Advance the repository clock without changing the synthetic event's real-time minute:
+    // the durable refused receipts are reused, rather than fresh SDK failures being thrown.
+    clock = new Date(now + 31000);
+    await service.sweep();
+    const retried = await db
+      .select({
+        attempts: schema.billingSubscriptions.reconcileAttempts,
+        error: schema.billingSubscriptions.lastReconcileError,
+        next: schema.billingSubscriptions.nextReconcileAt,
+      })
+      .from(schema.billingSubscriptions)
+      .where(eq(schema.billingSubscriptions.orgId, tenant.orgId));
+    const failedAgain = retried.filter((row) => row.error === "not_found");
+    expect(failedAgain).toHaveLength(25);
+    expect(
+      failedAgain.every((row) => row.attempts === 2 && row.next.getTime() >= now + 91000),
+    ).toBe(true);
   });
   it("rejects unsupported persisted billing identities and subscription states", async () => {
     const tenant = await org();
