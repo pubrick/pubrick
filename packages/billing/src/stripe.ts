@@ -2,12 +2,14 @@ import Stripe from "stripe";
 import type {
   BillingDriver,
   BillingIdentity,
+  CancellationRequest,
   CheckoutRequest,
   CheckoutSnapshot,
   CustomerRequest,
   CustomerSnapshot,
   InvoiceSnapshot,
   PortalRequest,
+  PriceSnapshot,
   SessionResult,
   SubscriptionSnapshot,
   SubscriptionStatus,
@@ -17,11 +19,13 @@ import {
   BillingError,
   requireId,
   SUBSCRIPTION_STATUSES,
+  validateCancellation,
   validateCheckout,
   validateCheckoutSnapshot,
   validateCustomer,
   validateInvoiceSnapshot,
   validatePortal,
+  validatePriceSnapshot,
 } from "./types.js";
 
 export type StripeSandboxConfig = {
@@ -81,6 +85,63 @@ export class StripeSandboxDriver implements BillingDriver {
     });
   }
 
+  async validateAccount(): Promise<BillingIdentity> {
+    return this.call(async () => {
+      const account = await this.stripe.accounts.retrieveCurrent();
+      if (account.object !== "account") throw new BillingError("invalid_response");
+      if (account.id !== this.identity.accountId) throw new BillingError("unsupported_account");
+      return this.identity;
+    });
+  }
+  async retrievePrice(id: string): Promise<PriceSnapshot> {
+    requireId(id, "price_");
+    return this.call(async () => {
+      const price = await this.stripe.prices.retrieve(id);
+      if (price.livemode !== false) throw new BillingError("environment_mismatch");
+      if (
+        price.object !== "price" ||
+        price.id !== id ||
+        price.type !== "recurring" ||
+        price.billing_scheme !== "per_unit" ||
+        price.recurring?.usage_type !== "licensed" ||
+        price.custom_unit_amount !== null ||
+        price.transform_quantity !== null
+      )
+        throw new BillingError("invalid_response");
+      const snapshot: PriceSnapshot = {
+        identity: this.identity,
+        priceId: id,
+        productId: relationshipId(price.product, "prod_"),
+        active: price.active as true,
+        currency: price.currency,
+        unitAmount: price.unit_amount as number,
+        interval: price.recurring.interval as PriceSnapshot["interval"],
+        intervalCount: price.recurring.interval_count,
+      };
+      validatePriceSnapshot(snapshot, "invalid_response");
+      return snapshot;
+    });
+  }
+  async cancelSubscription(input: CancellationRequest): Promise<SubscriptionSnapshot> {
+    validateCancellation(input);
+    const current = await this.retrieveSubscription(input.subscriptionId);
+    if (current.status === "canceled") return current;
+    await this.call(async () => {
+      if (input.timing === "immediately")
+        await this.stripe.subscriptions.cancel(
+          input.subscriptionId,
+          { invoice_now: false, prorate: false },
+          { idempotencyKey: input.idempotencyKey },
+        );
+      else
+        await this.stripe.subscriptions.update(
+          input.subscriptionId,
+          { cancel_at_period_end: true },
+          { idempotencyKey: input.idempotencyKey },
+        );
+    });
+    return this.retrieveSubscription(input.subscriptionId);
+  }
   async createCustomer(input: CustomerRequest): Promise<CustomerSnapshot> {
     validateCustomer(input);
     return this.call(async () => {

@@ -1,12 +1,14 @@
 import type {
   BillingDriver,
   BillingIdentity,
+  CancellationRequest,
   CheckoutRequest,
   CheckoutSnapshot,
   CustomerRequest,
   CustomerSnapshot,
   InvoiceSnapshot,
   PortalRequest,
+  PriceSnapshot,
   SessionResult,
   SubscriptionSnapshot,
   VerifiedEvent,
@@ -15,11 +17,13 @@ import {
   BillingError,
   requireId,
   SUBSCRIPTION_STATUSES,
+  validateCancellation,
   validateCheckout,
   validateCheckoutSnapshot,
   validateCustomer,
   validateInvoiceSnapshot,
   validatePortal,
+  validatePriceSnapshot,
 } from "./types.js";
 
 export type FixtureBillingConfig = {
@@ -28,6 +32,7 @@ export type FixtureBillingConfig = {
   subscriptions?: readonly SubscriptionSnapshot[];
   checkouts?: readonly CheckoutSnapshot[];
   invoices?: readonly InvoiceSnapshot[];
+  prices?: readonly PriceSnapshot[];
   webhooks?: readonly { rawBody: string; signature: string; event: VerifiedEvent }[];
 };
 
@@ -35,7 +40,9 @@ export type FixtureBillingConfig = {
 export class FixtureBillingDriver implements BillingDriver {
   readonly identity: BillingIdentity;
   private readonly origin: string;
-  private readonly subscriptions: readonly SubscriptionSnapshot[];
+  private readonly subscriptions: SubscriptionSnapshot[];
+  private readonly prices: readonly PriceSnapshot[];
+  private readonly cancellationAttempts = new Map<string, string>();
   private readonly checkouts: CheckoutSnapshot[];
   private readonly invoices: readonly InvoiceSnapshot[];
   private readonly customerAttempts = new Map<
@@ -68,12 +75,14 @@ export class FixtureBillingDriver implements BillingDriver {
       environment: "sandbox",
       accountId: config.accountId,
     });
-    this.subscriptions = structuredClone(config.subscriptions ?? []);
+    this.subscriptions = [...structuredClone(config.subscriptions ?? [])];
+    this.prices = structuredClone(config.prices ?? []);
     this.checkouts = [...structuredClone(config.checkouts ?? [])];
     this.invoices = structuredClone(config.invoices ?? []);
     this.webhooks = structuredClone(config.webhooks ?? []);
     for (const fact of [
       ...this.subscriptions,
+      ...this.prices,
       ...this.checkouts,
       ...this.invoices,
       ...this.webhooks.map((webhook) => webhook.event),
@@ -87,6 +96,7 @@ export class FixtureBillingDriver implements BillingDriver {
     }
     for (const fact of this.checkouts) validateCheckoutSnapshot(fact, "configuration");
     for (const fact of this.invoices) validateInvoiceSnapshot(fact, "configuration");
+    for (const fact of this.prices) validatePriceSnapshot(fact, "configuration");
     for (const fact of this.subscriptions) {
       requireId(fact.subscriptionId, "sub_", "configuration");
       requireId(fact.customerId, "cus_", "configuration");
@@ -101,6 +111,36 @@ export class FixtureBillingDriver implements BillingDriver {
       )
         throw new BillingError("configuration");
     }
+  }
+  async validateAccount(): Promise<BillingIdentity> {
+    return this.identity;
+  }
+  async retrievePrice(id: string): Promise<PriceSnapshot> {
+    requireId(id, "price_");
+    const price = this.prices.find((entry) => entry.priceId === id);
+    if (!price) throw new BillingError("not_found");
+    return structuredClone(price);
+  }
+  async cancelSubscription(input: CancellationRequest): Promise<SubscriptionSnapshot> {
+    validateCancellation(input);
+    const request = JSON.stringify([input.subscriptionId, input.timing]);
+    const prior = this.cancellationAttempts.get(input.idempotencyKey);
+    if (prior && prior !== request) throw new BillingError("idempotency_conflict");
+    const index = this.subscriptions.findIndex(
+      (entry) => entry.subscriptionId === input.subscriptionId,
+    );
+    const current = this.subscriptions[index];
+    if (!current) throw new BillingError("not_found");
+    this.cancellationAttempts.set(input.idempotencyKey, request);
+    this.subscriptions[index] =
+      current.status === "canceled"
+        ? current
+        : {
+            ...current,
+            status: input.timing === "immediately" ? "canceled" : current.status,
+            cancelAtPeriodEnd: input.timing === "period_end",
+          };
+    return this.retrieveSubscription(input.subscriptionId);
   }
   async createCustomer(input: CustomerRequest): Promise<CustomerSnapshot> {
     validateCustomer(input);

@@ -38,6 +38,28 @@ operators must verify it matches the sandbox API key and webhook endpoint; an
 ordinary direct-account webhook does not contain evidence of that account ID.
 Fixture facts must match the configured fixture identity.
 
+Before enabling hosted processing, call `validateAccount()`. The sandbox driver
+uses the SDK's current-account `/v1/account` endpoint and rejects a key belonging
+to another account. This is stronger than retrieving an arbitrary configured
+account ID. Initialization/readiness enforcement belongs to the consuming app;
+the driver constructor itself makes no network calls.
+
+`retrievePrice(priceId)` supplies vendor currency, integer minor-unit amount,
+product/price IDs and recurring interval/count. The initial contract accepts
+active recurring licensed per-unit prices only, refusing tiered, metered,
+fractional/custom amounts and quantity transformations. Use retrieved facts for
+public display; do not duplicate their values as operator-supplied price numbers.
+
+`cancelSubscription({ subscriptionId, idempotencyKey, timing })` requires an
+explicit `immediately` or `period_end` timing, reads current status first and
+returns separately retrieved authoritative facts after mutation. Already
+canceled subscriptions return their terminal facts without another mutation.
+Immediate cancellation explicitly disables invoice-now and proration; it does
+not promise refunds or erase earlier obligations. SDK DELETE cancellation is
+naturally reconciled by current status rather than relying on POST-style
+idempotency guarantees. Durable intent, authorization, deletion outbox and
+commercial cancellation policy remain application responsibilities.
+
 `createCustomer({ orgReference, idempotencyKey, email? })` enables the first
 subscription without requiring an existing vendor customer ID. The organization
 reference and optional contact email must come from the server. The reference is

@@ -112,7 +112,10 @@ it.each(["immediately", "period_end"] as const)(
     const mutation = fetch.mock.calls[1]?.[1];
     expect(mutation?.method).toBe(timing === "immediately" ? "DELETE" : "POST");
     expect(new Headers(mutation?.headers).get("Idempotency-Key")).toBe("cancel:attempt_1");
-    const params = new URLSearchParams(String(mutation?.body));
+    const params =
+      timing === "immediately"
+        ? new URL(String(fetch.mock.calls[1]?.[0])).searchParams
+        : new URLSearchParams(String(mutation?.body));
     if (timing === "period_end") expect(params.get("cancel_at_period_end")).toBe("true");
     else {
       expect(params.get("invoice_now")).toBe("false");

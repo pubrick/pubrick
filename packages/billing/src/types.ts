@@ -72,8 +72,27 @@ export type InvoiceSnapshot = Readonly<{
   subscriptionId: string;
   status: (typeof INVOICE_STATUSES)[number];
 }>;
+export type PriceSnapshot = Readonly<{
+  identity: BillingIdentity;
+  priceId: string;
+  productId: string;
+  active: true;
+  currency: string;
+  /** Vendor minor units; presentation must respect that currency's rules. */
+  unitAmount: number;
+  interval: "day" | "week" | "month" | "year";
+  intervalCount: number;
+}>;
+export type CancellationRequest = Readonly<{
+  subscriptionId: string;
+  idempotencyKey: string;
+  timing: "immediately" | "period_end";
+}>;
 export interface BillingDriver {
   readonly identity: BillingIdentity;
+  validateAccount(): Promise<BillingIdentity>;
+  retrievePrice(id: string): Promise<PriceSnapshot>;
+  cancelSubscription(input: CancellationRequest): Promise<SubscriptionSnapshot>;
   createCustomer(input: CustomerRequest): Promise<CustomerSnapshot>;
   createCheckout(input: CheckoutRequest): Promise<SessionResult>;
   createPortal(input: PortalRequest): Promise<SessionResult>;
@@ -129,6 +148,26 @@ export function validateCustomer(input: CustomerRequest): void {
   ) {
     throw new BillingError("invalid_request");
   }
+}
+export function validatePriceSnapshot(snapshot: PriceSnapshot, code: BillingErrorCode): void {
+  requireId(snapshot.priceId, "price_", code);
+  requireId(snapshot.productId, "prod_", code);
+  if (
+    snapshot.active !== true ||
+    !/^[a-z]{3}$/.test(snapshot.currency) ||
+    !Number.isSafeInteger(snapshot.unitAmount) ||
+    snapshot.unitAmount < 0 ||
+    !["day", "week", "month", "year"].includes(snapshot.interval) ||
+    !Number.isSafeInteger(snapshot.intervalCount) ||
+    snapshot.intervalCount <= 0
+  )
+    throw new BillingError(code);
+}
+export function validateCancellation(input: CancellationRequest): void {
+  requireId(input.subscriptionId, "sub_");
+  validateAttempt(input.idempotencyKey);
+  if (!["immediately", "period_end"].includes(input.timing))
+    throw new BillingError("invalid_request");
 }
 export function validateCheckoutSnapshot(snapshot: CheckoutSnapshot, code: BillingErrorCode): void {
   requireId(snapshot.checkoutId, "cs_", code);
