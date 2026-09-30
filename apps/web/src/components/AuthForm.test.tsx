@@ -241,6 +241,38 @@ describe("AuthForm — the return path AppShell's guard attaches", () => {
 });
 
 describe("hosted ownership journey", () => {
+  it.each([
+    { next: undefined, destination: "/en" },
+    { next: "/en/onboarding?invitation=invite", destination: "/en/onboarding?invitation=invite" },
+  ])(
+    "keeps successful hosted login navigation under the app's control ($destination)",
+    async ({ next, destination }) => {
+      navigationState.searchParams = new URLSearchParams(next ? { next } : {});
+      vi.mocked(useAuthCapabilities).mockReturnValue({
+        requiresEmailVerification: true,
+        passwordRecoveryEnabled: true,
+        deploymentMode: "hosted",
+        billingEnabled: true,
+        billingTestMode: true,
+        ready: true,
+        failed: false,
+        retry: vi.fn(),
+      });
+      mockAuthClient.signIn.email.mockResolvedValue({
+        data: { user: { id: "verified-user", emailVerified: true } },
+        error: null,
+      });
+      render(<AuthForm mode="login" />);
+      const user = userEvent.setup();
+      await fillLogin(user);
+      await user.click(screen.getByRole("button", { name: en.Auth.loginAction }));
+      await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith(destination));
+      expect(mockAuthClient.signIn.email).toHaveBeenCalledWith(
+        { email: "ann@example.com", password: "hunter22222" },
+        { headers: { "x-pubrick-locale": "en" } },
+      );
+    },
+  );
   it("keeps an unverified signup out of onboarding, preserves its invitation and offers a resend", async () => {
     navigationState.searchParams = new URLSearchParams({
       next: "/en/onboarding?invitation=invite",
