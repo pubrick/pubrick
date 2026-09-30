@@ -99,7 +99,8 @@ export class AiCredentialProbe {
         records.push(record);
       });
     } catch (error) {
-      if (preflightError(error)) throw error;
+      const local = preflightError(error);
+      if (local?.cause instanceof Error && local.cause.name === "AiCallAdmissionError") throw error;
       const reason = classifyProbeFailure(error, records);
       // A retryable generation error does not establish whether Google
       // accepts the key. The models endpoint checks it without another paid
