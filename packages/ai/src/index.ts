@@ -60,6 +60,11 @@ export {
   resolveModel,
 } from "./provider.js";
 export {
+  ProviderPreflightError,
+  ProviderPreflightTransientError,
+  preflightError,
+} from "./provider-preflight.js";
+export {
   builtInRoleTemplateSource,
   composeRoleTemplateInstruction,
   previewRoleTemplate,

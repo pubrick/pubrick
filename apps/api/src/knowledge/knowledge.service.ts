@@ -6,6 +6,7 @@ import {
   KNOWLEDGE_EMBEDDING_DIMENSIONS,
   KNOWLEDGE_EMBEDDING_MODEL,
 } from "@pubrick/ai";
+import { hostedAiCallScope, throwHostedAiRefusal } from "../hosted-ai-call";
 import { KnowledgeRepository } from "./knowledge.repository";
 
 @Injectable()
@@ -47,12 +48,17 @@ export class KnowledgeService {
       let embeddings: Awaited<ReturnType<typeof embedKnowledgeBatch>>;
       try {
         const proxyUrl = await this.entries.googleProxy?.(orgId);
-        embeddings = await embedKnowledgeBatch(
-          apiKey,
-          selected.map((entry) => `${entry.title}\n\n${entry.content}`),
-          ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
-        );
+        const texts = selected.map((entry) => `${entry.title}\n\n${entry.content}`);
+        const scope = hostedAiCallScope(orgId, "embedding");
+        embeddings = scope
+          ? await scope((signal) => embedKnowledgeBatch(apiKey, texts, proxyUrl, signal))
+          : await embedKnowledgeBatch(
+              apiKey,
+              texts,
+              ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+            );
       } catch (error) {
+        throwHostedAiRefusal(error);
         const providerOutcome = callOutcomeOf(error);
         const usageRecorded = await this.recordUsage(
           orgId,
@@ -162,13 +168,20 @@ export class KnowledgeService {
     let result: Awaited<ReturnType<typeof embedKnowledgeText>>;
     try {
       const proxyUrl = await this.entries.googleProxy?.(orgId);
-      result = await embedKnowledgeText(
-        apiKey,
-        `${entry.title}\n\n${entry.content}`,
-        "RETRIEVAL_DOCUMENT",
-        ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
-      );
+      const text = `${entry.title}\n\n${entry.content}`;
+      const scope = hostedAiCallScope(orgId, "embedding");
+      result = scope
+        ? await scope((signal) =>
+            embedKnowledgeText(apiKey, text, "RETRIEVAL_DOCUMENT", proxyUrl, signal),
+          )
+        : await embedKnowledgeText(
+            apiKey,
+            text,
+            "RETRIEVAL_DOCUMENT",
+            ...(proxyUrl ? ([proxyUrl] as [string]) : ([] as [])),
+          );
     } catch (error) {
+      throwHostedAiRefusal(error);
       await this.entries.recordEmbeddingUsage(
         orgId,
         0,

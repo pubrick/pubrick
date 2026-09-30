@@ -40,6 +40,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { env } from "../env";
+import { hostedAiCallScope } from "../hosted-ai-call";
 import { AiCredentialProbe } from "./ai-credentials.probe";
 import { GoogleProxyProbe } from "./google-proxy.probe";
 
@@ -132,7 +133,8 @@ export class AiCredentialsRepository {
     }
     if (!proxyUrl) return { ok: false, reason: "not_configured" };
     if (!isAllowedGoogleProxy(proxyUrl)) return { ok: false, reason: "invalid_proxy" };
-    return this.googleProxyProbe.run(proxyUrl);
+    const scope = hostedAiCallScope(orgId, "probe");
+    return scope ? this.googleProxyProbe.run(proxyUrl, scope) : this.googleProxyProbe.run(proxyUrl);
   }
 
   async list(orgId: string) {
@@ -513,6 +515,7 @@ export class AiCredentialsRepository {
         return {
           ...this.decrypt(provider, row),
           defaultModel: modelId,
+          callScope: hostedAiCallScope(orgId, "probe"),
           admitCall: () => admitAiTextCall(orgId, db, snapshot),
         };
       });
@@ -684,6 +687,7 @@ export class AiCredentialsRepository {
       return {
         ...this.decrypt(row.provider, row),
         defaultModel: snapshot.modelId,
+        callScope: hostedAiCallScope(orgId),
         admitCall: () => admitAiTextCall(orgId, db, snapshot),
       };
     });

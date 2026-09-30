@@ -12,6 +12,7 @@ import {
 } from "@pubrick/ai";
 import type { AiTestFailure, RunFailure } from "@pubrick/shared";
 import { z } from "zod";
+import { throwHostedAiRefusal } from "../hosted-ai-call";
 
 /**
  * What one Test call produced.
@@ -98,6 +99,7 @@ export class AiCredentialProbe {
         records.push(record);
       });
     } catch (error) {
+      throwHostedAiRefusal(error);
       const reason = classifyProbeFailure(error, records);
       // A retryable generation error does not establish whether Google
       // accepts the key. The models endpoint checks it without another paid
@@ -156,18 +158,24 @@ export class AiCredentialProbe {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), GOOGLE_KEY_CHECK_TIMEOUT_MS);
     try {
-      const response = await googleProxyFetch(
-        GOOGLE_MODELS_URL,
-        {
-          method: "GET",
-          headers: { "x-goog-api-key": credential.apiKey },
-          redirect: "manual",
-          signal: controller.signal,
-        },
-        credential.proxyUrl,
-      );
-      await response.body?.cancel();
-      return response.status === 200;
+      const request = async (signal: AbortSignal) => {
+        const response = await googleProxyFetch(
+          GOOGLE_MODELS_URL,
+          {
+            method: "GET",
+            headers: { "x-goog-api-key": credential.apiKey },
+            redirect: "manual",
+            signal,
+          },
+          credential.proxyUrl,
+        );
+        await response.body?.cancel();
+        return response.status === 200;
+      };
+      const accepted = credential.callScope
+        ? await credential.callScope(request, controller.signal)
+        : await request(controller.signal);
+      return accepted;
     } catch {
       return false;
     } finally {

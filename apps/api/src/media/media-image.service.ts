@@ -13,6 +13,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { conflict } from "../api-error";
 import { db, pool } from "../db";
+import { hostedAiCallScope, throwHostedAiRefusal } from "../hosted-ai-call";
 import {
   GeminiImageCaller,
   IMAGE_MODEL,
@@ -51,12 +52,24 @@ export class MediaImageService {
       if (Number(count[0]?.calls ?? 0) >= MAX_IMAGE_CALLS_PER_HOUR) {
         throw conflict("media_generation_limit", "The hourly image generation limit is reached");
       }
-      const result = await this.caller.call(
-        credential.apiKey,
-        request.prompt,
-        source,
-        credential.proxyUrl,
-      );
+      const scope = hostedAiCallScope(orgId, "image");
+      let result: ImageCall;
+      try {
+        result = scope
+          ? await scope((signal) =>
+              this.caller.call(
+                credential.apiKey,
+                request.prompt,
+                source,
+                credential.proxyUrl,
+                signal,
+              ),
+            )
+          : await this.caller.call(credential.apiKey, request.prompt, source, credential.proxyUrl);
+      } catch (error) {
+        throwHostedAiRefusal(error);
+        throw error;
+      }
       await this.record(orgId, result, regeneration || !!source);
       return result;
     });
@@ -80,6 +93,7 @@ export class MediaImageService {
         !!source,
       );
     } catch (error) {
+      if (error instanceof HttpException) throw error;
       // A provider can return malformed output even after billing for the call.
       this.logger.warn(`Could not store generated image for org ${orgId}: ${String(error)}`);
       throw conflict("media_generation_failed", "Gemini returned an image that could not be saved");
