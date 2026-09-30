@@ -1050,6 +1050,29 @@ describe.skipIf(!url)("runs e2e", () => {
    * spelling of it.
    */
   describe("retrying a run the API already has", () => {
+    it.each([
+      { brief: "Announce our product release" },
+      {
+        brief: "Summarize the source",
+        material: "Our new product launched today.",
+        sourceUrl: "https://example.com/release",
+      },
+    ])("preserves a requested headline when retrying $brief", async (input) => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const created = await agent
+        .post("/api/runs")
+        .send({ brandId, channelIds: [channelId], title: "The headline I reviewed", ...input })
+        .expect(201);
+      const first = parseExecutableRunDetail(created.body);
+      await setRunStatus(first.id, "failed", "internal");
+      const retried = parseExecutableRunDetail(
+        (await agent.post(`/api/runs/${first.id}/retry`).expect(201)).body,
+      );
+      expect(retried.input).toEqual(first.input);
+      expect(retried.input.title).toBe("The headline I reviewed");
+    });
+
     it.each(["educational", "product_update", "comparison"] as const)(
       "preserves the %s format in the receipt and on retry",
       async (contentType) => {
