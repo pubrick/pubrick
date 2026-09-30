@@ -9,6 +9,8 @@ import {
   type CostSummary,
   formatUsd,
   type GoogleProxyTestResult,
+  hasOrganizationRole,
+  isOrganizationManager,
   MAX_TEST_CALLS_PER_HOUR,
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
@@ -171,8 +173,8 @@ export default function SettingsPage() {
   const signOut = useSignOut();
   const members = organization?.members ?? [];
   const currentRole = members.find((member) => member.user.id === session?.user?.id)?.role;
-  const canManageApiKeys = currentRole === "owner" || currentRole === "admin";
-  const canInvite = canManageApiKeys || currentRole === "member";
+  const canManageApiKeys = isOrganizationManager(currentRole);
+  const canInvite = canManageApiKeys || hasOrganizationRole(currentRole, ["member"]);
 
   const [pref, setPref] = useState<ThemePref>("system");
   // Stored pref is client-only state: reading it during the first render makes
@@ -390,7 +392,7 @@ export default function SettingsPage() {
   const [roleChange, setRoleChange] = useState<{
     id: string;
     email: string;
-    role: WorkspaceRole;
+    role: string;
   } | null>(null);
   const [nextRole, setNextRole] = useState<WorkspaceRole>("member");
   const [roleSaving, setRoleSaving] = useState(false);
@@ -979,20 +981,26 @@ export default function SettingsPage() {
                         </span>
                         {" · "}
                         <span>
-                          {isWorkspaceRole(member.role)
-                            ? roleLabels[member.role]
-                            : member.role === "owner"
-                              ? t("peopleRoleOwner")
-                              : member.role}
+                          {member.role
+                            .split(",")
+                            .map((assigned) =>
+                              isWorkspaceRole(assigned)
+                                ? roleLabels[assigned]
+                                : assigned === "owner"
+                                  ? t("peopleRoleOwner")
+                                  : assigned,
+                            )
+                            .join(", ")}
                         </span>
                       </>
                     }
                     trailing={
                       canManageApiKeys &&
                       member.user.id !== session?.user?.id &&
-                      member.role !== "owner" &&
-                      (member.role !== "admin" || currentRole === "owner") &&
-                      isWorkspaceRole(member.role) ? (
+                      !hasOrganizationRole(member.role, ["owner"]) &&
+                      (!hasOrganizationRole(member.role, ["admin"]) ||
+                        hasOrganizationRole(currentRole, ["owner"])) &&
+                      hasOrganizationRole(member.role, WORKSPACE_ROLES) ? (
                         <Button
                           size="sm"
                           variant="secondary"
@@ -1000,9 +1008,13 @@ export default function SettingsPage() {
                             setRoleChange({
                               id: member.id,
                               email: member.user.email,
-                              role: member.role as WorkspaceRole,
+                              role: member.role,
                             });
-                            setNextRole(member.role as WorkspaceRole);
+                            setNextRole(
+                              WORKSPACE_ROLES.find((candidate) =>
+                                hasOrganizationRole(member.role, [candidate]),
+                              ) ?? "member",
+                            );
                             setRoleError(null);
                           }}
                         >

@@ -9,6 +9,7 @@ import {
 import { Reflector } from "@nestjs/core";
 import { schema } from "@pubrick/db";
 import type { ApiErrorCode } from "@pubrick/shared";
+import { hasOrganizationRole, isOrganizationManager, ORGANIZATION_ROLES } from "@pubrick/shared";
 import { fromNodeHeaders } from "better-auth/node";
 import { and, eq, sql } from "drizzle-orm";
 import { forbidden, notFound } from "../api-error";
@@ -190,16 +191,23 @@ export class ActiveOrgGuard implements CanActivate {
     // Every protected route must make an explicit access choice. This applies
     // to managers too, so a new route cannot accidentally inherit broad access.
     if (!scope) throw new ForbiddenException("Brand scope is required for this route");
-    const manager = membership[0]?.role === "owner" || membership[0]?.role === "admin";
+    const manager = isOrganizationManager(membership[0]?.role);
     const role = membership[0]?.role;
+    if (!hasOrganizationRole(role, ORGANIZATION_ROLES)) {
+      throw new ForbiddenException("Organization role is not recognized");
+    }
+    const editorial =
+      !manager &&
+      !hasOrganizationRole(role, ["member"]) &&
+      hasOrganizationRole(role, ["author", "editor"]);
     const checkEditorialMutation = () => {
-      if (role !== "author" && role !== "editor") return;
+      if (!editorial) return;
       if (request.method === "GET" || request.method === "HEAD") return;
       const capability = this.reflector.getAllAndOverride<EditorialCapability>(
         EDITORIAL_CAPABILITY_KEY,
         [context.getHandler()],
       );
-      if (!capability || (capability === "editor" && role !== "editor")) {
+      if (!capability || (capability === "editor" && !hasOrganizationRole(role, ["editor"]))) {
         throw new ForbiddenException("Editorial role cannot perform this action");
       }
     };
@@ -209,10 +217,7 @@ export class ActiveOrgGuard implements CanActivate {
         : await this.brandAccess.visibleBrandIds(orgId, session.user.id);
       // A list has no single brand to authorize. Editorial mutations must use
       // a concrete brand or resource scope, even if someone adds metadata.
-      if (
-        (role === "author" || role === "editor") &&
-        !["GET", "HEAD"].includes(request.method ?? "")
-      ) {
+      if (editorial && !["GET", "HEAD"].includes(request.method ?? "")) {
         throw new ForbiddenException("Editorial role cannot perform this action");
       }
       return true;
@@ -221,10 +226,7 @@ export class ActiveOrgGuard implements CanActivate {
       if (scope.roles === "manager" && !manager) {
         throw new ForbiddenException("Organization owner or admin required");
       }
-      if (
-        (role === "author" || role === "editor") &&
-        !["GET", "HEAD"].includes(request.method ?? "")
-      ) {
+      if (editorial && !["GET", "HEAD"].includes(request.method ?? "")) {
         // Only read-like POSTs with a declared brand can use this exception.
         // Other org-wide mutations have no grant to check and remain closed.
         if (!scope.editorialBrand) {
@@ -258,7 +260,7 @@ export class ActiveOrgGuard implements CanActivate {
     // Preserve the legacy member's manager-only 403 on an ungranted brand.
     // Dedicated editorial roles keep the hidden-resource 404 promise before
     // their capability is considered.
-    if (scope.roles === "manager" && !manager && role !== "author" && role !== "editor") {
+    if (scope.roles === "manager" && !manager && !editorial) {
       throw new ForbiddenException("Organization owner or admin required");
     }
     if (!(await this.brandAccess.hasAccess(orgId, brandId, session.user.id))) {

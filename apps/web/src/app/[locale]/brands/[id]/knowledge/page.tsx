@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  hasOrganizationRole,
+  isOrganizationManager,
   KNOWLEDGE_CATEGORIES,
   knowledgeCreateSchema,
   knowledgeImportSchema,
@@ -50,8 +52,8 @@ export default function KnowledgePage({ params }: { params: Promise<{ id: string
     (entry) => entry.userId === session?.user.id || entry.user?.id === session?.user.id,
   );
   const role: string | undefined = member?.role;
-  const canEditKnowledge = role === "owner" || role === "admin" || role === "member";
-  const canManageIndex = member?.role === "owner" || member?.role === "admin";
+  const canEditKnowledge = hasOrganizationRole(role, ["owner", "admin", "member"]);
+  const canManageIndex = isOrganizationManager(member?.role);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [categoryFilter, setCategoryFilter] = useState("");
   const listRequest = useRef(0);

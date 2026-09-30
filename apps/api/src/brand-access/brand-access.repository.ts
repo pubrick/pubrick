@@ -1,10 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
+import { hasOrganizationRole, isOrganizationManager } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { badRequest, notFound } from "../api-error";
 import { db } from "../db";
-
-const MANAGER_ROLES = ["owner", "admin"];
 
 @Injectable()
 export class BrandAccessRepository {
@@ -16,7 +15,7 @@ export class BrandAccessRepository {
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
       .limit(1);
     if (!membership) return [];
-    if (MANAGER_ROLES.includes(membership.role)) return null;
+    if (isOrganizationManager(membership.role)) return null;
     const grants = await db
       .select({ brandId: schema.brandAccess.brandId })
       .from(schema.brandAccess)
@@ -48,7 +47,7 @@ export class BrandAccessRepository {
       )
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
       .limit(1);
-    return !!row && (MANAGER_ROLES.includes(row.role) || row.grant !== null);
+    return !!row && (isOrganizationManager(row.role) || row.grant !== null);
   }
 
   async isManager(orgId: string, userId: string): Promise<boolean> {
@@ -57,7 +56,7 @@ export class BrandAccessRepository {
       .from(schema.member)
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
       .limit(1);
-    return !!membership && MANAGER_ROLES.includes(membership.role);
+    return !!membership && isOrganizationManager(membership.role);
   }
 
   async list(orgId: string, brandId: string) {
@@ -93,7 +92,11 @@ export class BrandAccessRepository {
           .for("key share");
         if (
           members.length !== memberIds.length ||
-          members.some((member) => !["member", "author", "editor"].includes(member.role))
+          members.some(
+            (member) =>
+              isOrganizationManager(member.role) ||
+              !hasOrganizationRole(member.role, ["member", "author", "editor"]),
+          )
         ) {
           throw badRequest(
             "invalid_request",
@@ -143,7 +146,7 @@ export class BrandAccessRepository {
     return {
       members: members.map(({ grant, ...member }) => ({
         ...member,
-        hasAccess: MANAGER_ROLES.includes(member.role) || grant !== null,
+        hasAccess: isOrganizationManager(member.role) || grant !== null,
       })),
     };
   }

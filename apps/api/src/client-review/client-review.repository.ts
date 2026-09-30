@@ -7,6 +7,7 @@ import type {
   ClientReviewStatus,
   ClientReviewVerdictInput,
 } from "@pubrick/shared";
+import { isOrganizationManager } from "@pubrick/shared";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { badRequest, conflict, forbidden, gone, notFound } from "../api-error";
 import { db } from "../db";
@@ -195,7 +196,7 @@ export class ClientReviewRepository {
       .from(schema.member)
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
       .limit(1);
-    if (member?.role !== "owner" && member?.role !== "admin") {
+    if (!isOrganizationManager(member?.role)) {
       throw forbidden("client_review_role_required", "Organization owner or admin required");
     }
   }

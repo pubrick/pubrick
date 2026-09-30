@@ -6,6 +6,7 @@ import type {
   CommentAnalysisResult,
   PublicationCommentsDto,
 } from "@pubrick/shared";
+import { hasOrganizationRole } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -40,7 +41,7 @@ export default function BrandAnalyticsPage({ params }: { params: Promise<{ id: s
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canManageAnalytics = role === "owner" || role === "admin" || role === "member";
+  const canManageAnalytics = hasOrganizationRole(role, ["owner", "admin", "member"]);
   const [brand, setBrand] = useState<{ id: string; name: string } | null>(null);
   const [days, setDays] = useState<Period>(30);
   const [data, setData] = useState<AnalyticsDto | null>(null);

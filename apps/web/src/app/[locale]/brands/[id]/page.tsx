@@ -4,8 +4,10 @@ import {
   type BrandLinkPolicy,
   DEFAULT_CAMPAIGN_TEMPLATE,
   DEFAULT_UTM,
+  hasOrganizationRole,
   isAvailablePlatform,
   isManualPlatform,
+  isOrganizationManager,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -124,10 +126,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const activeMember = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   );
-  const canManageAccess = activeMember?.role === "owner" || activeMember?.role === "admin";
+  const canManageAccess = isOrganizationManager(activeMember?.role);
   // Existing members retain their channel and brand settings access. Editorial
   // roles can inspect granted brands, while only managers control team access.
-  const canEditBrandSettings = canManageAccess || activeMember?.role === "member";
+  const canEditBrandSettings =
+    canManageAccess || hasOrganizationRole(activeMember?.role, ["member"]);
   const [brand, setBrand] = useState<Brand | null>(null);
   const [claimEvidenceBusy, setClaimEvidenceBusy] = useState(false);
   const [claimEvidenceError, setClaimEvidenceError] = useState<string | null>(null);

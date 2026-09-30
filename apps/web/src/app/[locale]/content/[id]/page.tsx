@@ -8,6 +8,7 @@ import type {
 } from "@pubrick/shared";
 import {
   contentUpdateSchema,
+  hasOrganizationRole,
   isManualPlatform,
   isOutstandingAdaptation,
   MAX_BODY_LENGTH,
@@ -303,9 +304,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const role: string | undefined = organization?.members?.find(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
-  const canDecideDelivery = ["owner", "admin", "member", "editor"].includes(role ?? "");
-  const canManageDraft = ["owner", "admin", "member", "author", "editor"].includes(role ?? "");
-  const canManageFeed = ["owner", "admin", "member"].includes(role ?? "");
+  const canDecideDelivery = hasOrganizationRole(role, ["owner", "admin", "member", "editor"]);
+  const canManageDraft = hasOrganizationRole(role, [
+    "owner",
+    "admin",
+    "member",
+    "author",
+    "editor",
+  ]);
+  const canManageFeed = hasOrganizationRole(role, ["owner", "admin", "member"]);
 
   const [channels, setChannels] = useState<Channel[]>([]);
   const [channelsLoadedFor, setChannelsLoadedFor] = useState<string | null>(null);

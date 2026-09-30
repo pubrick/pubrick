@@ -10,6 +10,7 @@ import {
   commentAnalysisResultSchema,
   decryptJson,
   encryptJson,
+  isOrganizationManager,
   type NewsItemListQuery,
   type NewsRerankRequest,
   type NewsRerankResponse,
@@ -289,7 +290,7 @@ export class SourcesRepository {
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorId)))
         .for("update")
         .limit(1);
-      if (actor?.role !== "owner" && actor?.role !== "admin")
+      if (!isOrganizationManager(actor?.role))
         throw forbidden("private_source_owner_required", "Organization owner or admin required");
       const [account] = await tx
         .select({ sessionEncrypted: schema.telegramSourceAccounts.sessionEncrypted })

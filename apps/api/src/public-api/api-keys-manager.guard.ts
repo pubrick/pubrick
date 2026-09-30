@@ -5,6 +5,7 @@ import {
   Injectable,
 } from "@nestjs/common";
 import { schema } from "@pubrick/db";
+import { isOrganizationManager } from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db";
 
@@ -28,7 +29,7 @@ export class ApiKeysManagerGuard implements CanActivate {
         ),
       )
       .limit(1);
-    if (membership?.role !== "owner" && membership?.role !== "admin") {
+    if (!isOrganizationManager(membership?.role)) {
       throw new ForbiddenException("Organization owner or admin required");
     }
     return true;

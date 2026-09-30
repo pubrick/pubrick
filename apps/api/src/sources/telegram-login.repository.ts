@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { decryptJson, encryptJson } from "@pubrick/shared";
+import { decryptJson, encryptJson, isOrganizationManager } from "@pubrick/shared";
 import { beginTelegramLogin, submitTelegramCode, submitTelegramPassword } from "@pubrick/telegram";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { conflict, forbidden } from "../api-error";
@@ -397,7 +397,7 @@ export class TelegramLoginRepository implements OnModuleInit, OnModuleDestroy {
       .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorId)))
       .for("update")
       .limit(1);
-    if (member?.role !== "owner" && member?.role !== "admin")
+    if (!isOrganizationManager(member?.role))
       throw forbidden("private_source_owner_required", "Organization owner or admin required");
   }
 
