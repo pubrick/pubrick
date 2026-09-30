@@ -1929,3 +1929,21 @@ describe("a refused generation speaks the product's language, not the server's",
     expect(screen.queryByText(en.ContentNew.genericError)).not.toBeInTheDocument();
   });
 });
+
+it("offers channel setup for the selected brand with no channels", async () => {
+  installHandlers([], (path) => (path.startsWith("/api/channels?") ? [] : undefined));
+  render(<NewContentPage />);
+  await screen.findByRole("option", { name: "Acme" });
+  const user = userEvent.setup();
+  await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B1);
+  expect(await screen.findByText(en.ContentNew.noChannels)).toBeVisible();
+  expect(screen.getByRole("link", { name: en.Brands.addChannelNext })).toHaveAttribute(
+    "href",
+    `/en/brands/${B1}#channels`,
+  );
+  await user.selectOptions(screen.getByLabelText(en.ContentNew.brand), B2);
+  expect(screen.getByRole("link", { name: en.Brands.addChannelNext })).toHaveAttribute(
+    "href",
+    `/en/brands/${B2}#channels`,
+  );
+});
