@@ -448,4 +448,41 @@ describe.skipIf(!url)("atomic hosted workspace admission", () => {
     for (const id of [randomUUID()])
       await expect(repository().cancel(orgId, outsider, id)).rejects.toThrow("forbidden");
   });
+  it("unions duplicate membership roles deterministically without changing legacy rows", async () => {
+    limit = 10;
+    const owner = await account();
+    const recipient = await account();
+    const orgId = await workspace(owner);
+    const repo = repository();
+    const [oldest] = await connection.db
+      .select({ id: schema.member.id })
+      .from(schema.member)
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, owner.userId)));
+    if (!oldest) throw new Error("Missing owner fixture");
+    await connection.db
+      .update(schema.member)
+      .set({ role: "author" })
+      .where(eq(schema.member.id, oldest.id));
+    await connection.db
+      .insert(schema.member)
+      .values({
+        id: randomUUID(),
+        organizationId: orgId,
+        userId: owner.userId,
+        role: "owner,author",
+      });
+    const invitation = await repo.invite(orgId, owner, {
+      email: recipient.email,
+      role: "owner",
+      locale: "en",
+    });
+    await repo.cancel(orgId, owner, invitation.invitationId);
+    await expect(repo.updateRole(orgId, owner, oldest.id, "author")).rejects.toThrow("last_owner");
+    await expect(repo.remove(orgId, owner, oldest.id)).rejects.toThrow("last_owner");
+    const rows = await connection.db
+      .select({ role: schema.member.role })
+      .from(schema.member)
+      .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, owner.userId)));
+    expect(rows.map((row) => row.role).sort()).toEqual(["author", "owner,author"]);
+  });
 });
