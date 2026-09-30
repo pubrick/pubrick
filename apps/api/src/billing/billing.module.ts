@@ -5,10 +5,11 @@ import {
   HostedBrowserGuard,
 } from "../hosted-admission/hosted-browser.guard";
 import type { BillingConfig } from "./billing.config";
-import { BillingController, PublicBillingController } from "./billing.controller";
+import { BillingController } from "./billing.controller";
 import { BillingRepository } from "./billing.repository";
 import { BillingService } from "./billing.service";
 import { BillingRuntime, createBillingRuntime } from "./billing-runtime";
+import { PublicBillingController } from "./public-billing.controller";
 
 export const BILLING_DATABASE = Symbol("BILLING_DATABASE");
 type Database = ReturnType<typeof createDb>["db"];

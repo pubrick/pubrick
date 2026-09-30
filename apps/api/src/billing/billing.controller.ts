@@ -6,22 +6,20 @@ import {
   HttpException,
   Inject,
   Post,
-  Req,
   UseGuards,
 } from "@nestjs/common";
 import { BillingError } from "@pubrick/billing";
-import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { HostedBrowserGuard } from "../hosted-admission/hosted-browser.guard";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { UserId } from "../org/user-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
-import { checkoutInputSchema, localeInputSchema, webhookInput } from "./billing.contracts";
+import { checkoutInputSchema, localeInputSchema } from "./billing.contracts";
 import { BillingService } from "./billing.service";
 import { BillingCoreError } from "./ports";
 
-async function result<T>(action: () => Promise<T>): Promise<T> {
+export async function result<T>(action: () => Promise<T>): Promise<T> {
   try {
     return await action();
   } catch (error) {
@@ -67,21 +65,5 @@ export class BillingController {
     @Body(new ZodValidationPipe(localeInputSchema)) body: { locale: string },
   ) {
     return result(() => this.billing.portal(orgId, userId, body.locale));
-  }
-}
-@Controller("billing")
-@AllowAnonymous()
-export class PublicBillingController {
-  constructor(@Inject(BillingService) private readonly billing: BillingService) {}
-  @Get("plans") plans() {
-    return this.billing.plans();
-  }
-  @Post("webhook")
-  @HttpCode(200)
-  webhook(@Req() request: { rawBody?: unknown; headers: Record<string, unknown> }) {
-    return result(async () => {
-      const input = webhookInput(request);
-      return this.billing.webhook(input.bytes, input.signature);
-    });
   }
 }

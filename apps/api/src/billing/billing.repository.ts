@@ -190,12 +190,12 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
     this.assertIdentity(identity);
     return this.db.transaction(async (tx) => {
       if (!(await this.organization(orgId, tx))) throw new BillingCoreError("invalid_attempt");
-      const [member] = await tx
+      const memberships = await tx
         .select({ role: schema.member.role })
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
         .for("share");
-      if (!member || !isOrganizationManager(member.role))
+      if (!memberships.some((membership) => isOrganizationManager(membership.role)))
         throw new BillingCoreError("invalid_attempt");
       const storedPlan = await this.plan(tx, plan.id, plan.version);
       await tx.insert(schema.organizationBillingState).values({ orgId }).onConflictDoNothing();
@@ -845,12 +845,12 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   async authorizedCustomer(orgId: string, userId: string) {
     return this.db.transaction(async (tx) => {
       if (!(await this.organization(orgId, tx))) throw new BillingCoreError("invalid_attempt");
-      const [member] = await tx
+      const memberships = await tx
         .select({ role: schema.member.role })
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
         .for("share");
-      if (!member || !isOrganizationManager(member.role))
+      if (!memberships.some((membership) => isOrganizationManager(membership.role)))
         throw new BillingCoreError("invalid_attempt");
       const account = await this.account(orgId, tx);
       if (!account || account.deleted || !account.customerId)
@@ -861,12 +861,12 @@ export class BillingRepository implements CheckoutStore, ReceiptStore {
   async view(orgId: string, userId: string): Promise<BillingStatusFacts> {
     return this.db.transaction(async (tx) => {
       if (!(await this.organization(orgId, tx))) throw new BillingCoreError("invalid_attempt");
-      const [actor] = await tx
+      const actors = await tx
         .select({ role: schema.member.role })
         .from(schema.member)
         .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, userId)))
         .for("share");
-      if (!actor || !isOrganizationManager(actor.role))
+      if (!actors.some((membership) => isOrganizationManager(membership.role)))
         throw new BillingCoreError("invalid_attempt");
       const now = this.now();
       const entitlement = await resolveBillingEntitlement(orgId, tx, now);
