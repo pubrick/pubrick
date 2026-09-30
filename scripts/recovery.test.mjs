@@ -251,3 +251,15 @@ test("backup refuses changed runtime encryption keys before stopping writers", (
     state.cleanup();
   }
 });
+
+test("backup preserves an existing staging directory it did not create", () => {
+  const state = fixture();
+  const existingStage = `${state.directory}.partial-${process.pid}`;
+  mkdirSync(existingStage);
+  writeFileSync(path.join(existingStage, "operator-file"), "must survive");
+  try {
+    assert.throws(() => recover({ action: "backup", project: "isolated", ...state }), /EEXIST/);
+    assert.equal(readFileSync(path.join(existingStage, "operator-file"), "utf8"), "must survive");
+    assert.ok(!state.calls.some((args) => args.includes("stop")));
+  } finally { state.cleanup(); }
+});
