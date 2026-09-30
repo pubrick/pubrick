@@ -12,6 +12,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -87,7 +88,13 @@ export function recover({
     environment,
     ...composeFiles.flatMap((file) => ["--file", file]),
   ];
-  const relativeDestination = path.relative(cwd, destination);
+  // Resolve the existing parent, not just the lexical path: an outside symlink
+  // may lead back into the checkout and expose snapshots to Git/build context.
+  const checkedDestination =
+    action === "backup"
+      ? path.join(realpathSync(path.dirname(destination)), path.basename(destination))
+      : destination;
+  const relativeDestination = path.relative(realpathSync(cwd), checkedDestination);
   if (
     action === "backup" &&
     (!relativeDestination ||
