@@ -60,3 +60,25 @@ contain disposable account/session data; do not upload them from a real instance
 
 Playwright is the maintained browser automation library (Apache-2.0); the suite
 uses its assertions and runner instead of a custom polling/browser harness.
+
+## Hosted BYOK fixture journey
+
+```sh
+node scripts/e2e/hosted.run.mjs
+```
+
+This opt-in runner owns different ports (31310–31313), disposable PostgreSQL,
+media, synthetic secrets, and authenticated loopback-only SMTP capture. It uses
+compiled API/worker with `NODE_ENV=test` and a production-built Next application.
+The fixture billing driver is intentionally refused by a production API; this
+journey does not establish readiness for live payments or real email delivery.
+No Google, public SMTP, publishing, or payment requests are made.
+
+The fixture control server seeds identity-scoped subscription facts against the
+runtime-created test catalog. These facts represent test access only. The
+journey covers verified signup, hosted workspace creation, unpaid refusal,
+manual draft and knowledge editing, queued invitation mail and acceptance,
+seat limits, expired growth refusal, and retained read/export/deletion access.
+Each mode skips the other mode's journey. Neither runner accepts an external
+application URL or reuses the normal developer stack. All fixture listeners and
+database/media resources are closed on normal completion or startup failure.

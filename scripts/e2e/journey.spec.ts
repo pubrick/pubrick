@@ -3,6 +3,12 @@ import { gunzipSync } from "node:zlib";
 import { expect, test } from "@playwright/test";
 import type { ManualPlatformId } from "../../packages/shared/src/dto/channels.js";
 
+test.skip(
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: the separate hosted runner selects its own acceptance journey.
+  process.env.PUBRICK_E2E_HOSTED === "1",
+  "Self-hosted journey runs on its own disposable stack.",
+);
+
 const manualPlatform = "t_j" satisfies ManualPlatformId;
 
 test("account, workspace, manual draft, persisted edits and UI tenant switching", async ({
