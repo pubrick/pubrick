@@ -348,3 +348,35 @@ it("lets refresh supersede an older terminal response", async () => {
   await advance(POLL_INTERVAL_MS);
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
+
+it("ignores a permanent failure older than a local mutation", async () => {
+  let fail!: (reason: unknown) => void;
+  const fetcher = vi
+    .fn<() => Promise<Value>>()
+    .mockResolvedValueOnce({ status: "running" })
+    .mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          fail = reject;
+        }),
+    )
+    .mockResolvedValue({ status: "running" });
+  let mutate!: (update: (previous: Value | null) => Value | null) => void;
+  await renderProbe(
+    <Probe
+      fetcher={fetcher}
+      terminal={never}
+      onMutateReady={(fn) => {
+        mutate = fn;
+      }}
+    />,
+  );
+  await advance(POLL_INTERVAL_MS);
+  await act(async () => {
+    mutate(() => ({ status: "running" }));
+    fail(new ApiError(404, "Old failure"));
+  });
+  expect(screen.getByTestId("error")).toHaveTextContent("—");
+  await advance(POLL_INTERVAL_MS);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+});

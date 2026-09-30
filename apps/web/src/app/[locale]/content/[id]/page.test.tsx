@@ -5091,3 +5091,44 @@ describe("VC.ru manual publication", () => {
     expect(results.getByText(/self reported; Pubrick did not ask VC.ru/)).toBeInTheDocument();
   });
 });
+
+it.each(["master", "adaptation"])(
+  "serializes %s saves while preserving a later typed draft",
+  async (kind) => {
+    const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+    const calls: Call[] = [];
+    let finish!: (value: unknown) => void;
+    const target = kind === "master" ? "/api/content/c1" : "/api/content/c1/adaptations/a1";
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "PATCH" && path === target)
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const save = screen.getByRole("button", {
+      name: kind === "master" ? en.Publish.saveBody : en.Publish.saveOverride,
+    });
+    const field =
+      kind === "master"
+        ? screen.getByRole("textbox", { name: en.Publish.bodyLabel })
+        : screen.getByPlaceholderText(en.Publish.overridePlaceholder);
+    fireEvent.change(field, { target: { value: "First saved text" } });
+    const user = userEvent.setup();
+    await user.click(save);
+    fireEvent.change(field, { target: { value: "Later typed text" } });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(calls.filter((call) => call.path === target && call.method === "PATCH")).toHaveLength(1);
+    await act(async () => {
+      finish(
+        kind === "master"
+          ? { ...served.current, body: "First saved text" }
+          : { ...served.current.adaptations[0], body: "First saved text" },
+      );
+    });
+    expect(field).toHaveValue("Later typed text");
+    expect(save).toBeEnabled();
+  },
+);

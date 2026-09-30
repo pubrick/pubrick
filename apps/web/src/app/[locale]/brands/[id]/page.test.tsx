@@ -1477,3 +1477,18 @@ describe("BrandPage — the platform picker", () => {
     );
   });
 });
+
+it("keeps legacy member channel controls but hides manager-only brand writes", async () => {
+  vi.stubGlobal("fetch", vi.fn());
+  installHandlers([{ id: "c1", platform: "vk", name: "VK", metricsAutoRefresh: false }]);
+  vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+    data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
+    isPending: false,
+  } as never);
+  await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
+  await screen.findByText(en.Channels.health.unknown);
+  expect(screen.getByRole("button", { name: en.Channels.add })).toBeInTheDocument();
+  for (const label of [en.Brands.profileEdit, en.Brands.voiceEdit, en.Brands.linksEdit]) {
+    expect(screen.queryByRole("button", { name: label })).not.toBeInTheDocument();
+  }
+});
