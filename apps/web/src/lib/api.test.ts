@@ -584,5 +584,6 @@ it("retains hosted subscription refusal codes at the 403 transport boundary", as
   );
   const failure = await api("/api/brands", { method: "POST" }).catch((error) => error);
   expect(failure).toBeInstanceOf(ApiError);
+  if (!(failure instanceof ApiError)) throw new Error("Expected a coded API refusal");
   expect(failure.code).toBe("subscription_required");
 });
