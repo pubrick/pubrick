@@ -40,8 +40,10 @@ it("acquires the shared tenant admission advisory before the strongest organizat
   expect(calls).toEqual(["advisory", "organization:update"]);
 });
 
-it("stores rolling creation and accepted-recipient timestamps as absolute instants", async()=>{
-  const {hostedAccountCreationClaims,hostedInvitationAcceptances}=await import("./schema/hosted-account-admission.js");
+it("stores rolling creation and accepted-recipient timestamps as absolute instants", async () => {
+  const { hostedAccountCreationClaims, hostedInvitationAcceptances } = await import(
+    "./schema/hosted-account-admission.js"
+  );
   expect(hostedAccountCreationClaims.createdAt.getSQLType()).toBe("timestamp with time zone");
   expect(hostedInvitationAcceptances.acceptedAt.getSQLType()).toBe("timestamp with time zone");
 });

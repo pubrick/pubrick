@@ -9,7 +9,7 @@ export const hostedAccountCreationClaims = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("hosted_account_creation_user_time_idx").on(t.userId, t.createdAt),
@@ -25,5 +25,5 @@ export const hostedInvitationAcceptances = pgTable("hosted_invitation_acceptance
   userId: text("user_id")
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
-  acceptedAt: timestamp("accepted_at").notNull().defaultNow(),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }).notNull().defaultNow(),
 });
