@@ -24,6 +24,10 @@ selling entity or publish a fictional live purchase flow.
 - Explicit instance mode selects self-hosted or hosted. Missing hosted billing
   configuration is a startup refusal, not an unlimited hosted installation.
   Self-hosted without billing configuration remains fully usable.
+- Hosted registration must explicitly use the open registration policy; the
+  self-hosted first-account bootstrap closes registration after the first user.
+  Open hosted registration also requires verified account ownership and abuse
+  controls before live beta; current manual invitations do not verify email.
 - An organization owns its subscription; an authenticated owner/admin may manage
   checkout and the customer portal. Users may belong to multiple organizations.
   Never derive billing ownership from an email address alone.
@@ -46,6 +50,17 @@ selling entity or publish a fictional live purchase flow.
 
 Entitlements are server-owned. Plan checks must not depend on a hidden button.
 Self-hosted bypass is an explicit mode decision, never a request header.
+
+Apply account-level organization/trial admission as well as organization-level
+entitlements: opening a new unpaid workspace must not reset a paid allowance.
+Cap unpaid organization creation and trial claims with durable, concurrent-safe
+records; invitations do not start independent trials. Configured trial policy
+and grace periods are operator choices, not hardcoded commercial promises.
+
+Storage admission needs a backfill of existing retained media, plus explicit
+semantics for deleted objects, replacement uploads and in-flight reservations.
+The byte counter must be reconcilable against durable storage. A restore or
+missed cleanup cannot silently reset billable resource usage.
 
 Enforce resource creation at the write transaction: brands, seats/invitations,
 media byte reservations and asynchronous job concurrency. Invitation acceptance,

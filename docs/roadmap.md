@@ -40,7 +40,7 @@ Deliverables:
   browser origin, durable media storage, and readiness checks.
 - Backup/restore instructions and a tested recovery path for database, media,
   and credential encryption keys.
-- Versioned releases, a concise user-facing changelog, and reproducible multi-arch
+- Versioned releases, a concise user-facing changelog, and source-linked multi-arch
   GHCR images for the existing API, worker, and web services.
 - Clear self-hosting quick start, troubleshooting, support/contribution guidance,
   and a usable private security-reporting channel.
@@ -48,7 +48,9 @@ Deliverables:
 Acceptance: pass these journeys on a disposable installation; verify upgrade
 and restore with fixture data; publish an explicitly versioned release whose
 images and documentation refer to the same source revision. A local passing
-build alone does not satisfy release acceptance.
+build alone does not satisfy release acceptance. Image reproducibility here
+means a recorded source revision and deployable digest; byte-identical rebuilds
+require additional base-image and toolchain pinning.
 
 ## Iteration 2 — common LLM providers
 
