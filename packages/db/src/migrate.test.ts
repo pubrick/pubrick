@@ -565,6 +565,28 @@ const NON_ENUM_CHECKS = [
   "organization_ai_text_settings_revision_check",
   "organization_ai_text_settings_model_check",
   "ai_credentials_revision_check",
+  // 0119: durable billing uses closed states, identity scopes and bounded retry counts.
+  "billing_subscription_reconcile_attempts_check",
+  "billing_subscription_status_check",
+  "billing_checkout_status_check",
+  "billing_receipt_attempts_check",
+  "billing_receipt_kind_check",
+  "billing_receipt_status_check",
+  "billing_cleanup_attempts_check",
+  "billing_cleanup_kind_check",
+  "billing_cleanup_status_check",
+  "billing_plan_versions_provider_check",
+  "billing_plan_versions_environment_check",
+  "billing_accounts_provider_check",
+  "billing_accounts_environment_check",
+  "billing_subscriptions_provider_check",
+  "billing_subscriptions_environment_check",
+  "billing_checkout_attempts_provider_check",
+  "billing_checkout_attempts_environment_check",
+  "billing_receipts_provider_check",
+  "billing_receipts_environment_check",
+  "billing_cleanup_provider_check",
+  "billing_cleanup_environment_check",
 ];
 
 /** Postgres SQLSTATEs the assertions below name rather than match by message. */
