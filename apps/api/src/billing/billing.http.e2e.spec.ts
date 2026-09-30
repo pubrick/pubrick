@@ -7,8 +7,9 @@ import {
   HostedBrowserGuard,
 } from "../hosted-admission/hosted-browser.guard";
 import { ActiveOrgGuard } from "../org/active-org.guard";
-import { BillingController, PublicBillingController } from "./billing.controller";
+import { BillingController } from "./billing.controller";
 import { BillingService } from "./billing.service";
+import { PublicBillingController } from "./public-billing.controller";
 
 // Authentication belongs to the real-session tiers. This native HTTP contract
 // supplies a server-resolved actor without importing auth/database singletons;
