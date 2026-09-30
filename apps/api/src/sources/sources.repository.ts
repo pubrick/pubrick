@@ -576,7 +576,7 @@ export class SourcesRepository {
           embedding: schema.newsItems.embedding,
           embeddingModel: schema.newsItems.embeddingModel,
           embeddingDimensions: schema.newsItems.embeddingDimensions,
-          createdAt: schema.newsItems.createdAt,
+          createdAt: sql<string>`to_char(${schema.newsItems.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           feedbackDelta: schema.newsItems.relevanceFeedbackDelta,
         })
         .from(schema.newsItems)
@@ -589,7 +589,7 @@ export class SourcesRepository {
             gte(schema.newsItems.createdAt, cutoff),
             ...(request.cursor
               ? [
-                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${new Date(request.cursor.createdAt)}, ${request.cursor.id}::uuid)`,
+                  sql`(${schema.newsItems.createdAt}, ${schema.newsItems.id}) < (${request.cursor.createdAt}::timestamptz, ${request.cursor.id}::uuid)`,
                 ]
               : []),
           ),
@@ -630,9 +630,7 @@ export class SourcesRepository {
         processed: page.length,
         changed,
         nextCursor:
-          candidates.length > 50 && last
-            ? { createdAt: last.createdAt.toISOString(), id: last.id }
-            : null,
+          candidates.length > 50 && last ? { createdAt: last.createdAt, id: last.id } : null,
       };
     });
   }

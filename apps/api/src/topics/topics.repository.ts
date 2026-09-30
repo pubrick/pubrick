@@ -230,7 +230,7 @@ export class TopicsRepository {
       ? await db
           .select({
             id: schema.topicSuggestionRequests.id,
-            createdAt: schema.topicSuggestionRequests.createdAt,
+            createdAt: sql<string>`to_char(${schema.topicSuggestionRequests.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           })
           .from(schema.topicSuggestionRequests)
           .where(
@@ -252,7 +252,7 @@ export class TopicsRepository {
           eq(schema.topicSuggestionRequests.orgId, orgId),
           eq(schema.topicSuggestionRequests.brandId, brandId),
           cursor
-            ? sql`(${schema.topicSuggestionRequests.createdAt}, ${schema.topicSuggestionRequests.id}) < (${cursor.createdAt}, ${cursor.id}::uuid)`
+            ? sql`(${schema.topicSuggestionRequests.createdAt}, ${schema.topicSuggestionRequests.id}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
             : undefined,
         ),
       )

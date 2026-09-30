@@ -18,7 +18,7 @@ import {
   type NotificationSettingsUpdate,
   type NotificationSummary,
 } from "@pubrick/shared";
-import { and, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { env } from "../env";
 import { QueueService } from "../queue/queue.service";
@@ -143,12 +143,12 @@ export class NotificationsRepository {
   }
 
   async history(orgId: string, query: NotificationHistoryQuery): Promise<NotificationHistory> {
-    let before: { id: string; createdAt: Date } | undefined;
+    let before: { id: string; createdAt: string } | undefined;
     if (query.cursor) {
       [before] = await db
         .select({
           id: schema.notificationEvents.id,
-          createdAt: schema.notificationEvents.createdAt,
+          createdAt: sql<string>`to_char(${schema.notificationEvents.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         })
         .from(schema.notificationEvents)
         .where(
@@ -176,13 +176,7 @@ export class NotificationsRepository {
         and(
           eq(schema.notificationEvents.orgId, orgId),
           before
-            ? or(
-                lt(schema.notificationEvents.createdAt, before.createdAt),
-                and(
-                  eq(schema.notificationEvents.createdAt, before.createdAt),
-                  lt(schema.notificationEvents.id, before.id),
-                ),
-              )
+            ? sql`(${schema.notificationEvents.createdAt}, ${schema.notificationEvents.id}) < (${before.createdAt}::timestamptz, ${before.id}::uuid)`
             : undefined,
         ),
       )
