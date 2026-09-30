@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { BillingTransaction } from "./billing-entitlement.js";
 import { createDb } from "./client.js";
+import { stageMediaCleanup } from "./media-cleanup.js";
 import { runMigrations } from "./migrate.js";
 import {
   withTenantResourceAdmission,
@@ -37,6 +38,9 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
   afterAll(async () => {
     if (!connection) return;
     for (const orgId of orgIds) {
+      await connection.db
+        .delete(schema.mediaCleanupWork)
+        .where(eq(schema.mediaCleanupWork.orgId, orgId));
       await connection.db.delete(schema.organization).where(eq(schema.organization.id, orgId));
       await connection.db
         .delete(schema.billingSubscriptions)
@@ -220,6 +224,56 @@ describe.skipIf(!url)("native tenant resource quota admission", () => {
       .where(eq(schema.mediaAssets.orgId, orgId));
     expect(total[0]?.bytes).toBe("100");
     expect(await rows(orgId, "mediaBytes")).toHaveLength(4);
+  });
+  it("retains deleted media bytes until physical cleanup is acknowledged", async () => {
+    const { orgId, brandId } = await fixture();
+    const [asset] = await connection.db.transaction((tx) => media(tx, orgId, brandId, 100));
+    if (!asset) throw new Error("Missing asset");
+    await connection.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${orgId}))`,
+      );
+      await stageMediaCleanup(orgId, tx, { assetIds: [asset.id] });
+      await tx.delete(schema.mediaAssets).where(eq(schema.mediaAssets.id, asset.id));
+    });
+    const insert = vi.fn((tx: BillingTransaction) => media(tx, orgId, brandId, 1));
+    await expect(
+      withTenantResourceAdmission(
+        orgId,
+        connection.db,
+        hosted,
+        { resource: "mediaBytes", additional: 1 },
+        insert,
+      ),
+    ).rejects.toMatchObject({ code: "resource_limit" });
+    expect(insert).not.toHaveBeenCalled();
+    // Cleanup remains stopped/unavailable even after retries become operator-owned.
+    await connection.db
+      .update(schema.mediaCleanupWork)
+      .set({ state: "operator_action", lastError: "storage_unavailable" })
+      .where(eq(schema.mediaCleanupWork.assetId, asset.id));
+    await expect(
+      withTenantResourceAdmission(
+        orgId,
+        connection.db,
+        hosted,
+        { resource: "mediaBytes", additional: 1 },
+        insert,
+      ),
+    ).rejects.toMatchObject({ code: "resource_limit" });
+    // The worker's successful unlink/ENOENT acknowledgement is the only release boundary.
+    await connection.db
+      .update(schema.mediaCleanupWork)
+      .set({ state: "completed", completedAt: new Date() })
+      .where(eq(schema.mediaCleanupWork.assetId, asset.id));
+    await withTenantResourceAdmission(
+      orgId,
+      connection.db,
+      hosted,
+      { resource: "mediaBytes", additional: 1 },
+      insert,
+    );
+    expect(insert).toHaveBeenCalledOnce();
   });
   it("scopes real brands, channels and media aggregates to the target tenant", async () => {
     const target = await fixture();
