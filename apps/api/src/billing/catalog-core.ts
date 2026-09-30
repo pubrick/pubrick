@@ -5,7 +5,13 @@ export type PlanDefinition = Readonly<{
   id: string;
   version: string;
   priceId: string;
-  limits: Readonly<{ seats: number; brands: number; mediaBytes: number; concurrentJobs: number }>;
+  limits: Readonly<{
+    seats: number;
+    brands: number;
+    channels: number;
+    mediaBytes: number;
+    concurrentJobs: number;
+  }>;
 }>;
 export type CatalogPlan = Readonly<PlanDefinition & { price: PriceSnapshot }>;
 /** App-owned initial catalog; persistent historical versions are a later storage responsibility. */
@@ -31,6 +37,7 @@ export class BillingCatalog {
         [
           plan.limits.seats,
           plan.limits.brands,
+          plan.limits.channels,
           plan.limits.mediaBytes,
           plan.limits.concurrentJobs,
         ].some((limit) => !Number.isSafeInteger(limit) || limit < 0) ||
@@ -71,6 +78,9 @@ export class BillingCatalog {
   get identity(): BillingIdentity {
     this.assertReady();
     return this.driver.identity;
+  }
+  list(): readonly CatalogPlan[] {
+    return this.assertReady();
   }
   select(id: string): CatalogPlan {
     const plan = this.assertReady().find((plan) => plan.id === id);

@@ -20,6 +20,8 @@ export type CheckoutAttempt = Readonly<{
   checkoutKey: string;
   successUrl: string;
   cancelUrl: string;
+  /** Present on persistent stores; stale tokens cannot complete mutations. */
+  leaseToken?: string;
   email?: string;
 }>;
 export interface CheckoutStore {
@@ -32,7 +34,9 @@ export interface CheckoutStore {
     /** Persist once for a new attempt; existing attempts keep their original URLs. */
     preferredUrls: Readonly<{ successUrl: string; cancelUrl: string }>,
   ): Promise<
-    { kind: "attempt"; attempt: CheckoutAttempt } | { kind: "ready"; session: SessionResult }
+    | { kind: "attempt"; attempt: CheckoutAttempt }
+    | { kind: "ready"; session: SessionResult }
+    | { kind: "pending" }
   >;
   /** Compare revision, enforce immutable external customer ownership; commit before returning. */
   attachCustomer(
@@ -41,6 +45,11 @@ export interface CheckoutStore {
     customerId: string,
   ): Promise<CheckoutAttempt | null>;
   complete(orgId: string, attempt: CheckoutAttempt, result: SessionResult): Promise<boolean>;
+  failed?(
+    orgId: string,
+    attempt: CheckoutAttempt,
+    code: BillingErrorCode | BillingCoreCode,
+  ): Promise<void>;
 }
 export type ReceiptClaim = Readonly<{ id: string; lease: string; event: VerifiedEvent }>;
 export type BillingMapping = Readonly<{
@@ -74,6 +83,7 @@ export interface ReceiptStore {
     reason: "nonowned" | "deleted" | "pending_relationship",
   ): Promise<void>;
   retry(claim: ReceiptClaim, code: BillingErrorCode | BillingCoreCode): Promise<void>;
+  deletedObligation?(mapping: BillingMapping, subscriptionId: string): Promise<void>;
 }
 
 export type BillingCoreCode =

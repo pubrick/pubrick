@@ -47,6 +47,8 @@ export class ReconciliationCore {
           relationships.subscriptionId,
         );
         if (!mapping || mapping.deleted) {
+          if (mapping?.deleted)
+            await this.store.deletedObligation?.(mapping, relationships.subscriptionId);
           await this.store.ignored(claim, mapping ? "deleted" : "nonowned");
           return;
         }

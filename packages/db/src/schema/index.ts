@@ -5,6 +5,7 @@ export * from "./analysis-admissions.js";
 export * from "./api-keys.js";
 export * from "./auth.js";
 export * from "./autopilot.js";
+export * from "./billing.js";
 export * from "./brand-access.js";
 export * from "./calendar.js";
 export * from "./claim-review.js";

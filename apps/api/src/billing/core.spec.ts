@@ -15,7 +15,7 @@ const plan = {
   id: "test_plan",
   version: "v1",
   priceId: "price_test",
-  limits: { seats: 2, brands: 3, mediaBytes: 4096, concurrentJobs: 1 },
+  limits: { seats: 2, brands: 3, channels: 3, mediaBytes: 4096, concurrentJobs: 1 },
 };
 function driver() {
   return new FixtureBillingDriver({

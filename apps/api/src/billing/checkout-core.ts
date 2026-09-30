@@ -1,4 +1,4 @@
-import type { BillingDriver, SessionResult } from "@pubrick/billing";
+import { type BillingDriver, BillingError, type SessionResult } from "@pubrick/billing";
 import type { BillingCatalog, CatalogPlan } from "./catalog-core";
 import type { CheckoutAttempt, CheckoutStore } from "./ports";
 import { BillingCoreError, sameIdentity } from "./ports";
@@ -45,8 +45,28 @@ export class CheckoutCore {
       successUrl: preferredUrl,
       cancelUrl: preferredUrl,
     });
-    if (begun.kind === "ready") return begun;
-    let attempt = begun.attempt;
+    if (begun.kind === "ready" || begun.kind === "pending") return begun;
+    this.assertAttempt(orgId, begun.attempt, plan);
+    return this.resume(begun.attempt);
+  }
+  /** Privileged scheduler resumes only a committed, leased attempt from storage. */
+  async resume(initial: CheckoutAttempt): Promise<CheckoutCoreResult> {
+    try {
+      return await this.execute(initial);
+    } catch (error) {
+      const code =
+        error instanceof BillingError || error instanceof BillingCoreError
+          ? error.code
+          : "unavailable";
+      await this.store.failed?.(initial.orgId, initial, code);
+      if (error instanceof BillingError || error instanceof BillingCoreError) throw error;
+      throw new BillingError("unavailable");
+    }
+  }
+  private async execute(initial: CheckoutAttempt): Promise<CheckoutCoreResult> {
+    const orgId = initial.orgId;
+    const plan = this.catalog.select(initial.planId);
+    let attempt = initial;
     this.assertAttempt(orgId, attempt, plan);
     if (attempt.customerId === null) {
       const customer = await this.driver.createCustomer({

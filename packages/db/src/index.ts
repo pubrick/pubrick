@@ -1,4 +1,6 @@
 export * from "./ai-text-selection.js";
+export type { BillingEntitlement, BillingTransaction } from "./billing-entitlement.js";
+export { resolveBillingEntitlement } from "./billing-entitlement.js";
 export { createDb } from "./client.js";
 export { withImageCallLock } from "./image-call-lock.js";
 export { runMigrations } from "./migrate.js";
