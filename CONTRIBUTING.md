@@ -2,6 +2,19 @@
 
 Humans and AI agents follow the same gates.
 
+## Choose and discuss work
+
+See the [development roadmap](docs/roadmap.md) and
+[open issues](https://github.com/pubrick/pubrick/issues). For a substantial feature,
+explain the user problem, proposed scope, and acceptance criteria before coding.
+Report bugs with the revision, installation mode, reproduction steps, and
+sanitized logs. Use synthetic data; do not include API keys, proxy passwords,
+session cookies, customer content, or `.env` files.
+
+Security vulnerabilities use the [private reporting process](SECURITY.md).
+Document visible behavior and limitations in English, and update the relevant
+user guide when a change affects setup, recovery, or a workflow.
+
 ## Quality gates (all PRs)
 
 `pnpm typecheck && pnpm lint && pnpm test` must pass. CI also builds the complete
