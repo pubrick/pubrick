@@ -1,7 +1,8 @@
 # Weekly editorial plans execution
 
-Status: calendar prerequisite, shared contracts/calculator and transactional
-persistence integrated in the feature branch; API/worker integration in progress.
+Status: calendar prerequisite, shared contracts/calculator, transactional
+persistence and API/worker integration landed in the feature branch; Calendar UI
+implementation in progress.
 Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
@@ -81,8 +82,9 @@ Slot-to-occurrence attribution uses a one-way scoped FK. Occurrence slot/run
 UUIDs are durable audit identifiers, avoiding reciprocal delete triggers that
 would invert occurrence/slot lock order. Existing calendar API and worker paths
 still require step 3 integration; this persistence milestone alone does not
-enable scheduled generation. Independent combined persistence guard mutations
-and full feature acceptance remain pending.
+enable scheduled generation. Subsequent independent persistence guard mutations
+are recorded in the [occurrence state proof](../reviews/2026-10-01-editorial-occurrence-state-proof.md).
+Full feature acceptance remains pending.
 
 ### 3. Session API and worker dispatch integration
 
@@ -113,6 +115,20 @@ recovery, missing channel/provider repair, queue failure, tenant and role refusa
 resource admission and exact pinned provider snapshot. Use synthetic DB/media/
 credentials and scripted model; no provider or publication calls.
 
+Integrated at `34b65d92` (author source `5b6df186`). Final focused PostgreSQL
+16.15 verification passed 16 API/authority tests and 51 worker/queue tests,
+including ordinary calendar regressions. Shared, db, API and worker typechecks,
+API/worker builds and scoped lint passed. Native tests use measured lock waits
+for grant revocation, elapsed dispatch windows and pause/dispatch overlap;
+also cover enqueue rollback, configuration repair, pinned selection and planner
+redelivery. A quota-deferral omission reproduced a blocked tenant starving the
+101st due occurrence; restored source passed. This fairness fixture uses synthetic
+quota refusal with real database transactions. A separate regression reproduced
+unverified self-hosted session refusal and now checks both permitted self-hosted
+access and required hosted verification, matching the canonical identity policy.
+Owned test storage was removed. Independent step 3 guard review, Calendar UI and
+the integrated full gate/browser journey remain pending.
+
 ### 4. Calendar UI and documentation
 
 One owner: separate recurring component on existing brand Calendar, API client,
@@ -138,6 +154,58 @@ Real journey creates disabled plan, previews, enables with consent, dispatches
 one due scripted generation to a draft, reviews it, pauses/resumes, skips and
 removes. Confirm no publication job and no real provider call. Reviewer reads
 the combined diff before release; fixes repeat affected checks only.
+
+### Built worker and browser fixture
+
+The browser runner owns a disposable PostgreSQL container, media directory and
+bounded receipt file. It passes an explicit environment allowlist with random
+test secrets, never the developer's `.env` or saved provider credentials. Build
+API, worker and web from the integrated feature source after step 4 lands;
+verify the latest migration before beginning the journey. Keep this runner
+manual, following the existing isolated browser runners.
+
+Only the compiled worker receives a test-only Node `--import` preload. It
+intercepts the existing Google transport's `globalThis.fetch`; it does not add
+a production hook or endpoint. Require the disposable marker, loopback database,
+synthetic key, exact model endpoint, POST method and structured request body.
+Return the SDK's documented candidate/usage envelope with schema-valid scripted
+researcher, writer, editor, fact-check and adapter outputs. Match role markers
+and a unique journey marker, rather than relying on invocation order. Reject
+unrecognized requests without forwarding to the original fetch.
+
+Record an unexpected-call failure durably before throwing. The runner checks
+this latch while waiting and at completion, so a caught SDK error cannot make
+the journey pass; failure to write the receipt terminates the worker. Store no
+request headers or credentials. Require exactly five successful role receipts,
+five ledger rows and five checkpoints belonging to the one generated run. Require
+each role exactly once, including `adapter:<channelId>`. The fixture selects one
+channel, uses `social_post`, disables images and has no knowledge or related
+news; otherwise five calls would not describe the actual pipeline. Carry the
+journey marker through the scripted draft outputs into fact-check and adaptation.
+This intercepts the Google SDK transport, not every possible Node networking
+API: the fresh brand has no knowledge, monitoring, webhook or image configuration,
+and its manual channel has no publishing credentials.
+
+Use the live clock and choose the first UTC generation minute at least two
+minutes ahead and less than three minutes ahead.
+Before enabling, require at least sixty seconds remaining; otherwise revise the
+still-disabled plan and preview again. Derive the local date and weekday from
+that instant, including midnight rollover, and retain a future occurrence for
+pause/resume/skip checks. Start the journey deadline after build and readiness;
+bound it to eight minutes and generation to the due time plus two minutes,
+reserving three minutes for post-generation actions. This is a timeout, not a
+promised runtime. Worker exit, failed run or unexpected receipt
+fails immediately. Await child shutdown before removing disposable storage.
+
+The UI saves the synthetic Google key and selects the model without running the
+provider probe. Create, preview and enable the plan through the actual UI; allow
+the real planner, calendar dispatch and compiled generation pipeline to produce
+the draft. Open and edit it as a human and verify persisted text, without clicking
+Approve. Check the retained provider selection, immutable dispatched occurrence,
+manual skip after observing a real planner job complete and terminal removal.
+Elapsed time alone does not prove a planner pass. Assert there are no
+publication records or pending/completed publish jobs. Keep sanitized failure
+logs and record the exact source, runner command and cleanup result.
 
 Record exact source, commands/counts, skipped tiers, migration upgrade and cleanup.
 Push a coherent feature milestone once, then open/update one PR. Main release
