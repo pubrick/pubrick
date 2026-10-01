@@ -14,6 +14,7 @@ describe.skipIf(!url)("calendar text selection admission", () => {
   let repository: InstanceType<typeof import("../generate/generate.repository").GenerateRepository>;
   let orgId: string;
   let slotId: string;
+  let brandId: string;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -34,6 +35,7 @@ describe.skipIf(!url)("calendar text selection admission", () => {
     await db.insert(schema.organization).values({ id: orgId, name: "Synthetic", slug: orgId });
     const [brand] = await db.insert(schema.brands).values({ orgId, name: "Synthetic" }).returning();
     if (!brand) throw new Error("Brand fixture missing");
+    brandId = brand.id;
     const [channel] = await db
       .insert(schema.channels)
       .values({
@@ -225,5 +227,63 @@ describe.skipIf(!url)("calendar text selection admission", () => {
       await repository.claim(orgId, queued.id, `${job.id}#${randomUUID()}`, job.id),
     ).toBeUndefined();
     expect(await run()).toMatchObject({ status: "failed", error: "no_api_key" });
+  });
+
+  it("does not deadlock brand deletion against calendar admission", async () => {
+    // BrandsRepository.delete starts with brand UPDATE in self-hosted mode;
+    // its eventual brand cascade is the counterparty to the run insert's FK.
+    const deleter = await pool.connect();
+    let pending: Promise<unknown> | undefined;
+    try {
+      await deleter.query("BEGIN");
+      const {
+        rows: [connection],
+      } = await deleter.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      if (!connection) throw new Error("Missing backend");
+      await deleter.query("SELECT id FROM brands WHERE org_id = $1 AND id = $2 FOR UPDATE", [
+        orgId,
+        brandId,
+      ]);
+      pending = calendar.trigger(boss, orgId, slotId).catch((error: unknown) => error);
+      let waiting = false;
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const { rows } = await pool.query<{ waiting: boolean }>(
+          "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting",
+          [connection.pid],
+        );
+        if (rows[0]?.waiting) {
+          waiting = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      const deleted = await deleter
+        .query("DELETE FROM brands WHERE org_id = $1 AND id = $2", [orgId, brandId])
+        .catch((error: unknown) => error);
+      await deleter.query("COMMIT");
+      expect(deleted, "brand deletion must not be the deadlock victim").not.toBeInstanceOf(Error);
+      const outcome = await pending;
+      const code =
+        outcome instanceof Error && "cause" in outcome
+          ? (outcome.cause as { code?: string } | undefined)?.code
+          : undefined;
+      expect(code, "native PostgreSQL overlap must not detect a deadlock").not.toBe("40P01");
+      expect(outcome, "calendar admission must not be the deadlock victim").not.toBeInstanceOf(
+        Error,
+      );
+      expect(
+        await db
+          .select({ id: schema.pipelineRuns.id })
+          .from(schema.pipelineRuns)
+          .where(eq(schema.pipelineRuns.orgId, orgId)),
+      ).toEqual([]);
+      expect(await boss.findJobs("generate", { data: { orgId } })).toEqual([]);
+    } finally {
+      await deleter.query("ROLLBACK");
+      deleter.release();
+      await pending;
+    }
   });
 });
