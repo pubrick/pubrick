@@ -403,9 +403,8 @@ describe("weekly editorial plans", () => {
     const dialog = screen.getByRole("dialog");
     await within(dialog).findByText(/2026-10-05 · 09:00/);
     await user.click(within(dialog).getByRole("button", { name: ru.CalendarRecurring.more }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      ru.Errors.editorial_plan_authority_revoked,
-    );
+    // The transport deliberately classifies nonhosted 403 replies as forbidden.
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(ru.Errors.forbidden);
     expect(within(dialog).queryByText("English history refusal")).not.toBeInTheDocument();
     expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
     expect(within(dialog).getByRole("button", { name: ru.CalendarRecurring.more })).toBeEnabled();

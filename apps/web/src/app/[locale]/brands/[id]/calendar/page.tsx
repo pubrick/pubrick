@@ -105,6 +105,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [recurringRefresh, setRecurringRefresh] = useState(0);
   const [placeholderCounts, setPlaceholderCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
@@ -266,6 +267,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           notes: notes.trim() || null,
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       setBrief("");
       setSelectedTopicId("");
       setNotes("");
@@ -327,6 +329,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           notes: notes.trim() || null,
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       setEditing(null);
       await load();
     } catch (err) {
@@ -344,6 +347,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setBusy(true);
     try {
       await api(`/api/calendar/slots/${removing.id}?brandId=${brandId}`, { method: "DELETE" });
+      setRecurringRefresh((current) => current + 1);
       setRemoving(null);
       await load();
     } catch (err) {
@@ -425,6 +429,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           })),
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       const firstDate = new Date(
         Math.min(...bulkPreviewRows.map((row) => new Date(row.dateInput).getTime())),
       );
@@ -859,6 +864,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
         channels={channels ?? []}
         canEdit={canMutateCalendar}
         onChange={load}
+        refreshVersion={recurringRefresh}
       />
       <EditorialPlaceholders
         brandId={brandId}

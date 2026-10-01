@@ -58,11 +58,13 @@ export function RecurringPlans({
   channels,
   canEdit,
   onChange,
+  refreshVersion = 0,
 }: {
   brandId: string;
   channels: { id: string; name: string }[];
   canEdit: boolean;
   onChange: () => void;
+  refreshVersion?: number;
 }) {
   const t = useTranslations("CalendarRecurring");
   const te = useTranslations("Errors");
@@ -101,11 +103,13 @@ export function RecurringPlans({
     }
   }, [brandId, t, te]);
   useEffect(() => {
+    // A parent Calendar mutation refreshes snapshots without resetting the draft.
+    if (refreshVersion < 0) return;
     void load();
     return () => {
       sequence.current++;
     };
-  }, [load]);
+  }, [load, refreshVersion]);
   function change<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((current) => ({ ...current, [key]: value }));
     setPreview(null);
@@ -655,6 +659,11 @@ export function RecurringPlans({
         {history && (
           <>
             <p className="mb-3 text-sm text-fg-secondary">{t("historyHint")}</p>
+            {error && (
+              <p role="alert" className="mb-3 text-sm text-danger">
+                {error}
+              </p>
+            )}
             {occurrences(history.rows)}
             {history.rows.length === 0 && <p>{t("noHistory")}</p>}
             {history.cursor && (
