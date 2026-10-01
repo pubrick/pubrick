@@ -1,6 +1,6 @@
 # Development roadmap
 
-Updated: 2026-09-30.
+Updated: 2026-10-01.
 
 This is the current execution plan. The original [product design](specs/0001-product-design.md)
 records the P0–P5 scope; [porting status](porting-status.md) describes today's
@@ -85,6 +85,12 @@ OpenAI-compatible endpoints are also implemented. See the
 [platform integration record](reviews/2026-09-30-hosted-platform.md) for the
 local transport verification and capability limits; live provider access still
 depends on valid operator credentials.
+
+The existing local self-hosted installation has also been upgraded to the current
+application artifacts and migrations. Its saved Google connection passed a real
+provider probe through its saved proxy. See the
+[local upgrade record](reviews/2026-10-01-local-upgrade.md) for the verification
+scope and the unavailable interactive browser check.
 
 ## Iteration 3 — hosted SaaS beta (P4)
 
