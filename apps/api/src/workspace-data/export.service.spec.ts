@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
@@ -11,7 +11,23 @@ import type { ExportSnapshot, WorkspaceExportRepository } from "./export.reposit
 vi.mock("../db", () => ({ pool: {} }));
 vi.mock("../env", () => ({ env: { DATABASE_URL: "postgres://unused-export-fixture" } }));
 
-const { storage } = vi.hoisted(() => ({ storage: { directory: "" } }));
+const { storage, stage } = vi.hoisted(() => ({
+  storage: { directory: "" },
+  stage: { freeBytes: undefined as bigint | undefined },
+}));
+vi.mock("./export-staging", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./export-staging")>();
+  return {
+    ...actual,
+    withExportStage: (consume: Parameters<typeof actual.withExportStage>[0]) =>
+      actual.withExportStage(
+        consume,
+        stage.freeBytes === undefined
+          ? {}
+          : { root: storage.directory, freeBytes: async () => stage.freeBytes ?? 0n },
+      ),
+  };
+});
 vi.mock("../media/media.repository", () => ({
   mediaPath: (id: string, kind: string) =>
     `${storage.directory}/${id}.${kind === "image" ? "jpg" : "mp4"}`,
@@ -68,6 +84,7 @@ async function unpack(content: Buffer): Promise<Map<string, Buffer>> {
 }
 
 afterEach(async () => {
+  stage.freeBytes = undefined;
   if (storage.directory) await rm(storage.directory, { recursive: true, force: true });
   storage.directory = "";
 });
@@ -178,6 +195,29 @@ describe("portable workspace archive", () => {
         .map((line) => JSON.parse(line)),
     );
     expect(exported).toEqual(values);
+  });
+
+  it("refuses low staging space during a large entry without an uncaught stream error or download", async () => {
+    storage.directory = await mkdtemp(path.join(tmpdir(), "pubrick-export-low-space-"));
+    stage.freeBytes = 0n;
+    const values = Array.from({ length: 40 }, (_value, index) => ({
+      index,
+      body: "a".repeat(100_000),
+    }));
+    const start = vi.fn(() => capture().writable);
+    await expect(
+      new WorkspaceExportService(repository(snapshot({ contentItems: values }))).stream(
+        "tenant-one",
+        "owner",
+        new AbortController().signal,
+        start,
+      ),
+    ).rejects.toThrow("Temporary export storage is full. Try again later.");
+    // Let the real tar entry's deferred error event reach Vitest's uncaught
+    // error detector; observing only the callback rejection misses the crash.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(start).not.toHaveBeenCalled();
+    expect(await readdir(storage.directory)).toEqual([]);
   });
 
   it("refuses replaced symbolic-link media and never finalizes a successful archive", async () => {

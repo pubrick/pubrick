@@ -35,9 +35,12 @@ const CHUNK_BYTES = 1024 * 1024;
 
 async function entry(archive: Pack, name: string, content: Buffer): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    archive.entry({ name, size: content.length, mode: 0o600 }, content, (error) =>
+    const sink = archive.entry({ name, size: content.length, mode: 0o600 }, content, (error) =>
       error ? reject(error) : resolve(),
     );
+    // tar-stream reports destruction through both the callback and the entry
+    // stream. Observe the latter even after the callback has settled.
+    sink.on("error", reject);
   });
 }
 
