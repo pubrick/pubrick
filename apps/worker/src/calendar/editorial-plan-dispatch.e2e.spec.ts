@@ -12,15 +12,41 @@ describe.skipIf(!url)("recurring calendar paid dispatch", () => {
   let store: InstanceType<typeof import("@pubrick/db").EditorialPlansPersistence>;
   let service: InstanceType<typeof import("./calendar.service").CalendarService>;
   let boss: InstanceType<typeof import("pg-boss").PgBoss>;
+  let workerPool: ReturnType<typeof import("@pubrick/db").createDb>["pool"] | undefined;
+  let ownedDatabase: string | undefined;
+  const previousDatabaseUrl = process.env.DATABASE_URL;
   const orgs: string[] = [];
   beforeAll(async () => {
-    process.env.DATABASE_URL = url as string;
+    if (!url) throw new Error("Missing dispatch test database URL");
+    const isolated = new URL(url);
+    if (
+      !["postgres:", "postgresql:"].includes(isolated.protocol) ||
+      !["localhost", "127.0.0.1", "[::1]"].includes(isolated.hostname)
+    )
+      throw new Error("Dispatch tests require a disposable loopback PostgreSQL server");
+    // scan() is deliberately global. Other suites' due rows must not consume
+    // this file's 100-row page; never erase foreign tenants to make it fit.
+    const database = `pubrick_weekly_dispatch_${randomUUID().replaceAll("-", "")}`;
     const pkg = await import("@pubrick/db");
+    const admin = pkg.createDb(url).pool;
+    try {
+      await admin.query(`CREATE DATABASE "${database}"`);
+      ownedDatabase = database;
+    } finally {
+      await admin.end();
+    }
+    isolated.pathname = `/${database}`;
+    const isolatedUrl = isolated.toString();
+    process.env.DATABASE_URL = isolatedUrl;
+    await pkg.runMigrations(isolatedUrl);
     schema = pkg.schema;
-    connection = pkg.createDb(url as string);
+    connection = pkg.createDb(isolatedUrl);
+    // CalendarService imports this module-level pool; close it as well as our
+    // observation pool before dropping only the database this file created.
+    workerPool = (await import("../db")).pool;
     store = new pkg.EditorialPlansPersistence(connection.db);
     boss = new (await import("pg-boss")).PgBoss({
-      connectionString: url as string,
+      connectionString: isolatedUrl,
       supervise: false,
       schedule: false,
     });
@@ -31,10 +57,25 @@ describe.skipIf(!url)("recurring calendar paid dispatch", () => {
   });
   afterAll(async () => {
     vi.restoreAllMocks();
-    for (const id of orgs)
-      await connection.db.delete(schema.organization).where(eq(schema.organization.id, id));
-    await boss?.stop({ graceful: false, timeout: 5000 });
-    await connection?.pool.end();
+    const results = await Promise.allSettled([
+      boss?.stop({ graceful: false, timeout: 5000 }),
+      connection?.pool.end(),
+      workerPool?.end(),
+    ]);
+    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousDatabaseUrl;
+    if (ownedDatabase) {
+      if (!/^pubrick_weekly_dispatch_[a-f0-9]{32}$/.test(ownedDatabase))
+        throw new Error("Refusing to drop an unowned dispatch database");
+      const pkg = await import("@pubrick/db");
+      const admin = pkg.createDb(url as string).pool;
+      try {
+        await admin.query(`DROP DATABASE IF EXISTS "${ownedDatabase}" WITH (FORCE)`);
+      } finally {
+        await admin.end();
+      }
+    }
+    for (const result of results) if (result.status === "rejected") throw result.reason;
   });
   async function fixture(configured = true, localTime = "09:00") {
     const orgId = `weekly-dispatch-${randomUUID()}`;
