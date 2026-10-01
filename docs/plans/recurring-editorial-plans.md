@@ -1,8 +1,8 @@
 # Weekly editorial plans execution
 
 Status: calendar prerequisite, shared contracts/calculator, transactional
-persistence and API/worker integration landed in the feature branch; Calendar UI
-implementation in progress.
+persistence, API/worker integration and Calendar UI landed in the feature branch;
+isolated built-browser acceptance in progress.
 Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
@@ -126,8 +126,10 @@ redelivery. A quota-deferral omission reproduced a blocked tenant starving the
 quota refusal with real database transactions. A separate regression reproduced
 unverified self-hosted session refusal and now checks both permitted self-hosted
 access and required hosted verification, matching the canonical identity policy.
-Owned test storage was removed. Independent step 3 guard review, Calendar UI and
-the integrated full gate/browser journey remain pending.
+The author's test storage was removed. Independent API/worker source review passed.
+Selected dispatch guard proofs and their deliberately narrow scope are recorded
+in the [native guard review](../reviews/2026-10-01-recurring-dispatch-guards.md).
+The integrated full gate/browser journey remain pending.
 
 ### 4. Calendar UI and documentation
 
@@ -145,6 +147,24 @@ status, empty-state, accessible controls, mobile and translation conventions.
 Tests: request schema round trips, Russian failure sites with real refusal body,
 four-locale parity, keyboard confirmation, disabled-save/enable distinction,
 preview zone/offset, stale revision, actionable blocked and ended states.
+
+Calendar UI integrated at `950b154b`, with review fixes at `5cfc95ec` and unavailable
+channel repair at `6f36f71d`. Initial focused web verification passed 87 assertions;
+affected component checks passed after confirmation and recovery polish. Independent
+source review found stale plan summaries after Skip and an error hidden behind the
+history dialog. Both have RED regressions and verified fixes; the follow-up source
+review passed. That two-file run passed 25 cases and timed out on one unchanged
+bulk-selection test, which subsequently passed alone in 8.44 seconds. This is not
+reported as a green combined run.
+
+A further source read found that deleted channel IDs could remain invisible in
+an edit draft and prevent saving replacement channels. An explicit Remove control
+now repairs only unavailable selections, including changes while editing, and
+preserves the remaining draft. Its final component/locale tier passed 34 assertions
+(13 component and 21 locale checks). Shared tokens, four locales, strict wire
+round trips and localized refusal bodies are covered. Earlier web typecheck and
+scoped lint passed; final whole-feature types/build and real browser/mobile
+acceptance are still required.
 
 ## Integrated acceptance
 
