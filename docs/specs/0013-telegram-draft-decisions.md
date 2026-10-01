@@ -1,8 +1,9 @@
 # Telegram draft decisions
 
 Status: proposed; independent source-grounded review closed three concrete
-setup, snapshot/authority and delivery-history findings. Implementation,
-concrete quotas/retention and new deletion cascades remain review gates. No callback
+setup, snapshot/authority and delivery-history findings. Concrete bounds,
+retention and deletion strategy are specified; implementation and actual native
+FK/cascade/lock proofs remain required gates. No callback
 decision, Telegram identity binding, webhook, migration or interface described
 below is implemented by this document.
 Date: 2026-10-01.
@@ -114,8 +115,11 @@ instead of calling the uncertain bot fully reconciled or ready for rotation.
 
 Webhook delivery may begin before setup finalization. An armed desired route
 can persist a bounded authenticated probe; it cannot apply decisions until its
-generation is active. Retryable admission failure returns non-2xx. Do not return
-2xx before durable update acceptance or a durable terminal refusal. Operator
+generation is active. Retryable admission failure returns non-2xx. For recognized
+supported operations, do not return 2xx before durable update acceptance or a
+durable terminal refusal. Authenticated unsupported updates are deterministically
+ignored with 2xx, without a journal or domain write; an invalid secret is refused
+before update admission. Operator
 instructions must cover reachable HTTPS, proxy body limits and secret headers;
 an outbound-only bot configuration does not imply an inbound webhook works.
 
@@ -131,8 +135,8 @@ Two phases prove control of both accounts:
 
 1. A signed-in Pubrick user with current workspace membership requests a
    five-minute binding challenge in their own settings. Store only its random
-   code hash, user/org/bot generation, expiration and state. Limit issuance per
-   user and organization. A `t.me/<bot>?start=<opaque-code>` link uses a random
+   code hash, user/org/bot generation, expiration and state. Apply the atomic
+   user/organization issuance bounds in §7. A `t.me/<bot>?start=<opaque-code>` link uses a random
    base64url payload no longer than 64 characters and contains no user/org ID.
 2. The authenticated webhook accepts `/start` only in a private conversation
    with a non-bot sender. Atomically record that challenge's Telegram `from.id`
@@ -150,8 +154,9 @@ active Pubrick user per Telegram user/org/bot. Reject conflicting replacement;
 require explicit unlink/rebind. A person can unlink their own binding; managers
 can revoke workspace bindings without taking over their identity. Revocation
 invalidates outstanding actor capabilities and wins under the same binding
-lock as decisions. Organization/user deletion cascades binding secrets and
-challenges. Membership removal or role/grant changes need not delete identity
+lock as decisions. Organization/user deletion cascades binding secrets,
+challenges and private actor confirmations according to §6. Membership removal
+or role/grant changes need not delete identity
 metadata, but immediately remove decision authority.
 
 Expose own binding in the existing Settings → Notifications location without
@@ -315,7 +320,8 @@ existence; it must not become an early item lock. Brand grant writers take brand
 before member/grant rows. Do not prescribe member locks before brand or add brand
 lookups to role-change triggers. Bot and binding writers never take domain locks
 after holding callback rows; disconnect/revocation use parent-first ordering.
-User/organization deletion and every new FK cascade must be reviewed explicitly.
+The deletion strategy below fixes the new-table cascade boundary; every actual
+migration and concurrent deletion path must still prove that boundary natively.
 The channel lock is mandatory for both capability issuance and consumption:
 the shared snapshot includes channel name/platform, while channel name edits
 do not take adaptation/item locks. `FOR KEY SHARE` does not block a non-key
@@ -332,15 +338,69 @@ Within that one transaction:
    and prompt decision evidence. Telegram eligibility adds restrictions and
    never removes existing domain protections.
 4. Consume the one-shot capability, invalidate sibling confirmations, and commit
-   immutable scoped decision evidence plus `(botId, updateId)` replay identity.
+   immutable scoped decision evidence plus `(internalBotIdentityId, updateId)`
+   replay identity. The internal ID is the registry's opaque identity reference,
+   not a duplicate Telegram bot/user numeric ID.
 
-The audit includes actor/binding identifiers, org/brand/item, action, snapshot
-hash/version, bot generation, consumed capability ID, update identity, outcome
-and timestamp. No raw content, token, callback data or full update is retained.
+The audit includes immutable scoped resource IDs, opaque Pubrick actor/binding
+reference IDs, action, snapshot hash/version, bot generation, consumed capability
+ID, update identity, outcome and timestamp. Pubrick user IDs are opaque `text`,
+not UUIDs. Neither audit nor minimal replay evidence stores Telegram user IDs,
+chat IDs, names, raw content, secrets, callback data or full updates.
 Sibling invalidation uses stable ID order. All callback writers needing domain
 locks follow the same order; cleanup cannot hold a callback lock then wait for
 its content parent. A transaction rollback leaves no rejected item, consumed
 capability or accepted replay receipt behind.
+
+### Deletion and cascade strategy
+
+| New record | Parent references and removal |
+| --- | --- |
+| Binding, binding challenge, private actor confirmation | Direct organization and Pubrick user references with `ON DELETE CASCADE`; no member reference |
+| Initial notification capability | Organization `ON DELETE CASCADE`; no user reference |
+| Minimal decision audit and replay receipt | Organization `ON DELETE CASCADE` only; immutable scoped resource and opaque actor/reference IDs have no deleting user/resource/binding FK |
+| Global bot ownership/remote-mutator registry | Nullable owner organization with `ON DELETE SET NULL`; bot claim and unsettled remote evidence survive tenant deletion in disabled quarantine |
+
+Do not add nested binding → capability or resource → capability cascade paths.
+Validate those immutable reference IDs, ownership and actor evidence under the
+decision's parent locks instead. Membership removal can revoke authorization
+without accidentally cascading historical evidence or a pending capability
+through a different lock order. User deletion removes directly owned identity
+and confirmation rows but does not erase or rewrite minimal opaque decision
+evidence; it contains no retained Telegram personal identity to pseudonymize.
+
+An organization `BEFORE DELETE` trigger takes its owned registry rows in sorted
+bot-ID order, disables them and quarantines any unresolved remote-mutator lane
+before tenant secrets disappear. It performs no network call and never releases
+a bot ownership reservation through a cascade. The owner FK then becomes NULL.
+A late provider completion may update quarantine evidence only, never activate
+a deleted tenant, restore a binding or release an unresolved claim automatically.
+The global registry must not retain tenant bot credentials or Telegram human
+metadata merely to make cleanup convenient.
+
+Define this fixed record order in the migration and bounded janitor: global
+registry → binding challenges → bindings → initial notification capabilities
+→ private actor confirmations → minimal replay receipts → decision audit.
+Sort rows by stable ID within each tier, using canonical sorted bot IDs for the
+registry. Review actual cascade constraint/trigger behavior against this order;
+do not assume direct FKs alone prove it. No cleanup
+writer can acquire a user, organization or domain parent after a capability row.
+User deletion must not acquire organization locks after holding the user row;
+organization deletion must not acquire user rows. Direct user/organization
+cascades must follow these rules without introducing reverse parent locks in
+triggers. The exact implemented table order requires native overlapping-delete
+and janitor/decision/revocation tests before any migration commit.
+
+Current Better Auth organization deletion issues member deletion, invitation
+deletion and organization deletion as separate autocommit operations: the
+installed Drizzle adapter's transaction option defaults false. Do not describe
+that current sequence as a transaction holding member locks while waiting for
+the organization row, or claim a reproduced deadlock from sequence order alone.
+If a future adapter configuration wraps the sequence in one transaction, acquire
+the organization parent lock at transaction entry before deleting members; an
+independent earlier before-hook cannot keep that lock through a later transaction.
+User self-deletion is currently disabled, but actual raw SQL user deletion and
+its FK cascades still require proof; an unavailable UI is not a cascade guarantee.
 
 Concurrent confirmations, duplicate updates and replay after an uncertain HTTP
 response acknowledge one durable result. A reused update ID with a different
@@ -359,24 +419,67 @@ shows an old button.
 
 Use strict shared schemas for setup, status, binding and callback admission.
 Reject bot senders, unsafe numeric identity conversions, arbitrary routes,
-oversized bodies, unexpected update types and missing message provenance.
+oversized bodies and missing message provenance on supported operations.
+Classify unrelated update types as unsupported and ignore them as specified below.
 Keep decimal IDs lossless; do not conflate signed chat IDs with user IDs.
 Restrict accepted updates to private `/start` binding/probe messages and callback
 queries; unrelated messages neither store content nor change domain state.
 
-Proposed limits requiring explicit product/configuration review: 5-minute
-binding challenge, 30-minute action capability, at most one pending confirmation
-per item/editor, bounded update admission and setup/binding retries, and a
-workspace cap on live capabilities. Enforce quotas atomically and define coded
-refusals, not a silently truncated queue. Transport deadlines and connection
-bounds follow existing integration patterns.
+The proposed first-release defaults are concrete product bounds, not Telegram
+throughput guarantees, provider prices or a promise of universal server capacity:
 
-Expired secret hashes and minimal update replay receipts can be swept in bounded
-parent-safe batches after a documented retention window. Decision audit survives
-that sweep until workspace deletion. Expired tokens and terminal draft state
-must still prevent an old update from applying after replay receipt retention;
-an absent old receipt is not permission to issue a new capability. No retention
-choice is an implicit guarantee about Telegram-held messages or provider logs.
+| Admission | Default bound |
+| --- | --- |
+| Binding challenge | Expires five minutes after issuance |
+| Challenge issuance | At most five per user and 100 per organization in each rolling ten-minute window; both apply atomically |
+| Initial/final callback capability | At most 30 minutes; a final confirmation never outlives its initial capability |
+| Pending final confirmation | At most one live confirmation per item/editor |
+| Live capabilities | At most 2,000 per organization, including initial and final capabilities |
+| Recognized authenticated supported updates | At most 10,000 per organization in each rolling hour |
+| HTTP request body | At most 64 KiB before field validation |
+| Quarantined bot identities | At most five unresolved identities per organization; refuse additional setup that would exceed this bound |
+
+Check expiration and rolling windows using the database clock. Admission counters,
+live-capacity reservation and supported-update replay registration are atomic
+across replicas. Existing duplicate update receipts do not consume fresh update
+capacity; replay acknowledgment cannot perform another domain operation. A failed
+capacity reservation returns 503 with no accepted receipt or partial mutation;
+Telegram may retry it later. Web challenge issuance uses a coded rate-limit
+refusal rather than pretending a challenge was created. Do not truncate queued
+work or remove a quarantined ownership claim to make a quota pass.
+
+Unauthenticated requests and authenticated unsupported update shapes neither
+persist their full payload nor mutate domain data. Unsupported updates return a
+deterministic 2xx without a journal; the durable acceptance rule applies only
+to recognized operations. Enforce the byte limit before Zod field validation,
+and parse decimal identities canonically without lossy numeric conversion.
+Invalid secrets, over-limit bodies and invalid identity shapes are rejected
+before supported-operation admission. Bound transport deadlines/connections
+using the existing integration patterns; a deadline is not a remote lane lease.
+
+Sweep expired challenges and their candidate personal metadata no later than
+24 hours after terminal completion/expiry. Retain minimal supported-update replay
+receipts for seven days. Sweep expired or terminal unconsumed capability token
+hash rows after seven days; remove consumed capability secret material on the
+same schedule without deleting its minimal decision evidence. Bounded parent-safe
+janitor batches must satisfy these deadlines and remain observable on failure.
+An ephemeral challenge/capability/replay row must not be a cascading owner of
+the immutable decision audit.
+
+Keep minimal applied-decision audit until organization deletion under the
+opaque evidence policy in §6, without raw source text, provider secrets,
+Telegram identity/chat/name, callback tokens or full updates. User deletion
+cascades its binding/challenge/private-confirmation rows, while the organization-
+owned minimal opaque audit survives. Expired capabilities and
+fresh-draft eligibility still prevent an old update from applying after replay
+receipt retention; an absent old receipt cannot mint a new capability.
+
+An unknown remote-mutator attempt and its bot identity reservation never become
+releasable through lease expiration, routine retention or janitor cleanup.
+Beyond the quarantine bound, refuse new setup and expose an operator path to
+diagnostics or a separately reviewed credible provider recovery procedure.
+No automatic remote completion barrier is invented here. Retention applies to
+Pubrick data only, not Telegram-held messages or provider logs.
 
 Settings distinguish disabled, validating, ownership conflict, setup uncertain,
 active and disconnect uncertain. Human binding states distinguish awaiting
@@ -398,6 +501,9 @@ Implementation is not accepted from outbound notification tests alone. Require:
 3. Two-phase binding tests: Telegram claim alone cannot bind; wrong Pubrick user,
    expired/used challenges, group `/start`, reused Telegram identity and unlink
    races are refused without leaking another person's identity.
+   Cover exact expiry/rolling-window boundaries and concurrent capacity admission,
+   seven-day replay/capability cleanup, challenge metadata erasure, quarantine
+   retention and supported-versus-unsupported webhook acknowledgments.
 4. Native authorization and snapshot races against member removal, role/grant
    replacement, bot/binding revocation, body/title/adaptation/media changes,
    channel rename/deletion, approval/publication claim and item deletion. Include
@@ -427,8 +533,8 @@ one coherent integration milestone; retain failures and affected closures.
 ## 9. Open review gates and sources
 
 The following are unresolved design gates, not permission to implement shortcuts:
-inbound bot ownership and outbound-sharing isolation; exact binding/decision retention and
-caps; cross-user/tenant deletion lock order; sharing the client-review snapshot
+inbound bot ownership and outbound-sharing isolation; native proof of the
+specified user/tenant deletion and janitor lock order; sharing the client-review snapshot
 without changing old hashes; transaction-bound domain rejection and immutable
 actor evidence; and receipt UX after uncertain Telegram delivery.
 Remote mutation uncertainty without a provider completion barrier is an explicit

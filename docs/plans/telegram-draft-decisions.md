@@ -12,8 +12,11 @@ This closure does not establish executable lock safety or provider interoperabil
 
 ## Foundation before callbacks
 
-Resolve concrete issuance/live-capability quotas and retention, then review
-user/organization deletion and every new cascade before generating a migration.
+Concrete issuance/live-capability quotas and retention are now specified in
+design 0013. Independent source exploration also defines a direct-cascade
+strategy and a quarantined global bot registry that survives tenant deletion.
+Review and prove user/organization deletion and every actual new cascade before
+committing a migration; the proposal alone is not native evidence.
 Use the next available migration number from the integrated journal. One owner
 owns shared strict contracts, bot mutation-lane/identity tables, scoped binding
 challenges, capability/replay/audit storage, export/cleanup inventory and native
