@@ -25,6 +25,10 @@ export function EditorExample() {
       </div>
       <div className="public-example-draft">
         <p className="mb-4 text-xs font-medium text-fg-secondary">{t("label")}</p>
+        <div className="mb-5 border-b border-border pb-5">
+          <p className="text-xs font-medium">{t("rulesLabel")}</p>
+          <p className="mt-2 text-sm leading-relaxed text-fg-secondary">{t("rules")}</p>
+        </div>
         <label htmlFor={`${id}-body`} className="mb-3 block text-sm font-semibold">
           {t("draftLabel")}
         </label>

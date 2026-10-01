@@ -60,7 +60,7 @@ test("public pages render without login, retain localized navigation and expose 
   expect(await skip.evaluate((el) => getComputedStyle(el).clipPath)).toBe("none");
   await skip.press("Enter");
   await expect(page.locator("#main")).toBeFocused();
-  const opening = page.getByLabel("A proposed opening", { exact: true });
+  const opening = page.getByLabel("Content preview", { exact: true });
   const proposal = await opening.inputValue();
   await opening.fill("We brought unfinished work into the room. This is my version.");
   await expect(page.getByText("You have changed the proposal.", { exact: true })).toBeVisible();

@@ -57,3 +57,33 @@ The public-page browser fixture uses a deliberately unavailable API and therefor
 exercises the anonymous public site, not a signed-in backend journey.
 Release image validation is a separate task and has not finished; slow npm
 registry transfers in Docker must not be described as a successful image build.
+
+## Content automation positioning correction
+
+The owner clarified that the product's purpose is automated content creation
+from selected sources and creative rules. Preparing a draft is one workflow
+state, not the product's main promise.
+
+The opening description, public product and use-case copy, SEO descriptions
+and design direction now reflect that purpose in all four languages. The
+homepage example shows source material, creative rules and a content preview.
+It is explicitly labeled as a prewritten example that can be edited locally;
+it does not pretend to perform live AI generation. Autopilot and recurring
+plans are presented as regular content creation workflows. Actual approval
+requirements and application status names were not changed.
+
+Focused review identified the example's possible ambiguity about live
+generation. The visible prewritten-example label addresses that finding in
+all four languages.
+
+After the correction:
+
+- 36 focused catalogue, authorship and public-site tests passed.
+- Biome passed on all 11 affected implementation and catalogue files.
+- The final production build, including its TypeScript check, passed.
+- Read-only browser acceptance passed on all 24 localized public routes,
+  including the editable example, navigation, SEO and keyboard checks.
+  No mutating requests or browser page errors were observed.
+- Updated desktop, mobile and dark screenshots were inspected.
+
+The preview at `http://127.0.0.1:31550/en` serves this corrected build.

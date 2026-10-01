@@ -3,8 +3,9 @@
 ## Audience and position
 
 Pubrick serves people who work with ideas: independent writers, small studios,
-brand editors and agency teams. Its distinctive promise is a source-aware draft
-that remains subject to human judgment. It is also inspectable, self-hostable
+brand editors and agency teams. Its distinctive promise is content automation around the creator’s selected
+sources, brand voice, formats, prompts and cadence. Human review is a delivery
+step; a draft is a workflow status, not the purpose of the product. It is also inspectable, self-hostable
 open-source software. Neither identity is a decorative badge.
 
 ## Research applied
@@ -26,10 +27,10 @@ that a page is AI slop.
   The public site belongs to the same product as the workspace.
 - Use an editorial opening and readable typography. Serif text has a specific
   role in the studio-note example; body and navigation retain the product font.
-- Show a concrete piece of work: a short studio note and a proposed opening
+- Show a concrete piece of work: a short studio note and creative rules and a content preview
   that visitors can edit locally. Use the real editor component rather than
   drawing an invented dashboard or suggesting a live model call occurred.
-- Group the explanation around source, editing and approval. Avoid equal-size
+- Group the explanation around sources, creative rules and publishing rhythm. Avoid equal-size
   decorative feature cards and repeated sales headings when a clear editorial
   list communicates the relationships better.
 - State facts: supported delivery paths, human review, BYOK, AGPL and actual
