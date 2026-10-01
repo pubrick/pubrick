@@ -140,30 +140,44 @@ refusals in English, Spanish, Russian and Portuguese, never provider prose.
 Introduce a session-owned reuse operation record; do not impersonate an API key
 or broaden `PublicWriteRepository`'s allowlist. Organization, operation kind and
 idempotency key form its unique identity. Keep normalized request hash/version,
-source ID/revision, brand ID, admitted run UUID, consenting actor UUID,
-consent version and accepted timestamp. IDs are immutable audit values, not
-nullable deletion FKs. No body/title, full request/result snapshot or source digest copy belongs in
-this operation table. Its opaque canonical request hash is replay audit, not
-retrievable source text. The hash binds the path source UUID as well as parsed
-DTO fields, so the same key cannot replay against a different source.
-Tenant deletion cascades audit cleanup; the actor UUID survives account removal.
+root source ID/revision, brand ID, admitted result run UUID, immutable
+`requestTargetKind` (`content` for reuse, `run` for reuse-retry) and
+`requestTargetId` UUID, consenting actor ID, consent version and accepted
+timestamp. The target ID names the original requested content/run, separately
+from the root source and result run. Resource IDs are immutable audit UUIDs,
+not nullable deletion FKs. Actor IDs use Better Auth's bounded opaque text
+(1–255 characters), never UUID validation or a deletion FK. No body/title, full
+request/result snapshot or source digest copy belongs in this operation table. Its opaque canonical request hash is replay audit, not
+retrievable source text. The hash binds operation kind, target discriminator,
+path target UUID and parsed DTO fields, so the same key cannot replay against a different content
+item or original run. Tenant deletion cascades audit cleanup; the bounded
+opaque actor ID survives account removal.
 
 Use the admission advisory lock namespace already shared by runs/calendar. In
 one transaction take advisory lock → organization lock → fresh session/user/
 membership and brand authority → operation lookup. Fresh authority may take the
 existing compatible brand `FOR KEY SHARE`; the stronger deletion-serialization
 lock is acquired only after fresh admission/billing and AI locks, below.
-The route's source-target resolver uses an existing org-scoped operation's
-immutable brand/source IDs for a replay, and the current source row for a fresh
-request. It compares the path source UUID to the operation before resolving
-brand authority. Do not require a still-existing source row in a generic
-resource guard before replay lookup: that would make a committed operation
-unrecoverable after source deletion. Do not accept a caller-supplied brand to
-solve this. Replays require current author access to the recorded brand, not
-merely knowledge of an operation key. No model or provider call happens under these locks.
+Both reuse and reuse-retry routes resolve their target from an existing
+org-scoped operation's immutable request target, root source and brand IDs for
+a replay. A fresh reuse resolves from the current source; a fresh reuse-retry
+resolves from the original run and its internal-source lineage. Compare the
+operation kind, target discriminator and path UUID to the operation before
+resolving brand authority. Do not require a still-existing source **or original
+run** in the generic content/run resource guard before operation lookup: that
+would make a committed operation unrecoverable after deletion. Do not accept
+a caller-supplied brand to solve this. Replays require current author access to
+the recorded brand, not merely knowledge of an operation key. The session
+operation-based resolver precedes generic resource existence checks on the
+internal reuse-retry branch of `/api/runs/:id/retry`; other retry kinds retain
+the existing resource guard. No operation lookup leaks results to callers
+without fresh session/brand authority.
 
-For an identical authorized replay return the original run before inspecting
-current source eligibility, quota or AI configuration. Changing provider,
+For an identical authorized replay return the originally admitted **result
+run** before checking current source eligibility, original-run existence or
+redaction, quota or AI configuration. A committed reuse-retry can therefore
+recover its result after its original run is deleted/redacted; this grants no
+new work or access to erased text. Changing provider,
 source or channels after admission cannot cause another run. A changed parsed
 request under the same key refuses `idempotency_conflict`. If the original run
 is gone, return 410 and keep the tombstone; never recreate it. Audit records have
@@ -282,9 +296,11 @@ Generic retry is a material-copying path and is in scope. A retry of an internal
 reuse run must preserve server-owned lineage/source UUID and use the same brand
 serialization, redaction check and explicit paid consent/idempotency contract.
 Do not let `/runs/:id/retry` bypass the feature through ordinary RunCreate or
-omit lineage. After source redaction, every related run is redacted and retry
-refuses `run_redacted` before copying material. Before redaction, retry may
-reuse its frozen accepted snapshot even if the source was edited/archived;
+omit lineage. After source redaction, every related run is redacted and a
+**fresh** retry refuses `run_redacted` before copying material. An already committed identical
+reuse-retry operation replays its result under §5 before fresh redaction or
+original-run existence checks; a deleted result still returns 410. Before
+redaction, retry may reuse its frozen accepted snapshot even if the source was edited/archived;
 preview labels that frozen revision, never the current source. For internal
 reuse, the existing `POST /api/runs/:id/retry` requires a strict paid-confirmation
 body (`allowPaidGeneration: true`, the existing consent literal) and the same
@@ -321,7 +337,11 @@ Acceptance must demonstrate one source → one operation/job/run → one new AI
 draft with fresh review evidence; concurrent double clicks/timeouts replay the
 same run. Native proofs cover source title/body edits, scoped authority,
 channel deletion, same-key differing body, source deletion/retry races, live
-run refusal, terminal redaction and retained independent output. Built-browser
+run refusal, terminal redaction and retained independent output. Specifically
+prove committed reuse-retry replay after original-run deletion and redaction,
+changed-path UUID refusal under the same operation key, and revoked brand/session
+authority refusing that replay. These cases may return the existing result ID,
+never a second job or copied material. Built-browser
 journeys use synthetic content and the scripted provider; exercise preview,
 consent/cancel, run completion, source attribution and fresh human review without
 publication. Real paid/provider calls are unnecessary for contract acceptance.

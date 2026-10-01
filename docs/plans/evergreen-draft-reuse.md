@@ -37,7 +37,10 @@ or provider abstraction. Do not broaden ordinary RunCreate/public-write inputs.
 Create tenant-owned operation audit and run-keyed lineage. Freeze source audit
 values and consent actor/time, enforce scoped run/brand consistency, one-way
 redaction and unique organization/operation/key identity. Store material once in
-run input. Source/actor/result IDs survive resource deletion as audit UUIDs;
+run input. Root source/result/request target IDs survive deletion as audit
+UUIDs; freeze both request target discriminator and UUID separately from the
+root source and resulting run. Consent actor IDs are bounded opaque Better Auth
+text (1–255 characters), never UUIDs or deletion FKs;
 lineage source deletion must not cascade into a derived draft. No backfill
 fabricates internal lineage for legacy pasted material. Include indexed source
 lookup and operation count, export inventory and tenant/brand cleanup policy.
@@ -58,10 +61,12 @@ session, role and brand grant in both hosted and self-hosted modes. API keys
 are denied; existing public writes retain their published contract.
 
 Implement bounded read-only source preview with no opening/model side effects.
-Implement the session target resolver using an existing operation's recorded
-source/brand for replay, so source deletion does not break acknowledgement;
-fresh requests derive brand from the current source. Hash path source/run UUIDs
-and operation kind with the parsed DTO. Implement replay under admission
+Implement both session target resolvers using an existing operation's recorded
+request target discriminator/UUID, root source and brand for replay. Resolve
+before generic source/original-run existence checks, so deletion/redaction does
+not break a committed acknowledgement. Fresh reuse derives brand from the
+current source; fresh reuse-retry derives it from the original run/lineage.
+Hash path target UUID/discriminator and operation kind with the parsed DTO. Implement replay under admission
 advisory/tenant/authority locks before fresh growth quota/current AI checks.
 On a fresh operation acquire the stronger brand serialization lock only after
 billing/admission and AI locks, then channels/source in the canonical order. Insert operation, lineage, run and
@@ -106,8 +111,12 @@ fully committed fenced operation or a precise refusal, never a post-erasure
 copy. Live derived run blocks source deletion until cancel/terminal state;
 in-flight calls remain metered. Terminal run source/checkpoints are erased,
 independent draft/versions remain, source link becomes unavailable and retry
-refuses. Verify no exported raw source evidence after erasure and no cross-org
-cleanup. Add a mutation proof for each critical race/erasure guard only after
+refuses on fresh admission. Verify a committed identical reuse-retry replays
+its existing result after original-run deletion/redaction, changed path UUID
+under the same key refuses, and revoked session/brand access refuses replay.
+No recovery case creates another job or exposes erased material; missing result
+returns 410. Verify no exported raw source evidence after erasure and no
+cross-org cleanup. Add a mutation proof for each critical race/erasure guard only after
 native baseline stability; follow the project's three-run isolation rule and
 label inconclusive host failures honestly.
 
