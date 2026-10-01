@@ -1,7 +1,8 @@
 # Evergreen draft reuse execution plan
 
-Status: independently reviewed design; shared/database foundation in progress
-after verified weekly integration. Operator setup is not required. No release claim.
+Status: independently reviewed design; shared/database foundation verified
+after weekly integration. Session admission and deletion integration are next.
+Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
 Implementation baseline: reviewed weekly candidate `b4ab01db` (PR #155);
@@ -52,6 +53,14 @@ characters, NUL, title digest and forbidden cloned fields); schema/check/index
 inventories; real migration upgrade, ownership/immutability/erasure constraints
 and export policy. Tests use synthetic content. Update lock-order documentation
 with the reviewed whole-product acquisition chain before repository work.
+
+Foundation landed at `d15516fb` and `d70276cc`: 117 affected shared cases,
+36 native database/schema/timestamp cases, three focused migration inventories
+and three export checks passed, plus shared/database/API types and scoped lint.
+Independent precommit migration and exact trigger-proof review passed. The
+owned PostgreSQL fixture was removed. See the
+[foundation receipt](../reviews/2026-10-01-evergreen-reuse-foundation.md).
+This does not establish paid admission, replay, deletion cleanup or a user journey.
 
 ## 2. Atomic session admission and source preview
 
