@@ -44,6 +44,7 @@ type Run = {
 test("weekly plan generates one metered draft, human edit, pause/resume and permanent skip", async ({
   page,
 }) => {
+  const journeyStartedAt = Date.now();
   const pool = new Pool({
     connectionString: databaseUrl,
     max: 1,
@@ -295,10 +296,13 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     const dispatched = admittedOccurrences[0];
     if (!dispatched) throw new Error("Dispatched occurrence missing");
     expect(dispatched.run_id).toBe(generated.id);
+    const futureIdentity = occurrences.find((occurrence) => occurrence.state === "planned");
+    if (!futureIdentity) throw new Error("Future identity missing before pause");
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/en/content/${generated.content_item_id}`);
     await expect(page.getByLabel("Body", { exact: true })).toHaveValue(new RegExp(marker));
     const postActionDeadline = Date.now() + 180_000;
+    test.setTimeout(Date.now() - journeyStartedAt + 180_000);
     const editedBody = `${marker}. Reviewed and edited by a human; never published.`;
     await page.getByLabel("Body", { exact: true }).fill(editedBody);
     const savedBody = page.waitForResponse(
@@ -314,13 +318,34 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     await card.getByRole("button", { name: "Pause", exact: true }).click();
     await expect(card.getByText("Disabled", { exact: true })).toBeVisible();
     await enable();
-    const future = (
-      await rows<Occurrence>(
-        "SELECT * FROM editorial_plan_occurrences WHERE plan_id=$1 AND state='planned' ORDER BY local_date",
-        [plan.id],
+    // Enable acknowledges admission before its real queued materializer runs.
+    // Wait for the same retained identity to be replanned; never write fixture rows.
+    await expect
+      .poll(
+        async () => {
+          const occurrence = (
+            await rows<Occurrence>("SELECT * FROM editorial_plan_occurrences WHERE id=$1", [
+              futureIdentity.id,
+            ])
+          )[0];
+          return occurrence?.state === "planned" && Boolean(occurrence.slot_id);
+        },
+        { timeout: Math.min(90_000, postActionDeadline - Date.now()), intervals: [500, 1000] },
       )
+      .toBe(true);
+    const future = (
+      await rows<Occurrence>("SELECT * FROM editorial_plan_occurrences WHERE id=$1", [
+        futureIdentity.id,
+      ])
     )[0];
     if (!future?.slot_id) throw new Error("Future occurrence missing after resume");
+    // The visible summary must catch up after worker completion without reload.
+    await expect(
+      card
+        .getByRole("listitem")
+        .filter({ hasText: future.local_date })
+        .getByText("Planned", { exact: true }),
+    ).toBeVisible({ timeout: Math.min(15_000, postActionDeadline - Date.now()) });
     // Observe UI selection of the future date, then the actual Skip confirmation.
     await page.goto(
       `/en/brands/${brand.id}/calendar?at=${encodeURIComponent(String(future.scheduled_at instanceof Date ? future.scheduled_at.toISOString() : future.scheduled_at))}&slot=${future.slot_id}`,
