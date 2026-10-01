@@ -155,6 +155,7 @@ export class PublicWriteRepository {
     const [usage] = await db
       .select({
         calls: sql<string>`count(*)::text`,
+        estimated: sql<boolean>`coalesce(bool_or(${schema.usageLedger.costUsd} is not null and ${schema.usageLedger.costSource} = 'price_table'),false)`,
         unpriced: sql<string>`count(*) filter(where ${schema.usageLedger.costUsd} is null or ${schema.usageLedger.costSource} = 'unknown')::text`,
         total: sql<string>`coalesce(sum(${schema.usageLedger.costUsd}),0)::text`,
       })
@@ -163,7 +164,7 @@ export class PublicWriteRepository {
     const cost =
       !usage || usage.calls === "0" || usage.unpriced !== "0" || run.unrecordedCalls !== 0
         ? { status: "unknown" as const }
-        : { status: "known" as const, amountUsd: usage.total };
+        : { status: "known" as const, amountUsd: usage.total, estimated: usage.estimated };
     return publicRunStatusSchema.parse({
       id: run.id,
       status: run.status,

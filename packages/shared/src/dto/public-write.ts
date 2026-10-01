@@ -41,7 +41,11 @@ export const publicRunStatusSchema = z.strictObject({
   contentItemId: z.uuid().nullable(),
   error: z.enum(["generation_failed", "cancelled"]).nullable(),
   cost: z.discriminatedUnion("status", [
-    z.strictObject({ status: z.literal("known"), amountUsd: z.string().regex(/^\d+(?:\.\d+)?$/) }),
+    z.strictObject({
+      status: z.literal("known"),
+      amountUsd: z.string().regex(/^\d+(?:\.\d+)?$/),
+      estimated: z.boolean(),
+    }),
     z.strictObject({ status: z.literal("unknown") }),
   ]),
 });
