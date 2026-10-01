@@ -1849,7 +1849,7 @@
     "metrics_unavailable": "Las métricas automáticas no están disponibles para esta publicación.",
     "media_cover_changed": "La portada cambió en otro editor. Recarga el borrador antes de regenerarla.",
     "media_cover_video_selected": "Quita el video seleccionado antes de regenerar la portada.",
-    "ai_settings_changed": "La clave cambió antes de admitir la solicitud. Revisa los ajustes e inténtalo de nuevo.",
+    "ai_settings_changed": "Los ajustes de IA cambiaron. Recarga, revisa tus opciones e inténtalo de nuevo.",
     "ai_default_key_missing": "Guarda tu primera clave API abajo para configurar la generación de texto.",
     "owned_workspace_limit": "Tu cuenta ha alcanzado el límite de espacios. Usa un espacio existente.",
     "creation_rate_limit": "Demasiados intentos de crear espacios. Inténtalo más tarde.",

@@ -1849,7 +1849,7 @@
     "metrics_unavailable": "Automatic metrics are unavailable for this publication.",
     "media_cover_changed": "The cover changed in another editor. Reload the draft before regenerating.",
     "media_cover_video_selected": "Remove the selected video before regenerating a cover.",
-    "ai_settings_changed": "The key changed before this request was admitted. Review Settings and try again.",
+    "ai_settings_changed": "The AI settings changed. Reload, review your choices, and try again.",
     "ai_default_key_missing": "Save your first API key below to configure text generation.",
     "owned_workspace_limit": "Your account has reached its workspace limit. Use an existing workspace.",
     "creation_rate_limit": "Too many workspace creation attempts. Try again later.",

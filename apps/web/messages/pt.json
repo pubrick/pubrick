@@ -1849,7 +1849,7 @@
     "metrics_unavailable": "Métricas automáticas indisponíveis para esta publicação.",
     "media_cover_changed": "A capa mudou em outro editor. Recarregue o rascunho antes de regenerá-la.",
     "media_cover_video_selected": "Remova o vídeo selecionado antes de regenerar a capa.",
-    "ai_settings_changed": "A chave mudou antes da admissão da solicitação. Revise as configurações e tente novamente.",
+    "ai_settings_changed": "As configurações de IA mudaram. Recarregue, revise suas escolhas e tente novamente.",
     "ai_default_key_missing": "Salve sua primeira chave API abaixo para configurar a geração de texto.",
     "owned_workspace_limit": "Sua conta atingiu o limite de espaços. Use um espaço existente.",
     "creation_rate_limit": "Muitas tentativas de criar espaços. Tente mais tarde.",
