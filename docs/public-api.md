@@ -84,9 +84,14 @@ come from workspace settings, never request overrides. This consent permits
 possible BYOK provider charges, including prices that are unknown. Estimates
 are not spending caps. The original acknowledgement is `{id,status:"queued"}`;
 poll `GET /api/v2/runs/{id}` with the same generation key for current status,
-nullable `contentItemId`, closed safe error and metered cost. Any null-priced or
+nullable `contentItemId`, closed safe error and cost provenance. Any null-priced or
 unrecorded call makes cost `{status:"unknown"}`; otherwise
-`{status:"known",amountUsd:"..."}`. Read the result with a separate content-read key.
+`{status:"known",amountUsd:"...",estimated:true|false}`. The required
+`estimated` flag is true if any included cost comes from the maintained price
+table. Such a total is an estimate, not a provider invoice or billing confirmation.
+It is false only when all included priced calls have provider-reported costs.
+Neither a reported amount nor an estimate is a spending cap. Unknown costs omit
+both amount and estimate flag. Read the result with a separate content-read key.
 Revoking a key blocks new requests/replays/polls, but does not cancel admitted jobs.
 
 Every POST requires an ASCII `Idempotency-Key` (8–128 characters: letters, digits,

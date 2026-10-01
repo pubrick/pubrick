@@ -70,8 +70,12 @@ BYOK provider charges. Prices may be unknown; an estimate is not a spending cap.
 Server-owned provider/model settings cannot be overridden by these tools. Revoking
 the initiating key blocks future requests, but does not cancel work already queued.
 
-Run polling uses the generation key; reading its resulting draft needs the separate
-content-read key. Neither write tool approves, schedules or publishes. Publication
+Run polling uses the generation key. Known cost includes the required `estimated`
+flag: `true` means at least one price-table estimate; `false` means every included
+priced call has provider-reported cost. Do not present an estimate as a provider
+bill. Neither is a spending cap. Unknown cost has no amount or estimate flag.
+
+Reading the resulting draft requires a separate content-read key. Neither write tool approves, schedules or publishes. Publication
 continues to require human review. Requests have a 1 MiB JSON limit; response and
 transport limits remain 2 MiB and 10 seconds. Server rate limits include replays:
 30 writes/minute/key and 60/workspace; polling 60/minute/key and 120/workspace.

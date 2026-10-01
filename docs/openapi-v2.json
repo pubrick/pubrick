@@ -289,7 +289,7 @@
     "/api/v2/runs/{id}": {
       "get": {
         "operationId": "getGeneration",
-        "description": "Requires generation:create. Current state projection excludes private inputs, credentials and provider failures. Polling is limited to 60/minute/key and 120/minute/organization. Any null-priced or unrecorded call makes aggregate cost unknown.",
+        "description": "Requires generation:create. Current state projection excludes private inputs, credentials and provider failures. Polling is limited to 60/minute/key and 120/minute/organization. Any null-priced or unrecorded call makes aggregate cost unknown. Known cost requires estimated:true when any included price comes from a price table, otherwise estimated:false for provider-reported costs only. Estimates are not provider billing confirmations; neither amount is a spending cap.",
         "parameters": [
           {
             "in": "path",
@@ -546,9 +546,12 @@
                   "amountUsd": {
                     "type": "string",
                     "pattern": "^\\d+(?:\\.\\d+)?$"
+                  },
+                  "estimated": {
+                    "type": "boolean"
                   }
                 },
-                "required": ["status", "amountUsd"],
+                "required": ["status", "amountUsd", "estimated"],
                 "additionalProperties": false
               },
               {

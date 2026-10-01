@@ -185,4 +185,32 @@ describe("scoped write transport", () => {
     await expect(promise).rejects.not.toThrow("PRIVATE");
     expect(fetcher).toHaveBeenCalledOnce();
   });
+  it.each([true, false])(
+    "preserves explicit estimated=%s in known cost projections",
+    async (estimated) => {
+      const result = {
+        id,
+        status: "succeeded",
+        contentItemId: null,
+        error: null,
+        cost: { status: "known", amountUsd: "0.0123", estimated },
+      };
+      const fetcher = vi.fn<typeof fetch>(async () => json(result));
+      await expect(createPublicGenerationClient(config, fetcher).get(id)).resolves.toEqual(result);
+    },
+  );
+  it("refuses unlabelled known costs instead of presenting an estimate as billed", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      json({
+        id,
+        status: "succeeded",
+        contentItemId: null,
+        error: null,
+        cost: { status: "known", amountUsd: "0.0123" },
+      }),
+    );
+    await expect(createPublicGenerationClient(config, fetcher).get(id)).rejects.toThrow(
+      "invalid run status",
+    );
+  });
 });

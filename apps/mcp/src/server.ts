@@ -190,7 +190,7 @@ export function createServer(
       "get_generation",
       {
         description:
-          "Read current run state and known/unknown metered cost using the SAME generation key. Polling does not open a draft or approve publication. Read the resulting draft with a separately issued content:read key.",
+          "Read current run state and known/unknown cost using the SAME generation key. A known cost with estimated:true contains a price-table estimate, not a provider billing confirmation; estimated:false means all priced calls were provider-reported. Neither number is a spending cap. Polling does not open a draft or approve publication. Read the resulting draft with a separately issued content:read key.",
         inputSchema: z.strictObject({ id: z.uuid() }),
         outputSchema: publicRunStatusSchema,
         annotations: {

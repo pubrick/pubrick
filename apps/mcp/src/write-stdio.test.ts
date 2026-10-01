@@ -14,6 +14,7 @@ it("exposes v2 write tools with explicit consent and forwards stable keys throug
     authorization: string | undefined;
     body: unknown;
   }[] = [];
+  let polls = 0;
   const api = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -23,6 +24,7 @@ it("exposes v2 write tools with explicit consent and forwards stable keys throug
       authorization: req.headers.authorization,
       body: body ? JSON.parse(body) : null,
     });
+    if (req.url?.includes("/runs/")) polls++;
     res.setHeader("content-type", "application/json");
     res.end(
       JSON.stringify(
@@ -32,7 +34,10 @@ it("exposes v2 write tools with explicit consent and forwards stable keys throug
               status: "succeeded",
               contentItemId: null,
               error: null,
-              cost: { status: "unknown" },
+              cost:
+                polls === 1
+                  ? { status: "unknown" }
+                  : { status: "known", amountUsd: "0.0123", estimated: polls === 2 },
             }
           : req.url?.includes("/runs")
             ? { id, status: "queued" }
@@ -61,7 +66,7 @@ it("exposes v2 write tools with explicit consent and forwards stable keys throug
     result: {
       tools: Array<{ name: string; annotations?: Record<string, boolean> }>;
       isError?: boolean;
-      structuredContent: { cost?: { status: string } };
+      structuredContent: { cost?: { status: string; estimated?: boolean; amountUsd?: string } };
     };
   };
   const pending = new Map<number, (value: RpcResponse) => void>();
@@ -147,6 +152,14 @@ it("exposes v2 write tools with explicit consent and forwards stable keys throug
     });
     const status = await call("tools/call", { name: "get_generation", arguments: { id } });
     expect(status.result.structuredContent.cost).toEqual({ status: "unknown" });
+    for (const estimated of [true, false]) {
+      const known = await call("tools/call", { name: "get_generation", arguments: { id } });
+      expect(known.result.structuredContent.cost).toEqual({
+        status: "known",
+        amountUsd: "0.0123",
+        estimated,
+      });
+    }
     expect(
       requests.slice(2).every((request) => request.authorization === "Bearer generation_fixture"),
     ).toBe(true);
