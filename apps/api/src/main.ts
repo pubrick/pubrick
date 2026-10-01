@@ -8,6 +8,7 @@ import { pool } from "./db";
 import { env } from "./env";
 import { installPublicWriteParser } from "./public-api/public-write-parser";
 import { closeApi } from "./shutdown";
+import { installTelegramWebhookParser } from "./telegram-decisions/telegram-webhook-parser";
 
 async function bootstrap(): Promise<void> {
   await runMigrations(env.DATABASE_URL);
@@ -17,6 +18,7 @@ async function bootstrap(): Promise<void> {
   });
   installBillingWebhookParser(app);
   installPublicWriteParser(app);
+  installTelegramWebhookParser(app);
   app.setGlobalPrefix("api");
   await app.listen(env.API_PORT);
   console.log(`api listening on :${env.API_PORT}`);

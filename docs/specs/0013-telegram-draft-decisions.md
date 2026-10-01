@@ -1,12 +1,13 @@
 # Telegram draft decisions
 
-Status: foundation implemented and independently reviewed; user workflow
-proposed. Migration 0128 and strict storage/contracts have native deletion and
-cascade evidence in [the foundation receipt](../reviews/2026-10-01-telegram-foundation.md).
-No callback decision, Telegram identity binding endpoint, webhook setup or
-interface is enabled yet. Concrete bounds and retention are specified; their
-admission/janitor and future domain-writer concurrency proofs remain required
-implementation gates.
+Status: storage foundation and setup/account-binding backend implemented and
+independently reviewed. Migrations 0128/0129 have native evidence in the
+[foundation receipt](../reviews/2026-10-01-telegram-foundation.md) and
+[setup/binding receipt](../reviews/2026-10-01-telegram-setup-binding.md).
+Manager setup/disable routes and secret-authenticated private `/start` binding
+are enabled in the feature branch. Callback decisions and settings controls
+remain unimplemented. Issuance/update admission is bounded; cleanup is currently
+opportunistic, so the unattended retention janitor remains an implementation gate.
 Date: 2026-10-01.
 
 ## 1. First slice and existing code
@@ -396,8 +397,15 @@ writer can acquire a user, organization or domain parent after a capability row.
 User deletion must not acquire organization locks after holding the user row;
 organization deletion must not acquire user rows. Direct user/organization
 cascades must follow these rules without introducing reverse parent locks in
-triggers. The exact implemented table order requires native overlapping-delete
-and janitor/decision/revocation tests before any migration commit.
+triggers. A migration commit requires independent source review and native
+coverage of its changed constraints/triggers and every writer implemented in
+that milestone. Migration 0128 has storage/cascade foundation evidence; 0129
+changes only setup-generation recovery and additionally requires overlapping
+tenant deletion/provider-completion evidence. Neither milestone establishes
+janitor or atomic draft-decision safety. Before enabling those later writers,
+require their native overlapping-delete, janitor/decision/revocation tests
+against the integrated schema. Keep this full feature gate open until all
+writers exist and pass; staged storage/backend acceptance cannot close it.
 
 Current Better Auth organization deletion issues member deletion, invitation
 deletion and organization deletion as separate autocommit operations: the

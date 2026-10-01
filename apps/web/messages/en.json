@@ -1675,6 +1675,7 @@
     "client_review_link_invalid": "This client review link is unavailable.",
     "client_review_link_closed": "This client review link has expired or closed. Ask for a new link.",
     "client_review_rate_limited": "Too many review attempts. Wait a little before trying again.",
+    "telegram_challenge_rate_limited": "Too many Telegram linking attempts. Wait a few minutes before trying again.",
     "client_review_invalid": "This draft cannot be sent for client review. Check its status and channels.",
     "private_source_owner_required": "Only a workspace owner or admin can add a private channel.",
     "private_source_not_configured": "Configure the Telegram application ID and hash on the API server first.",

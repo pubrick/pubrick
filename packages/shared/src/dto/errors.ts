@@ -75,6 +75,7 @@ export const API_ERROR_CODES = [
   "client_review_link_invalid",
   "client_review_link_closed",
   "client_review_rate_limited",
+  "telegram_challenge_rate_limited",
   "client_review_invalid",
   "private_source_owner_required",
   "private_source_not_configured",

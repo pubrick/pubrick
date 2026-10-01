@@ -201,6 +201,7 @@ export class ActiveOrgGuard implements CanActivate {
         throw new ForbiddenException("Organization owner or admin required");
       }
       if (editorial && !["GET", "HEAD"].includes(request.method ?? "")) {
+        if (scope.selfService === "telegram-binding") return approve();
         // Only read-like POSTs with a declared brand can use this exception.
         // Other org-wide mutations have no grant to check and remain closed.
         if (!scope.editorialBrand) {

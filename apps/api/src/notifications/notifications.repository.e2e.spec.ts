@@ -22,9 +22,12 @@ describe.skipIf(!url)("notification settings repository", () => {
     apiPool = (await import("../db")).pool;
     const { NotificationsRepository } = await import("./notifications.repository");
     const { QueueService } = await import("../queue/queue.service");
+    const { TelegramSetupRepository } = await import(
+      "../telegram-decisions/telegram-setup.repository"
+    );
     queue = new QueueService();
     await queue.onModuleInit();
-    repo = new NotificationsRepository(queue);
+    repo = new NotificationsRepository(queue, new TelegramSetupRepository());
     await direct.db.insert(schema.organization).values([
       { id: first, name: "First", slug: first, createdAt: new Date() },
       { id: second, name: "Second", slug: second, createdAt: new Date() },

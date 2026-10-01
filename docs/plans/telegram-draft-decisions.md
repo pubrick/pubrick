@@ -1,16 +1,19 @@
 # Telegram draft decision execution plan
 
-Status: foundation implemented; backend and user workflow pending acceptance.
+Status: foundation and setup/binding backend implemented; callback and UI acceptance pending.
 Date: 2026-10-01. Tracking: `Ozon-tools-0mflt` (design),
-`Ozon-tools-ru3m0` (foundation).
+`Ozon-tools-ru3m0` (foundation), `Ozon-tools-4pvvm` (setup/binding).
 Design: [0013](../specs/0013-telegram-draft-decisions.md).
 
 Foundation evidence is recorded in
 [the integration review](../reviews/2026-10-01-telegram-foundation.md).
-This slice adds contracts/storage and shared editorial primitives; it does not
-enable callback or binding routes. Admission/retention workers, locked actor
-authorization, scripted transport and settings are the next coherent backend
-and UI slices. Bot ownership transfer/release remains deliberately unsupported.
+Setup/binding evidence is recorded in
+[the backend review](../reviews/2026-10-01-telegram-setup-binding.md).
+The backend exposes manager setup/disable and member-owned two-phase binding,
+with real session authority, bounded update admission and scripted Bot API
+transport. It does not enable draft callback decisions or settings controls.
+Retention workers, locked final decision authorization and UI remain required.
+Bot ownership transfer/release remains deliberately unsupported.
 
 Independent source review closed three concrete findings in the proposal:
 external webhook mutations need a durable per-bot lane across uncertain results;

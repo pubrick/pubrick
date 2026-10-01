@@ -42,6 +42,8 @@ export type BrandScopeMetadata =
   | {
       kind: "org";
       roles: "member" | "manager";
+      /** Own identity only; repositories must bind writes to the verified session user. */
+      selfService?: "telegram-binding";
       /** Optional brand grant for an editorial POST that has no tenant write. */
       editorialBrand?: { source: "body"; key: "brandId" };
     };

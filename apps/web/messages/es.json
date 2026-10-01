@@ -1675,6 +1675,7 @@
     "client_review_link_invalid": "Este enlace de revisión no está disponible.",
     "client_review_link_closed": "Este enlace de revisión ha caducado o se ha cerrado. Pide uno nuevo.",
     "client_review_rate_limited": "Demasiados intentos de revisión. Espera un poco y vuelve a intentarlo.",
+    "telegram_challenge_rate_limited": "Demasiados intentos de vincular Telegram. Espera unos minutos antes de volver a intentarlo.",
     "client_review_invalid": "Este borrador no puede enviarse a revisión. Comprueba su estado y sus canales.",
     "private_source_owner_required": "Solo un propietario o administrador puede añadir un canal privado.",
     "private_source_not_configured": "Configure primero el ID y el hash de la aplicación Telegram en el servidor API.",

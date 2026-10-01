@@ -23,10 +23,14 @@ import { db } from "../db";
 import { env } from "../env";
 import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
+import { TelegramSetupRepository } from "../telegram-decisions/telegram-setup.repository";
 
 @Injectable()
 export class NotificationsRepository {
-  constructor(private readonly queue: QueueService) {}
+  constructor(
+    private readonly queue: QueueService,
+    private readonly telegramSetup: TelegramSetupRepository,
+  ) {}
 
   /** One bounded, half-open UTC window over queued notification events. */
   async summary(orgId: string, days: 7 | 30, now = new Date()): Promise<NotificationSummary> {
@@ -325,6 +329,9 @@ export class NotificationsRepository {
     }
     await db.transaction(async (tx) => {
       await holdOrganization(tx, orgId);
+      if (value.botToken !== undefined) {
+        await this.telegramSetup.guardCredentialReplacement(tx, orgId, value.botToken);
+      }
       await tx
         .insert(schema.notificationSettings)
         .values({
