@@ -1,0 +1,31 @@
+name: Feature request
+description: Describe a user problem and a focused improvement.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/pubrick/pubrick/blob/main/docs/roadmap.md) and existing issues first. Describe the request in English when possible.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who needs this, and what are they trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the smallest useful change and what success would look like.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround or alternatives
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include related issues or synthetic examples. Do not include credentials or private customer content.

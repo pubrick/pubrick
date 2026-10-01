@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible problem in Pubrick.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem in English when possible. Check existing issues and [Contributing](https://github.com/pubrick/pubrick/blob/main/CONTRIBUTING.md).
+        Report security vulnerabilities privately using [Security](https://github.com/pubrick/pubrick/blob/main/SECURITY.md).
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation
+      options:
+        - Self-hosted Docker
+        - Local development
+        - Hosted service
+        - Other or unknown
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: Release or revision
+      description: Provide the release tag, image tag or commit SHA if known.
+      placeholder: "Tag, commit SHA, or unknown"
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the page, actions and relevant settings. Use synthetic content.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the visible error message or a sanitized screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Relevant browser, operating system, deployment configuration or provider/model names. Do not include keys or proxy credentials.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove API keys, proxy passwords, cookies, customer content and .env values before pasting logs.
+      render: text
