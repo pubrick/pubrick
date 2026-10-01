@@ -80,8 +80,9 @@ it queues a null selection and the worker fails the claim as `no_api_key` if it
 is still unconfigured. An explicitly selected provider with no matching key,
 or a compatible provider without a model, raises the shared selection error
 before enqueueing. The transaction rolls back, leaving the slot pending and
-creating neither run nor job. `CalendarService.scan` currently rethrows trigger
-errors, so that configuration refusal also ends the current scan pass until
-settings are corrected. This change does not define a new slot failure status
-or scan recovery policy. A retained snapshot never switches providers after
+creating neither run nor job. Subsequent independent review identified global
+scan starvation from that refusal; the [follow-up](../reviews/2026-10-01-calendar-scan-isolation.md)
+now defers only the affected slot for five minutes and continues other workspaces.
+Database/queue failures still propagate. This does not define a new slot failure
+status. A retained snapshot never switches providers after
 rotation or deletion: the worker records `configuration_changed`.
