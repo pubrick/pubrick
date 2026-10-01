@@ -169,8 +169,8 @@ observed usage and SaaS demand:
   retention and actor primitives have [focused evidence](reviews/2026-10-01-telegram-settings-retention.md).
   Atomic draft rejection is implemented with
   [focused native evidence](reviews/2026-10-01-telegram-callbacks.md).
-  The compiled browser/API/worker journey and complete native concurrency/mutation
-  acceptance remain open; this feature has not been released in `main`.
+  The compiled browser/API/worker journey, storage rollback and competing-editor
+  checks passed. Broader native concurrency and mobile keyboard gates remain open; this feature has not been released in `main`.
 - Controlled prompt experiments, useful outcome attribution and retrieval
   evaluation; observational revision cohorts are not causal A/B results.
 - Stock-media integration, additional measured platform metrics, and verified

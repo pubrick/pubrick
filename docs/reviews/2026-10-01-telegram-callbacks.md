@@ -88,11 +88,32 @@ are retained as `telegram-atomic-proof-{baseline,snapshot,current-role,consumpti
 The role proof covers current role visibility; it does not independently prove
 every binding/grant predicate or replace observed concurrency evidence.
 
+## Expanded acceptance evidence (2026-10-02)
+
+The callback suite passed all fourteen native cases after adding three independently
+reviewed proofs. A tenant-specific audit-storage failure rolls back rejection,
+capability consumption and the final receipt; the same update then retries once.
+Two separately bound editors cannot cancel each other's private confirmation;
+concurrent final decisions produce one audit, one consumed capability and one
+revoked sibling. A callback visibly waits on the actual channel writer's backend
+PID, then refuses the changed snapshot after that writer commits. The retained
+log is `telegram-callback-expanded-native.log`. These proofs do not exercise
+queue cancellation or every possible domain writer.
+
+The first compiled API/worker/web journey passed at committed source
+`a5239965c7727cc9fc731f8c69a16c9b68fa820d`, using the pinned PostgreSQL image
+and a synthetic loopback Bot API. It covered signup, settings, two-phase account
+binding, an actual worker notification, private rejection, replay, a stale edit
+and mobile unlink. Three outboxes were sent in six physical messages, with no
+publication or usage-ledger rows. Its owned container and processes were cleaned
+up. The log is `telegram-compiled-browser.log`. Keyboard-driven mobile binding
+is a separate follow-up gate; the first pass does not establish it.
+
 ## Remaining acceptance
 
 This is an implementation milestone, not completed Telegram feature acceptance.
-The compiled API/worker/web journey, rollback/storage-failure and competing-editor
-cases and broader native writer interleavings remain required. The expired-private fixture also has an expired parent; it does not
+Broader native writer interleavings and keyboard-driven mobile binding remain
+required; the compiled journey and three expanded native cases above passed. The expired-private fixture also has an expired parent; it does not
 independently isolate the private expiry predicate. Reader-first channel deletion
 does not prove arbitrary raw channel-first deletion safe.
 

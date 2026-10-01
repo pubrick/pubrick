@@ -5,6 +5,7 @@ import { Test } from "@nestjs/testing";
 import { hashEditorialSnapshot, readEditorialSnapshot, schema } from "@pubrick/db";
 import { encryptJson } from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
+import pg from "pg";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -216,6 +217,8 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
       bindingId: binding.id,
       itemId: item.id,
       adaptationId: adaptation.id,
+      channelId: channel.id,
+      brandId: brand.id,
       initialId: initial.id,
       code,
     };
@@ -275,6 +278,44 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
     return db.transaction((tx) =>
       app.get(QueueService).hasLivePublishJobs(tx, f.orgId, [f.adaptationId]),
     );
+  }
+  async function nativeClient(): Promise<pg.Client> {
+    if (!url || !/^pubrick_[a-zA-Z0-9_]+_test$/.test(new URL(url).pathname.slice(1)))
+      throw new Error("Callback proof requires an explicitly disposable pubrick_*_test database");
+    const client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 5000 });
+    await client.connect();
+    return client;
+  }
+  async function secondEditor(f: Fixture) {
+    const agent = request.agent(app.getHttpServer());
+    const suffix = randomUUID();
+    const signup = await agent
+      .post("/api/auth/sign-up/email")
+      .send({
+        email: `second-decision-${suffix}@example.invalid`,
+        password: "synthetic-password123",
+        name: "Second Synthetic Editor",
+      })
+      .expect(200);
+    const userId = signup.body.user.id as string;
+    const memberId = randomUUID();
+    await db
+      .insert(schema.member)
+      .values({ id: memberId, organizationId: f.orgId, userId, role: "editor" });
+    await db.insert(schema.brandAccess).values({ orgId: f.orgId, brandId: f.brandId, memberId });
+    const [binding] = await db
+      .insert(schema.telegramBindings)
+      .values({
+        orgId: f.orgId,
+        userId,
+        botIdentityId: f.identityId,
+        generation: 1,
+        telegramUserId: "888",
+        privateChatId: "888",
+      })
+      .returning({ id: schema.telegramBindings.id });
+    if (!binding) throw new Error("Missing second editor binding");
+    return { userId, bindingId: binding.id };
   }
   it("refuses unbound actors without consuming the shared initial, then rejects exactly once", async () => {
     const f = await fixture();
@@ -528,5 +569,199 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
     await post(f, callback(f, `cr:${code}`, 1)).expect(200);
     expect(await status(f)).toEqual({ status: "draft", audit: [] });
     expect(await livePublishJobs(f)).toBe(false);
+  });
+  it("rolls back rejection, consumption and replay when audit storage fails, then retries once", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    const client = await nativeClient();
+    const name = pg.escapeIdentifier(`telegram_proof_audit_${randomUUID().replaceAll("-", "")}`);
+    let functionCreated = false;
+    let triggerCreated = false;
+    try {
+      // Unique trigger name and tenant predicate make concurrent fixture copies inert for each other.
+      await client.query(`CREATE FUNCTION ${name}() RETURNS trigger LANGUAGE plpgsql AS $proof$
+        BEGIN IF NEW.org_id = ${pg.escapeLiteral(f.orgId)} THEN
+          RAISE EXCEPTION 'Synthetic tenant audit storage failure';
+        END IF; RETURN NEW; END $proof$`);
+      functionCreated = true;
+      await client.query(
+        `CREATE TRIGGER ${name} BEFORE INSERT ON telegram_decision_audit FOR EACH ROW EXECUTE FUNCTION ${name}()`,
+      );
+      triggerCreated = true;
+      await post(f, callback(f, reject, 2)).expect(500);
+      expect(await status(f)).toEqual({ status: "draft", audit: [] });
+      const [cap] = await db
+        .select({
+          state: schema.telegramActorConfirmations.state,
+          terminalAt: schema.telegramActorConfirmations.terminalAt,
+        })
+        .from(schema.telegramActorConfirmations)
+        .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+      expect(cap).toEqual({ state: "pending", terminalAt: null });
+      const finalReceipts = await db
+        .select({ id: schema.telegramUpdateReceipts.id })
+        .from(schema.telegramUpdateReceipts)
+        .where(
+          and(
+            eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+            eq(schema.telegramUpdateReceipts.updateId, "2"),
+          ),
+        );
+      expect(finalReceipts).toEqual([]);
+      expect(await livePublishJobs(f)).toBe(false);
+      await client.query(`DROP TRIGGER ${name} ON telegram_decision_audit`);
+      triggerCreated = false;
+      await post(f, callback(f, reject, 2)).expect(200);
+      await post(f, callback(f, reject, 2)).expect(200);
+      const done = await status(f);
+      expect(done.status).toBe("rejected");
+      expect(done.audit).toHaveLength(1);
+      expect(sent.filter((row) => row.token === f.token)).toHaveLength(1);
+      expect(await livePublishJobs(f)).toBe(false);
+    } finally {
+      try {
+        if (triggerCreated)
+          await client.query(`DROP TRIGGER IF EXISTS ${name} ON telegram_decision_audit`);
+      } finally {
+        try {
+          if (functionCreated) await client.query(`DROP FUNCTION IF EXISTS ${name}()`);
+        } finally {
+          await client.end();
+        }
+      }
+    }
+  });
+  it("binds two editors separately and commits one competing rejection without cross-actor cancellation", async () => {
+    const f = await fixture();
+    const other = await secondEditor(f);
+    const ownerReject = await begin(f);
+    await post(f, callback(f, `ir:${f.code}`, 2, 888)).expect(200);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(2);
+    expect(physical.map((row) => row.body.chat_id)).toEqual(["777", "888"]);
+    const keyboard = physical[1]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const editorReject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!editorReject) throw new Error("Missing second editor confirmation");
+    // The second editor cannot cancel the first editor's private capability even knowing its token.
+    await post(f, callback(f, ownerReject.replace(/^cr:/, "ca:"), 3, 888)).expect(200);
+    const before = await db
+      .select({
+        state: schema.telegramActorConfirmations.state,
+        userId: schema.telegramActorConfirmations.userId,
+        bindingId: schema.telegramActorConfirmations.bindingId,
+        chatId: schema.telegramActorConfirmations.chatId,
+      })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(before).toEqual(
+      expect.arrayContaining([
+        { state: "pending", userId: f.userId, bindingId: f.bindingId, chatId: "777" },
+        { state: "pending", userId: other.userId, bindingId: other.bindingId, chatId: "888" },
+      ]),
+    );
+    await Promise.all([
+      post(f, callback(f, ownerReject, 4)).expect(200),
+      post(f, callback(f, editorReject, 5, 888, 502)).expect(200),
+    ]);
+    const done = await status(f);
+    expect(done.status).toBe("rejected");
+    expect(done.audit).toHaveLength(1);
+    expect([f.userId, other.userId]).toContain(done.audit[0]?.actorUserId);
+    const finals = await db
+      .select({ state: schema.telegramActorConfirmations.state })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(finals.map((row) => row.state).sort()).toEqual(["consumed", "revoked"]);
+    const finalReceipts = await db
+      .select({ outcome: schema.telegramUpdateReceipts.outcome })
+      .from(schema.telegramUpdateReceipts)
+      .where(
+        and(
+          eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+          eq(schema.telegramUpdateReceipts.operation, "confirm_reject"),
+        ),
+      );
+    expect(finalReceipts.map((row) => row.outcome).sort()).toEqual(["accepted", "refused"]);
+    expect(await livePublishJobs(f)).toBe(false);
+  });
+  it("waits on the actual channel writer and refuses its changed full snapshot after commit", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    const writer = await nativeClient();
+    let observer: pg.Client | undefined;
+    let committed = false;
+    let pending: Promise<request.Response> | undefined;
+    try {
+      observer = await nativeClient();
+      const activeObserver = observer;
+      const identity = await writer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const writerPid = identity.rows[0]?.pid;
+      if (!writerPid) throw new Error("Missing channel writer PID");
+      await writer.query("BEGIN");
+      const changed = await writer.query(
+        "UPDATE channels SET name = $1 WHERE org_id = $2 AND id = $3",
+        ["Changed by actual writer", f.orgId, f.channelId],
+      );
+      expect(changed.rowCount).toBe(1);
+      let settled = false;
+      pending = post(f, callback(f, reject, 2)).then((response) => {
+        settled = true;
+        return response;
+      });
+      await expect
+        .poll(
+          async () => {
+            if (settled)
+              throw new Error("Callback completed without waiting for the channel writer");
+            const blocked = await activeObserver.query<{ waiting: boolean }>(
+              `SELECT EXISTS (
+          SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+          AND wait_event_type = 'Lock' AND $1::int = ANY(pg_blocking_pids(pid))
+          AND query LIKE '%channels%'
+        ) AS waiting`,
+              [writerPid],
+            );
+            return blocked.rows[0]?.waiting;
+          },
+          { timeout: 5000, interval: 25 },
+        )
+        .toBe(true);
+      await writer.query("COMMIT");
+      committed = true;
+      expect((await pending).status).toBe(200);
+      expect(await status(f)).toEqual({ status: "draft", audit: [] });
+      const [cap] = await db
+        .select({ state: schema.telegramActorConfirmations.state })
+        .from(schema.telegramActorConfirmations)
+        .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+      expect(cap?.state).toBe("pending");
+      const [refused] = await db
+        .select({ outcome: schema.telegramUpdateReceipts.outcome })
+        .from(schema.telegramUpdateReceipts)
+        .where(
+          and(
+            eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+            eq(schema.telegramUpdateReceipts.updateId, "2"),
+          ),
+        );
+      expect(refused?.outcome).toBe("refused");
+      expect(await livePublishJobs(f)).toBe(false);
+    } finally {
+      try {
+        if (!committed) await writer.query("ROLLBACK");
+      } finally {
+        try {
+          await pending;
+        } finally {
+          try {
+            await observer?.end();
+          } finally {
+            await writer.end();
+          }
+        }
+      }
+    }
   });
 });

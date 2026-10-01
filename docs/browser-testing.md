@@ -209,4 +209,4 @@ reachability or certificate compatibility.
 The runner removes its owned process groups, database and temporary media/cert.
 Failure traces and screenshots remain in `.data/telegram-browser-tests`.
 The [implementation record](reviews/2026-10-01-telegram-callbacks.md) distinguishes
-executed native checks from pending compiled and concurrency acceptance.
+executed native and compiled checks from remaining concurrency acceptance.

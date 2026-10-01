@@ -44,7 +44,7 @@ async function control<T>(page: Page, path: string, data: object = {}): Promise<
 
 test("HTTPS Telegram settings, two-phase binding, worker notification, private reject and harmless stale/replayed decisions", async ({
   page,
-}) => {
+}, testInfo) => {
   const pool = new Pool({
     connectionString: database,
     max: 1,
@@ -144,7 +144,11 @@ test("HTTPS Telegram settings, two-phase binding, worker notification, private r
     const account = page
       .getByRole("heading", { name: "Your Telegram account", exact: true })
       .locator("..");
-    await account.getByRole("button", { name: "Connect Telegram", exact: true }).click();
+    await page.setViewportSize({ width: 375, height: 812 });
+    const connect = account.getByRole("button", { name: "Connect Telegram", exact: true });
+    await connect.focus();
+    await expect(connect).toBeFocused();
+    await connect.press("Enter");
     const link = await account
       .getByRole("link", { name: "Open Telegram", exact: true })
       .getAttribute("href");
@@ -159,13 +163,22 @@ test("HTTPS Telegram settings, two-phase binding, worker notification, private r
         brand.orgId,
       ]),
     ).toEqual([]);
-    await account.getByRole("button", { name: "Refresh", exact: true }).click();
+    const refresh = account.getByRole("button", { name: "Refresh", exact: true });
+    await refresh.focus();
+    await refresh.press("Enter");
     await expect(account.getByText("<Synthetic Human>", { exact: true })).toBeVisible();
     await expect(account.getByText("Telegram user ID: 74002", { exact: true })).toBeVisible();
-    await account.getByRole("button", { name: "Confirm account", exact: true }).click();
+    const confirmAccount = account.getByRole("button", { name: "Confirm account", exact: true });
+    await confirmAccount.focus();
+    await confirmAccount.press("Enter");
     await expect(
       account.getByText("Your Telegram account is connected.", { exact: true }),
     ).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await account.screenshot({ path: testInfo.outputPath("telegram-mobile-linked.png") });
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     const seed = (scenario: string) =>
       control<Draft>(page, "draft", {
@@ -272,7 +285,10 @@ test("HTTPS Telegram settings, two-phase binding, worker notification, private r
     await mobileAccount.getByRole("button", { name: "Unlink", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Unlink your Telegram account?", exact: true });
     await expect(dialog).toBeVisible();
-    await dialog.getByRole("button", { name: "Unlink", exact: true }).click();
+    const unlinkButton = dialog.getByRole("button", { name: "Unlink", exact: true });
+    await unlinkButton.focus();
+    await expect(unlinkButton).toBeFocused();
+    await unlinkButton.press("Enter");
     await expect(
       mobileAccount.getByText("Your Telegram account is not connected.", { exact: true }),
     ).toBeVisible();
