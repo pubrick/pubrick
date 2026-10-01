@@ -157,7 +157,7 @@ observed usage and SaaS demand:
 - Recurring editorial plans and evergreen reuse before speculative best-time
   claims; collect evidence before suggesting optimal publication times.
   Finite weekly plans have passed local integration and built-browser acceptance
-  in the feature candidate; their main release is pending. See the
+  and are integrated in main at `95065318` through PR #155. See the
   [design](specs/0011-recurring-editorial-plans.md) and
   [verification](reviews/2026-10-01-recurring-editorial-plans.md).
   Manual evergreen draft reuse is the next separate implementation slice.

@@ -147,6 +147,7 @@ These records do not claim that every dispatch predicate has a mutation proof.
 All fixture credentials and content were synthetic. The root-owned PostgreSQL
 container and its anonymous data volume were removed after the final checks;
 failed/successful test reports remain available locally. User runtime databases,
-saved provider secrets and private backups were preserved. Main release needs
-authorization for the final reviewed candidate. Public image publication and
+saved provider secrets and private backups were preserved. The owner authorized
+the final reviewed candidate `bf66930b`; PR #155 was merged into main as
+`95065318` on 2026-10-01. Public image publication and
 real hosted payment/SMTP acceptance remain separate roadmap dependencies.

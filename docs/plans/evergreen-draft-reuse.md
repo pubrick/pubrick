@@ -2,12 +2,13 @@
 
 Status: independently reviewed design; shared/database foundation and session
 backend verified with focused native checks and selected independent guard
-proofs. UI is in progress; integrated build/browser acceptance and release remain pending.
+proofs. UI implementation and focused checks are complete; integrated test/browser
+acceptance and release remain pending.
 Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
 Implementation baseline: reviewed weekly candidate `bf66930b` (PR #155);
-its main release remains separate and pending. Design source: `9be8abb2`.
+integrated in main at `95065318` through PR #155. Design source: `9be8abb2`.
 Tracking: `Ozon-tools-3xwei` (root owns status updates); design review
 `Ozon-tools-44lpl` is complete.
 
