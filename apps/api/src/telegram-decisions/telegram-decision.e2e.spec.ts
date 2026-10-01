@@ -1,0 +1,532 @@
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { Test } from "@nestjs/testing";
+import { hashEditorialSnapshot, readEditorialSnapshot, schema } from "@pubrick/db";
+import { encryptJson } from "@pubrick/shared";
+import { and, eq } from "drizzle-orm";
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const url = process.env.TEST_DATABASE_URL;
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+describe.skipIf(!url)("Telegram draft decisions through authenticated native callbacks", () => {
+  let app: NestExpressApplication;
+  let server: Server;
+  let baseUrl: string;
+  let db: typeof import("../db")["db"];
+  const bots = new Map<string, number>();
+  const unknown = new Set<string>();
+  const rejected = new Set<string>();
+  const sent: Array<{ token: string; body: Record<string, unknown> }> = [];
+  const answers: Array<{ token: string; body: Record<string, unknown> }> = [];
+  beforeAll(async () => {
+    server = createServer(async (incoming, outgoing) => {
+      const match = /^\/bot([^/]+)\/(sendMessage|answerCallbackQuery)$/.exec(incoming.url ?? "");
+      if (!match?.[1] || !match[2]) {
+        outgoing.writeHead(404).end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
+      const botId = bots.get(match[1]);
+      if (!botId) {
+        outgoing.writeHead(401).end(JSON.stringify({ ok: false, error_code: 401 }));
+        return;
+      }
+      if (match[2] === "sendMessage") {
+        sent.push({ token: match[1], body });
+        if (rejected.delete(match[1])) {
+          outgoing.writeHead(400).end(JSON.stringify({ ok: false, error_code: 400 }));
+          return;
+        }
+        if (unknown.delete(match[1])) {
+          outgoing.writeHead(503).end("synthetic uncertain send");
+          return;
+        }
+      } else answers.push({ token: match[1], body });
+      outgoing.setHeader("content-type", "application/json");
+      outgoing.end(
+        JSON.stringify({
+          ok: true,
+          result:
+            match[2] === "answerCallbackQuery"
+              ? true
+              : {
+                  message_id: 500 + sent.filter((row) => row.token === match[1]).length,
+                  from: { id: botId, is_bot: true },
+                  chat: { id: Number(body.chat_id), type: "private" },
+                },
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing synthetic provider");
+    baseUrl = `http://127.0.0.1:${address.port}`;
+    process.env.TELEGRAM_API_BASE_URL = baseUrl;
+    process.env.DATABASE_URL = url;
+    process.env.WEB_ORIGIN = "https://pubrick.example.invalid";
+    process.env.BETTER_AUTH_SECRET ??= "synthetic-telegram-decisions-session-secret";
+    process.env.APP_ENCRYPTION_KEY ??= Buffer.alloc(32, 17).toString("base64");
+    db = (await import("../db")).db;
+    const { AppModule } = await import("../app.module");
+    const { installTelegramWebhookParser } = await import("./telegram-webhook-parser");
+    const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = module.createNestApplication<NestExpressApplication>({ bodyParser: false });
+    installTelegramWebhookParser(app);
+    app.setGlobalPrefix("api");
+    await app.init();
+    await app.listen(0);
+  });
+  afterAll(async () => {
+    await app?.close();
+    await new Promise<void>((resolve, reject) =>
+      server?.close((error) => (error ? reject(error) : resolve())),
+    );
+  });
+  async function fixture(expired = false) {
+    const agent = request.agent(app.getHttpServer());
+    const suffix = randomUUID();
+    const signup = await agent
+      .post("/api/auth/sign-up/email")
+      .send({
+        email: `decision-${suffix}@example.invalid`,
+        password: "synthetic-password123",
+        name: "Synthetic Editor",
+      })
+      .expect(200);
+    const userId = signup.body.user.id as string;
+    const organization = await agent
+      .post("/api/auth/organization/create")
+      .send({ name: "Synthetic decisions", slug: `decision-${suffix}` })
+      .expect(200);
+    const orgId = organization.body.id as string;
+    const botId = randomInt(100000, 1000000000);
+    const token = `${botId}:synthetic_decision_token`;
+    const encryptionKey = process.env.APP_ENCRYPTION_KEY;
+    if (!encryptionKey) throw new Error("Missing synthetic encryption key");
+    bots.set(token, botId);
+    const routeId = randomBytes(32).toString("base64url"),
+      secret = randomBytes(32).toString("base64url");
+    const [bot] = await db
+      .insert(schema.telegramBotIdentities)
+      .values({ botId: String(botId), ownerOrgId: orgId, enabled: true })
+      .returning();
+    if (!bot) throw new Error("Missing owned bot");
+    await db.insert(schema.telegramDecisionConfigs).values({
+      orgId,
+      botIdentityId: bot.id,
+      generation: 1,
+      state: "active",
+      routeId,
+      secretHash: hash(secret),
+      credentialsEncrypted: encryptJson({ botToken: token }, encryptionKey),
+      retryPayloadEncrypted: encryptJson(
+        {
+          botId: String(botId),
+          botUsername: `SyntheticBot_${botId}`,
+          request: {
+            url: `https://pubrick.example.invalid/api/telegram/webhook/${routeId}`,
+            secret_token: secret,
+            allowed_updates: ["message", "callback_query"],
+            drop_pending_updates: false,
+            max_connections: 40,
+          },
+        },
+        encryptionKey,
+      ),
+    });
+    const [binding] = await db
+      .insert(schema.telegramBindings)
+      .values({
+        orgId,
+        userId,
+        botIdentityId: bot.id,
+        generation: 1,
+        telegramUserId: "777",
+        privateChatId: "777",
+      })
+      .returning();
+    const [brand] = await db
+      .insert(schema.brands)
+      .values({ orgId, name: "Synthetic Brand" })
+      .returning();
+    if (!brand || !binding) throw new Error("Missing actor/brand");
+    const [item] = await db
+      .insert(schema.contentItems)
+      .values({
+        orgId,
+        brandId: brand.id,
+        title: "Synthetic Draft",
+        body: "Synthetic unchanged master body.",
+      })
+      .returning();
+    const [channel] = await db
+      .insert(schema.channels)
+      .values({
+        orgId,
+        brandId: brand.id,
+        name: "Synthetic Channel",
+        platform: "telegram",
+        credentialsEncrypted: "synthetic-unused",
+      })
+      .returning();
+    if (!item || !channel) throw new Error("Missing content/channel");
+    const [adaptation] = await db
+      .insert(schema.adaptations)
+      .values({ orgId, contentItemId: item.id, channelId: channel.id })
+      .returning();
+    if (!adaptation) throw new Error("Missing pending adaptation");
+    const snapshot = await readEditorialSnapshot(db, orgId, item.id);
+    if (!snapshot) throw new Error("Missing snapshot");
+    const code = randomBytes(32).toString("base64url");
+    const now = new Date(),
+      createdAt = expired ? new Date(now.getTime() - 120000) : now,
+      expiresAt = new Date(now.getTime() + (expired ? -60000 : 1200000));
+    const [initial] = await db
+      .insert(schema.telegramInitialCapabilities)
+      .values({
+        orgId,
+        botIdentityId: bot.id,
+        generation: 1,
+        contentItemId: item.id,
+        brandId: brand.id,
+        snapshotHash: hashEditorialSnapshot(snapshot),
+        snapshotVersion: "client-review-v1",
+        tokenHash: hash(code),
+        chatId: "-10042",
+        messageId: "100",
+        sendState: "sent",
+        sendAttemptedAt: createdAt,
+        createdAt,
+        expiresAt,
+      })
+      .returning();
+    if (!initial) throw new Error("Missing initial capability");
+    return {
+      orgId,
+      userId,
+      botId,
+      identityId: bot.id,
+      token,
+      routeId,
+      secret,
+      bindingId: binding.id,
+      itemId: item.id,
+      adaptationId: adaptation.id,
+      initialId: initial.id,
+      code,
+    };
+  }
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  function callback(f: Fixture, data: string, updateId: number, sender = 777, messageId = 501) {
+    const first = data.startsWith("ir:");
+    return {
+      update_id: updateId,
+      callback_query: {
+        id: `synthetic-${updateId}`,
+        from: { id: sender, is_bot: false },
+        data,
+        message: {
+          message_id: first ? 100 : messageId,
+          date: 1,
+          from: { id: f.botId, is_bot: true },
+          chat: { id: first ? -10042 : sender, type: first ? "supergroup" : "private" },
+        },
+      },
+    };
+  }
+  const post = (f: Fixture, payload: ReturnType<typeof callback>) =>
+    request(app.getHttpServer())
+      .post(`/api/telegram/webhook/${f.routeId}`)
+      .set("x-telegram-bot-api-secret-token", f.secret)
+      .send(payload);
+  async function begin(f: Fixture, updateId = 1) {
+    await post(f, callback(f, `ir:${f.code}`, updateId)).expect(200);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(1);
+    const keyboard = physical[0]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const reject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!reject) throw new Error("Missing private Reject callback");
+    return reject;
+  }
+  async function status(f: Fixture) {
+    const [item] = await db
+      .select({ status: schema.contentItems.status })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, f.orgId), eq(schema.contentItems.id, f.itemId)));
+    const audit = await db
+      .select({
+        actorUserId: schema.telegramDecisionAudit.actorUserId,
+        bindingId: schema.telegramDecisionAudit.bindingId,
+        action: schema.telegramDecisionAudit.action,
+        updateId: schema.telegramDecisionAudit.updateId,
+      })
+      .from(schema.telegramDecisionAudit)
+      .where(eq(schema.telegramDecisionAudit.orgId, f.orgId));
+    return { status: item?.status, audit };
+  }
+  async function livePublishJobs(f: Fixture) {
+    const { QueueService } = await import("../queue/queue.service");
+    return db.transaction((tx) =>
+      app.get(QueueService).hasLivePublishJobs(tx, f.orgId, [f.adaptationId]),
+    );
+  }
+  it("refuses unbound actors without consuming the shared initial, then rejects exactly once", async () => {
+    const f = await fixture();
+    await post(f, callback(f, `ir:${f.code}`, 1, 888)).expect(200);
+    expect(sent.filter((row) => row.token === f.token)).toHaveLength(0);
+    const reject = await begin(f, 2);
+    await post(f, callback(f, `ir:${f.code}`, 2)).expect(200);
+    expect(sent.filter((row) => row.token === f.token)).toHaveLength(1);
+    expect((await status(f)).status).toBe("draft");
+    await post(f, callback(f, reject, 3)).expect(200);
+    await post(f, callback(f, reject, 3)).expect(200);
+    const done = await status(f);
+    expect(done.status).toBe("rejected");
+    expect(done.audit).toHaveLength(1);
+    expect(await livePublishJobs(f)).toBe(false);
+    expect(done.audit[0]).toMatchObject({
+      actorUserId: f.userId,
+      bindingId: f.bindingId,
+      action: "reject",
+      updateId: "3",
+    });
+    const [initial] = await db
+      .select({ state: schema.telegramInitialCapabilities.state })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    expect(initial?.state).toBe("revoked");
+    const confirmations = await db
+      .select({ state: schema.telegramActorConfirmations.state })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(confirmations).toEqual([{ state: "consumed" }]);
+    const receipts = await db
+      .select({ id: schema.telegramUpdateReceipts.id })
+      .from(schema.telegramUpdateReceipts)
+      .where(eq(schema.telegramUpdateReceipts.orgId, f.orgId));
+    expect(receipts).toHaveLength(3);
+  });
+  it("refuses a stale full snapshot and changed replay payload", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    await db
+      .update(schema.contentItems)
+      .set({ body: "Changed master body." })
+      .where(eq(schema.contentItems.id, f.itemId));
+    await post(f, callback(f, reject, 2)).expect(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    await post(f, callback(f, reject, 2, 888)).expect(409);
+  });
+  it("revokes an incompatible old confirmation after an explicit fresh notification click", async () => {
+    const f = await fixture();
+    const oldReject = await begin(f);
+    await db
+      .update(schema.contentItems)
+      .set({ body: "Explicitly revised draft body." })
+      .where(eq(schema.contentItems.id, f.itemId));
+    const snapshot = await readEditorialSnapshot(db, f.orgId, f.itemId);
+    if (!snapshot) throw new Error("Missing revised snapshot");
+    const code = randomBytes(32).toString("base64url");
+    const now = new Date();
+    await db.insert(schema.telegramInitialCapabilities).values({
+      orgId: f.orgId,
+      botIdentityId: f.identityId,
+      generation: 1,
+      contentItemId: f.itemId,
+      brandId: snapshot.brandId,
+      snapshotHash: hashEditorialSnapshot(snapshot),
+      snapshotVersion: "client-review-v1",
+      tokenHash: hash(code),
+      chatId: "-10042",
+      messageId: "100",
+      sendState: "sent",
+      sendAttemptedAt: now,
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + 1200000),
+    });
+    await post(f, callback(f, `ir:${code}`, 2)).expect(200);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(2);
+    const keyboard = physical[1]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const newReject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!newReject) throw new Error("Missing fresh private confirmation");
+    const caps = await db
+      .select({ state: schema.telegramActorConfirmations.state })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(caps.map((row) => row.state).sort()).toEqual(["pending", "revoked"]);
+    await post(f, callback(f, oldReject, 3)).expect(200);
+    expect((await status(f)).status).toBe("draft");
+    await post(f, callback(f, newReject, 4, 777, 502)).expect(200);
+    expect((await status(f)).audit).toHaveLength(1);
+  });
+
+  it("admits one private send and one rejection under competing callback updates", async () => {
+    const f = await fixture();
+    await Promise.all([
+      post(f, callback(f, `ir:${f.code}`, 1)).expect(200),
+      post(f, callback(f, `ir:${f.code}`, 2)).expect(200),
+    ]);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(1);
+    const keyboard = physical[0]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const reject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!reject) throw new Error("Missing single private confirmation");
+    await Promise.all([
+      post(f, callback(f, reject, 3)).expect(200),
+      post(f, callback(f, reject, 4)).expect(200),
+    ]);
+    const done = await status(f);
+    expect(done.status).toBe("rejected");
+    expect(done.audit).toHaveLength(1);
+    const finals = await db
+      .select({ id: schema.telegramActorConfirmations.id })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(finals).toHaveLength(1);
+  });
+  it.each(["membership", "binding"] as const)(
+    "refuses fresh final decisions after %s revocation",
+    async (kind) => {
+      const f = await fixture();
+      const reject = await begin(f);
+      if (kind === "membership")
+        await db
+          .update(schema.member)
+          .set({ role: "author" })
+          .where(
+            and(eq(schema.member.organizationId, f.orgId), eq(schema.member.userId, f.userId)),
+          );
+      else
+        await db
+          .update(schema.telegramBindings)
+          .set({ state: "revoked", revokedAt: new Date() })
+          .where(eq(schema.telegramBindings.id, f.bindingId));
+      await post(f, callback(f, reject, 2)).expect(200);
+      expect(await status(f)).toEqual({ status: "draft", audit: [] });
+      await post(f, callback(f, `ir:${f.code}`, 1)).expect(200);
+      const ack = answers.filter((row) => row.token === f.token).at(-1);
+      expect(ack?.body.text).toBe(
+        "This action is unavailable. Check your account connection and review the draft in Pubrick.",
+      );
+    },
+  );
+  it("reconciles an unknown private send only for its intended bound actor", async () => {
+    const f = await fixture();
+    unknown.add(f.token);
+    const reject = await begin(f);
+    await post(f, callback(f, reject, 2, 888)).expect(200);
+    expect((await status(f)).status).toBe("draft");
+    await post(f, callback(f, reject, 3)).expect(200);
+    expect((await status(f)).audit).toHaveLength(1);
+    const [cap] = await db
+      .select({
+        messageId: schema.telegramActorConfirmations.messageId,
+        sendState: schema.telegramActorConfirmations.sendState,
+        state: schema.telegramActorConfirmations.state,
+      })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(cap).toMatchObject({ messageId: "501", sendState: "sent", state: "consumed" });
+    expect(sent.filter((row) => row.token === f.token)).toHaveLength(1);
+  });
+  it("terminalizes a definitely rejected private send and permits a fresh explicit click", async () => {
+    const f = await fixture();
+    rejected.add(f.token);
+    await begin(f);
+    const [failed] = await db
+      .select({
+        state: schema.telegramActorConfirmations.state,
+        terminalAt: schema.telegramActorConfirmations.terminalAt,
+        sendState: schema.telegramActorConfirmations.sendState,
+      })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(failed).toMatchObject({ state: "revoked", sendState: "rejected" });
+    expect(failed?.terminalAt).not.toBeNull();
+    await post(f, callback(f, `ir:${f.code}`, 2)).expect(200);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(2);
+    const keyboard = physical[1]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const reject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!reject) throw new Error("Missing retry confirmation");
+    await post(f, callback(f, reject, 3, 777, 502)).expect(200);
+    expect((await status(f)).audit).toHaveLength(1);
+  });
+  it("cancel consumes only the actor confirmation; expired initial capabilities issue nothing", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    await post(f, callback(f, reject.replace(/^cr:/, "ca:"), 2)).expect(200);
+    await post(f, callback(f, reject, 3)).expect(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    const [initial] = await db
+      .select({ state: schema.telegramInitialCapabilities.state })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    expect(initial?.state).toBe("pending");
+    const expired = await fixture(true);
+    await post(expired, callback(expired, `ir:${expired.code}`, 1)).expect(200);
+    expect(sent.filter((row) => row.token === expired.token)).toHaveLength(0);
+  });
+  it("refuses delivery history added after confirmation issuance", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    await db
+      .update(schema.contentItems)
+      .set({ isSafeToDelete: false })
+      .where(eq(schema.contentItems.id, f.itemId));
+    await post(f, callback(f, reject, 2)).expect(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+  });
+  it("refuses an expired private capability without changing content", async () => {
+    const f = await fixture(true);
+    const [parent] = await db
+      .select({
+        id: schema.telegramInitialCapabilities.id,
+        brandId: schema.telegramInitialCapabilities.brandId,
+        snapshotHash: schema.telegramInitialCapabilities.snapshotHash,
+        snapshotVersion: schema.telegramInitialCapabilities.snapshotVersion,
+        createdAt: schema.telegramInitialCapabilities.createdAt,
+        expiresAt: schema.telegramInitialCapabilities.expiresAt,
+      })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    if (!parent) throw new Error("Missing expired parent");
+    const code = randomBytes(32).toString("base64url");
+    await db.insert(schema.telegramActorConfirmations).values({
+      orgId: f.orgId,
+      botIdentityId: f.identityId,
+      generation: 1,
+      contentItemId: f.itemId,
+      brandId: parent.brandId,
+      snapshotHash: parent.snapshotHash,
+      snapshotVersion: parent.snapshotVersion,
+      tokenHash: hash(code),
+      chatId: "777",
+      messageId: "501",
+      userId: f.userId,
+      bindingId: f.bindingId,
+      initialCapabilityId: parent.id,
+      initialExpiresAt: parent.expiresAt,
+      createdAt: parent.createdAt,
+      expiresAt: parent.expiresAt,
+      sendState: "sent",
+      sendAttemptedAt: parent.createdAt,
+    });
+    await post(f, callback(f, `cr:${code}`, 1)).expect(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    expect(await livePublishJobs(f)).toBe(false);
+  });
+});

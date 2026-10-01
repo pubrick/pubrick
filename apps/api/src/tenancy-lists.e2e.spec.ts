@@ -60,6 +60,10 @@ const NOT_A_TENANT_LIST: Record<string, string> = {
   health: "anonymous liveness probe; returns a status and a version, never a row",
   notifications:
     "one org-scoped settings singleton, not a collection; notifications.repository.e2e.spec.ts proves another org sees only its defaults",
+  "notifications/telegram-binding":
+    "one current-user binding status singleton; telegram-binding.e2e.spec.ts proves other users and workspaces cannot read its candidate or challenge",
+  "notifications/telegram-decisions":
+    "one workspace bot setup status singleton; telegram-binding.e2e.spec.ts proves an unrelated workspace sees only its disabled defaults",
   "search-credentials":
     "one org-scoped search key setting, not a collection; search-credentials.e2e.spec.ts proves another org sees only its own configuration",
   "content/:id/claim-review":

@@ -18,6 +18,7 @@ import { KnowledgeAutoIndexService } from "./knowledge/knowledge-auto-index.serv
 import { MediaCleanupModule } from "./media-cleanup/media-cleanup.module";
 import { MetricsService } from "./metrics/metrics.service";
 import { NotificationsService } from "./notifications/notifications.service";
+import { TelegramInitialNotificationsRepository } from "./notifications/telegram-initial-notifications.repository";
 import { PublishRepository } from "./publish/publish.repository";
 import { PublishService } from "./publish/publish.service";
 import { QueueService } from "./queue.service";
@@ -47,6 +48,7 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     KnowledgeAutoIndexService,
     MetricsService,
     NotificationsService,
+    TelegramInitialNotificationsRepository,
     RssRepository,
     RssService,
     CalendarService,

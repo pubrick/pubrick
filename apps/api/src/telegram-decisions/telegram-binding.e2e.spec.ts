@@ -115,6 +115,57 @@ describe.skipIf(!url)("own Telegram two-phase binding on native PostgreSQL", () 
     }
     return { ...owner, orgId, botId: bot.id, routeId, secret, member, challenge, start };
   }
+  it("keeps setup and own binding status isolated across workspaces and users", async () => {
+    const f = await fixture();
+    const challenge = await f.challenge();
+    await f.start(challenge.code).then((response) => expect(response.status).toBe(200));
+    const own = await f.agent.get("/api/notifications/telegram-binding").expect(200);
+    expect(own.body).toMatchObject({
+      state: "awaiting_web_confirmation",
+      challengeId: challenge.id,
+      candidate: { telegramUserId: "42" },
+    });
+    const colleague = await f.member();
+    const colleagueStatus = await colleague.agent
+      .get("/api/notifications/telegram-binding")
+      .expect(200);
+    expect(colleagueStatus.body).toMatchObject({
+      challengeId: null,
+      bindingId: null,
+      candidate: null,
+    });
+    const outsider = await account();
+    const outsiderOrg = await outsider.agent
+      .post("/api/auth/organization/create")
+      .send({
+        name: "Unrelated status workspace",
+        slug: `status-${randomUUID()}`,
+      })
+      .expect(200);
+    await outsider.agent
+      .post("/api/auth/organization/set-active")
+      .send({ organizationId: outsiderOrg.body.id })
+      .expect(200);
+    const foreignSetup = await outsider.agent
+      .get("/api/notifications/telegram-decisions")
+      .set("x-org-id", f.orgId)
+      .query({ orgId: f.orgId })
+      .expect(200);
+    expect(foreignSetup.body).toMatchObject({ state: "disabled", hasCredentials: false });
+    const foreignBinding = await outsider.agent
+      .get("/api/notifications/telegram-binding")
+      .set("x-org-id", f.orgId)
+      .query({ orgId: f.orgId })
+      .expect(200);
+    expect(foreignBinding.body).toMatchObject({
+      challengeId: null,
+      bindingId: null,
+      candidate: null,
+    });
+    expect(
+      (await f.agent.get("/api/notifications/telegram-decisions").expect(200)).body.state,
+    ).toBe("active");
+  });
   it("requires a real original user's confirmation after Telegram claim and permits ordinary members/editors", async () => {
     const f = await fixture();
     const member = await f.member("editor");

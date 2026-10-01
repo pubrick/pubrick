@@ -167,8 +167,10 @@ observed usage and SaaS demand:
 - Telegram decisions follow the reviewed [design](specs/0013-telegram-draft-decisions.md).
   Setup/account-binding backend is pushed at `5855ca50`; settings, bounded
   retention and actor primitives have [focused evidence](reviews/2026-10-01-telegram-settings-retention.md).
-  Atomic draft rejection and compiled browser/API/worker acceptance remain open;
-  these controls do not yet enable Telegram draft decisions.
+  Atomic draft rejection is implemented with
+  [focused native evidence](reviews/2026-10-01-telegram-callbacks.md).
+  The compiled browser/API/worker journey and complete native concurrency/mutation
+  acceptance remain open; this feature has not been released in `main`.
 - Controlled prompt experiments, useful outcome attribution and retrieval
   evaluation; observational revision cohorts are not causal A/B results.
 - Stock-media integration, additional measured platform metrics, and verified

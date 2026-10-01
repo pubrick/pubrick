@@ -1,5 +1,6 @@
 import {
   telegramCallbackDataSchema,
+  telegramChatIdSchema,
   telegramIdentitySchema,
   telegramWebhookSecretSchema,
 } from "@pubrick/shared";
@@ -46,6 +47,17 @@ const confirmationSchema = z.strictObject({
   cancelCallbackData: telegramCallbackDataSchema.refine((value) => value.startsWith("ca:")),
 });
 export type TelegramPrivateConfirmationRequest = z.infer<typeof confirmationSchema>;
+const initialNotificationSchema = z.strictObject({
+  botId: telegramIdentitySchema,
+  chatId: telegramChatIdSchema,
+  text: z.string().min(1).max(4096),
+  reviewUrl: httpsUrl,
+  scheduleUrl: httpsUrl,
+  publishUrl: httpsUrl,
+  rejectCallbackData: telegramCallbackDataSchema.refine((value) => value.startsWith("ir:")),
+});
+export type TelegramInitialNotificationRequest = z.infer<typeof initialNotificationSchema>;
+export type TelegramInitialMessage = { botId: string; chatId: string; messageId: string };
 const answerSchema = z.strictObject({
   callbackQueryId: z.string().min(1).max(256),
   text: z.string().max(200).optional(),
@@ -83,6 +95,19 @@ const privateMessageSchema = z.object({
   message_id: positiveId,
   from: z.object({ id: positiveId, is_bot: z.literal(true) }),
   chat: z.object({ id: positiveId, type: z.literal("private") }),
+});
+const signedChatId = z
+  .number()
+  .int()
+  .min(-Number.MAX_SAFE_INTEGER)
+  .max(Number.MAX_SAFE_INTEGER)
+  .refine((id) => id !== 0)
+  .transform(String)
+  .pipe(telegramChatIdSchema);
+const initialMessageSchema = z.object({
+  message_id: positiveId,
+  from: z.object({ id: positiveId, is_bot: z.literal(true) }),
+  chat: z.object({ id: signedChatId, type: z.enum(["private", "group", "supergroup", "channel"]) }),
 });
 const envelopeSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), result: z.unknown() }),
@@ -234,6 +259,41 @@ export function createTelegramDecisionTransport(options: TelegramDecisionTranspo
       return parsed.success
         ? call(botToken, "deleteWebhook", parsed.data, z.literal(true))
         : Promise.resolve({ status: "rejected" });
+    },
+    sendInitialNotification(
+      botToken: string,
+      request: TelegramInitialNotificationRequest,
+    ): Promise<TelegramBotApiResult<TelegramInitialMessage>> {
+      const parsed = initialNotificationSchema.safeParse(request);
+      if (!parsed.success) return Promise.resolve({ status: "rejected" });
+      const input = parsed.data;
+      return call(
+        botToken,
+        "sendMessage",
+        {
+          chat_id: input.chatId,
+          text: input.text,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "Review", url: input.reviewUrl },
+                { text: "Schedule", url: input.scheduleUrl },
+              ],
+              [
+                { text: "Publish", url: input.publishUrl },
+                { text: "Reject", callback_data: input.rejectCallbackData },
+              ],
+            ],
+          },
+        },
+        initialMessageSchema
+          .refine((message) => message.chat.id === input.chatId && message.from.id === input.botId)
+          .transform((message) => ({
+            botId: message.from.id,
+            chatId: message.chat.id,
+            messageId: message.message_id,
+          })),
+      );
     },
     sendPrivateConfirmation(
       botToken: string,

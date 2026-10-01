@@ -185,3 +185,28 @@ live under `.data/evergreen-browser-tests`; build outputs remain reusable.
 The journey complements native concurrent replay, source-change and deletion
 proofs. See the [integration record](reviews/2026-10-01-evergreen-integration.md)
 for executed runtime/image identities and the first fixture failure.
+
+## Telegram private draft decisions
+
+```sh
+node scripts/e2e/telegram.run.mjs
+```
+
+This runner requires clean, committed source and owns a pinned disposable
+PostgreSQL database, compiled API/worker/web services, a loopback Bot API fixture
+and a temporary HTTPS certificate. Ports 31300–31303 must be free. Only the owned
+browser context accepts that certificate; fixture callbacks trust its local CA.
+No global TLS bypass or operator secrets are used.
+
+The browser configures and links the synthetic bot, confirms its own account,
+observes an actual worker notification, starts private consent and rejects the
+unchanged draft. It checks actor audit linkage, consumption, replay, stale edits
+and mobile unlink. Draft fixtures are inserted directly, so this journey does
+not prove generation. Zero usage-ledger/publication rows and unexpected provider
+calls are checked throughout. Local HTTPS is not evidence of public Telegram
+reachability or certificate compatibility.
+
+The runner removes its owned process groups, database and temporary media/cert.
+Failure traces and screenshots remain in `.data/telegram-browser-tests`.
+The [implementation record](reviews/2026-10-01-telegram-callbacks.md) distinguishes
+executed native checks from pending compiled and concurrency acceptance.

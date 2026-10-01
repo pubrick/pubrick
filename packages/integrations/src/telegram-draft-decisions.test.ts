@@ -338,3 +338,89 @@ describe("Telegram decision single-attempt transport", () => {
     expect(JSON.stringify(result)).not.toContain(install.secret_token);
   });
 });
+
+describe("initial draft notification transport", () => {
+  const initial = {
+    botId: "123",
+    chatId: "-10042",
+    text: "Synthetic draft ready",
+    reviewUrl: "https://pubrick.example/en/content/synthetic?intent=review",
+    scheduleUrl: "https://pubrick.example/en/content/synthetic?intent=schedule",
+    publishUrl: "https://pubrick.example/en/content/synthetic?intent=publish",
+    rejectCallbackData: `ir:${"x".repeat(43)}`,
+  };
+  it("preserves three URL controls and one callback with exact signed-chat provenance", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          result: {
+            message_id: 789,
+            from: { id: 123, is_bot: true },
+            chat: { id: -10042, type: "supergroup" },
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    const transport = createTelegramDecisionTransport({ fetchImpl });
+    expect(await transport.sendInitialNotification(token, initial)).toEqual({
+      status: "confirmed",
+      value: { botId: "123", chatId: "-10042", messageId: "789" },
+    });
+    const body = JSON.parse(fetchImpl.mock.calls[0]?.[1].body as string);
+    expect(body.reply_markup.inline_keyboard).toEqual([
+      [
+        { text: "Review", url: initial.reviewUrl },
+        { text: "Schedule", url: initial.scheduleUrl },
+      ],
+      [
+        { text: "Publish", url: initial.publishUrl },
+        { text: "Reject", callback_data: initial.rejectCallbackData },
+      ],
+    ]);
+    expect(body).not.toHaveProperty("parse_mode");
+  });
+  it("refuses malformed initial requests without a fetch", async () => {
+    const fetchImpl = vi.fn();
+    const transport = createTelegramDecisionTransport({ fetchImpl });
+    for (const value of [
+      { ...initial, rejectCallbackData: `cr:${"x".repeat(43)}` },
+      { ...initial, reviewUrl: "http://pubrick.example/review" },
+      { ...initial, chatId: "0" },
+    ])
+      expect(await transport.sendInitialNotification(token, value)).toEqual({ status: "rejected" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("treats unsafe, missing or mismatched message provenance as unknown and never retries", async () => {
+    for (const result of [
+      {
+        message_id: Number.MAX_SAFE_INTEGER + 1,
+        from: { id: 123, is_bot: true },
+        chat: { id: -10042, type: "supergroup" },
+      },
+      {
+        message_id: 789,
+        from: { id: 124, is_bot: true },
+        chat: { id: -10042, type: "supergroup" },
+      },
+      {
+        message_id: 789,
+        from: { id: 123, is_bot: true },
+        chat: { id: -10043, type: "supergroup" },
+      },
+      { message_id: 789, chat: { id: -10042, type: "channel" } },
+    ]) {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ ok: true, result }), { status: 200 }));
+      expect(
+        await createTelegramDecisionTransport({ fetchImpl }).sendInitialNotification(
+          token,
+          initial,
+        ),
+      ).toEqual({ status: "unknown" });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    }
+  });
+});

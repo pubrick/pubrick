@@ -1,16 +1,19 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { sendTelegramNotification } from "@pubrick/integrations";
+import { createTelegramDecisionTransport, sendTelegramNotification } from "@pubrick/integrations";
 import type { ManualDigestJob } from "@pubrick/shared";
 import {
   decryptJson,
   type NotificationDiagnosticReason,
   type NotificationEvent,
+  PUBLISH_QUEUE,
 } from "@pubrick/shared";
 import { and, eq, gt, sql } from "drizzle-orm";
+import type { PgBoss } from "pg-boss";
 import { db } from "../db";
 import { env } from "../env";
 import { holdOrganization } from "../organization-lock";
+import { TelegramInitialNotificationsRepository } from "./telegram-initial-notifications.repository";
 
 const COPY: Record<NotificationEvent, string> = {
   draft_ready: "A new draft is ready for review.",
@@ -67,11 +70,19 @@ export function draftReviewUrl(
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
+  private readonly telegram = createTelegramDecisionTransport({
+    baseUrl: env.TELEGRAM_API_BASE_URL,
+  });
+  constructor(@Optional() private readonly initial?: TelegramInitialNotificationsRepository) {}
 
-  async sendDigest(job: ManualDigestJob): Promise<void> {
+  async sendDigest(
+    job: ManualDigestJob,
+    boss?: PgBoss,
+    publishQueue = PUBLISH_QUEUE,
+  ): Promise<void> {
     await this.snapshotDigest(job.orgId, job.brandId, job.localDate);
     // The outbox claims before provider I/O; a queue retry can never resend it.
-    await this.scan();
+    await this.scan(boss, publishQueue);
   }
 
   /** Five-minute, bounded keyset scan. Each brand/date is claimed transactionally. */
@@ -252,7 +263,7 @@ export class NotificationsService {
   }
 
   /** Claims BEFORE sending: an interrupted request is ambiguous and never auto-retried. */
-  async scan(): Promise<void> {
+  async scan(boss?: PgBoss, publishQueue = PUBLISH_QUEUE): Promise<void> {
     for (let i = 0; i < 25; i++) {
       const rows = await db
         .update(schema.notificationEvents)
@@ -281,17 +292,21 @@ export class NotificationsService {
         });
       const event = rows[0];
       if (!event) return;
-      await this.deliver(event);
+      await this.deliver(event, boss, publishQueue);
     }
   }
 
-  private async deliver(event: {
-    id: string;
-    orgId: string;
-    event: NotificationEvent;
-    subjectId: string;
-    targetId: string;
-  }) {
+  private async deliver(
+    event: {
+      id: string;
+      orgId: string;
+      event: NotificationEvent;
+      subjectId: string;
+      targetId: string;
+    },
+    boss?: PgBoss,
+    publishQueue = PUBLISH_QUEUE,
+  ) {
     let status: "sent" | "failed" | "skipped" | "attempted" = "skipped";
     let reason: NotificationDiagnosticReason | null = null;
     let attemptedSend = false;
@@ -423,36 +438,80 @@ export class NotificationsService {
                   "Open Pubrick to read and decide. Links do not approve, schedule, publish, or reject.",
                 ].join("\n")
               : (digest?.message ?? COPY[event.event]);
-            attemptedSend = true;
-            const result = await sendTelegramNotification(credentials, message, {
-              baseUrl: env.TELEGRAM_API_BASE_URL,
-              ...(draft
-                ? {
-                    buttonRows: [
-                      [
-                        { text: "Review", url: `${url}?intent=review` },
-                        { text: "Schedule", url: `${url}?intent=schedule` },
+            const prepared =
+              draft && this.initial && boss
+                ? await this.initial.prepare(event.orgId, event, boss, publishQueue)
+                : null;
+            if (prepared && this.initial) {
+              // Admission committed its single send attempt before provider I/O.
+              attemptedSend = true;
+              const result = await this.telegram.sendInitialNotification(prepared.botToken, {
+                botId: prepared.botId,
+                chatId: prepared.chatId,
+                text: [
+                  "Draft ready for review",
+                  `Brand: ${notificationLine(prepared.brandName, "Unknown brand", 100)}`,
+                  `Title: ${notificationLine(prepared.title, "Untitled draft", 160)}`,
+                  "Open Pubrick to read and decide. Reject starts a private confirmation.",
+                ].join("\n"),
+                reviewUrl: `${url}?intent=review`,
+                scheduleUrl: `${url}?intent=schedule`,
+                publishUrl: `${url}?intent=publish`,
+                rejectCallbackData: `ir:${prepared.code}`,
+              });
+              // Provider success remains success even if receipt persistence fails:
+              // logging/storage failure must never resend a successful message.
+              status =
+                result.status === "confirmed"
+                  ? "sent"
+                  : result.status === "rejected"
+                    ? "failed"
+                    : "attempted";
+              reason =
+                result.status === "confirmed"
+                  ? null
+                  : result.status === "rejected"
+                    ? "provider_rejected"
+                    : "delivery_unconfirmed";
+              try {
+                await this.initial.complete(event.orgId, prepared, result);
+              } catch {
+                this.logger.warn(
+                  `Notification ${event.id} capability receipt could not be recorded`,
+                );
+              }
+            } else {
+              attemptedSend = true;
+              const result = await sendTelegramNotification(credentials, message, {
+                baseUrl: env.TELEGRAM_API_BASE_URL,
+                ...(draft
+                  ? {
+                      buttonRows: [
+                        [
+                          { text: "Review", url: `${url}?intent=review` },
+                          { text: "Schedule", url: `${url}?intent=schedule` },
+                        ],
+                        [
+                          { text: "Publish", url: `${url}?intent=publish` },
+                          { text: "Reject", url: `${url}?intent=reject` },
+                        ],
                       ],
-                      [
-                        { text: "Publish", url: `${url}?intent=publish` },
-                        { text: "Reject", url: `${url}?intent=reject` },
-                      ],
-                    ],
-                  }
-                : {
-                    button: {
-                      text: event.event === "morning_digest" ? "Open brand" : "Open post",
-                      url,
-                    },
-                  }),
-            });
-            status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
-            reason =
-              result === "sent"
-                ? null
-                : result === "rejected"
-                  ? "provider_rejected"
-                  : "delivery_unconfirmed";
+                    }
+                  : {
+                      button: {
+                        text: event.event === "morning_digest" ? "Open brand" : "Open post",
+                        url,
+                      },
+                    }),
+              });
+              status = result === "sent" ? "sent" : result === "rejected" ? "failed" : "attempted";
+              reason =
+                result === "sent"
+                  ? null
+                  : result === "rejected"
+                    ? "provider_rejected"
+                    : "delivery_unconfirmed";
+            }
           }
         }
       }

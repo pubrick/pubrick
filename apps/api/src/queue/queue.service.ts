@@ -414,6 +414,30 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await this.boss.cancel(PUBLISH_QUEUE, live, { db });
   }
 
+  /** Fresh-draft eligibility reads actual queued AND active jobs in the caller transaction. */
+  async hasLivePublishJobs(
+    tx: Tx,
+    orgId: string,
+    adaptationIds: readonly string[],
+  ): Promise<boolean> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const connection = fromDrizzle(tx, sql);
+    for (const adaptationId of adaptationIds) {
+      // queued:true excludes active jobs in pg-boss 12; do not use it here.
+      const jobs = await this.boss.findJobs(PUBLISH_QUEUE, {
+        data: { adaptationId, orgId },
+        db: connection,
+      });
+      if (
+        jobs.some(
+          (job) => job.state === "created" || job.state === "retry" || job.state === "active",
+        )
+      )
+        return true;
+    }
+    return false;
+  }
+
   /**
    * Enqueue one generation run inside the caller's transaction: the
    * `pipeline_runs` insert and the job either both land or neither does.

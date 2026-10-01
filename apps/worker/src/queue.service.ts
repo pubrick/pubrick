@@ -255,12 +255,12 @@ export class QueueService {
       await boss.createQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
       await boss.updateQueue(MANUAL_DIGEST_QUEUE, { ...MANUAL_DIGEST_QUEUE_OPTIONS });
       await boss.work<ManualDigestJob>(MANUAL_DIGEST_QUEUE, { batchSize: 1 }, async ([job]) => {
-        if (job) await this.notifications?.sendDigest(job.data);
+        if (job) await this.notifications?.sendDigest(job.data, boss, names.publish);
       });
       await boss.createQueue("notification-scan");
       await boss.schedule("notification-scan", "* * * * *");
       await boss.work("notification-scan", { batchSize: 1 }, async () =>
-        this.notifications?.scan(),
+        this.notifications?.scan(boss, names.publish),
       );
       await boss.createQueue("notification-digest-scan");
       await boss.schedule("notification-digest-scan", "*/5 * * * *");

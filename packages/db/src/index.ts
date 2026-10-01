@@ -11,6 +11,7 @@ export {
 export { createDb } from "./client.js";
 export * from "./editorial-plan-occurrences.js";
 export * from "./editorial-plan-persistence.js";
+export * from "./editorial-snapshot.js";
 export * from "./hosted-admission.js";
 export * from "./hosted-admission-policy.js";
 export { withImageCallLock } from "./image-call-lock.js";
@@ -26,3 +27,4 @@ export type {
 export { admitPaidReplyAttempt } from "./paid-reply-admission.js";
 export * from "./resource-admission.js";
 export * as schema from "./schema/index.js";
+export * from "./telegram-fresh-draft.js";
