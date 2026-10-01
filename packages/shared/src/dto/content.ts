@@ -3,7 +3,11 @@ import { normalizeNewlines } from "../provenance.js";
 import { projectRichBody, richBodySchema } from "../rich-body.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "../telegram-photo-parts.js";
 import type { ManualPlatformId } from "./channels.js";
+import { CONTENT_ORIGINS } from "./content-origins.js";
+
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
+
+export { CONTENT_ORIGINS, type ContentOrigin } from "./content-origins.js";
 
 /**
  * DRAFT LIFECYCLE — the one declaration of it, for every package that stores,
@@ -272,13 +276,6 @@ export const PUBLISH_FAILURE_REASONS = [
   "outcome_unknown",
 ] as const;
 export type PublishFailureReason = (typeof PUBLISH_FAILURE_REASONS)[number];
-
-/**
- * Who wrote the text — `content_items.origin`, `adaptations.origin` and
- * `content_versions.origin`.
- */
-export const CONTENT_ORIGINS = ["ai", "human", "external"] as const;
-export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
 
 /**
  * How much of a body a version row holds. `full` is a whole body — the only
