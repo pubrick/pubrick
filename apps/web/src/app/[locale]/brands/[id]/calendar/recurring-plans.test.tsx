@@ -8,7 +8,7 @@ import {
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@/test/render";
+import { act, fireEvent, render, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import ru from "../../../../../../messages/ru.json";
 import { RecurringPlans } from "./recurring-plans";
@@ -199,6 +199,80 @@ describe("weekly editorial plans", () => {
     expect(pause?.body).toEqual({ expectedRevision: 2 });
     expect(editorialPlanRevisionSchema.parse(pause?.body)).toEqual(pause?.body);
   });
+  it("refreshes resumed occurrences without remounting, retaining draft and history and stopping on unmount", async () => {
+    const occurrence = {
+      id: "future-occurrence",
+      localDate: "2026-10-08",
+      localTime: "09:00",
+      timezone: "UTC",
+      scheduledAt: "2026-10-08T09:00:00.000Z",
+      offsetMinutes: 0,
+      state: "suspended",
+      reason: "plan_paused",
+      runId: null,
+    };
+    let enabled = false;
+    let materialized = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+      const current = {
+        ...plan,
+        enabled,
+        revision: enabled ? 2 : 1,
+        occurrences: [
+          materialized ? { ...occurrence, state: "planned", reason: null } : occurrence,
+        ],
+      };
+      if (url.includes("/occurrences"))
+        return response(200, { rows: [occurrence], nextCursor: null });
+      if (url.includes("/enable")) {
+        enabled = true;
+        return response(200, { ...current, enabled: true, revision: 2 });
+      }
+      return response(200, [current]);
+    });
+    const view = setup();
+    await screen.findByText(plan.name);
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(t.brief), "Unsaved editorial idea");
+    await user.click(screen.getByRole("button", { name: t.enable }));
+    await user.click(within(screen.getByRole("dialog")).getByLabelText(t.consent));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.enable }));
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: t.history }));
+    });
+    expect(
+      within(screen.getByRole("dialog")).getByText(t.reason.plan_paused, { exact: false }),
+    ).toBeInTheDocument();
+    const readsBefore = requests.filter(
+      (r) => r.method === "GET" && !r.url.includes("/occurrences"),
+    ).length;
+    materialized = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByText(t.state.planned, { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText(t.brief)).toHaveValue("Unsaved editorial idea");
+    expect(
+      within(screen.getByRole("dialog")).getByText(t.reason.plan_paused, { exact: false }),
+    ).toBeInTheDocument();
+    expect(
+      requests.filter((r) => r.method === "GET" && !r.url.includes("/occurrences")),
+    ).toHaveLength(readsBefore + 1);
+    view.unmount();
+    const total = requests.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requests).toHaveLength(total);
+  });
+
   it("previews schedule only and displays timezone offset and DST skip", async () => {
     const user = userEvent.setup();
     setup();
