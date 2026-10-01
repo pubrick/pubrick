@@ -5,6 +5,9 @@ import { hostedAiCallScope } from "../hosted-ai-call";
 import type { KnowledgeRepository } from "./knowledge.repository";
 import { KnowledgeService } from "./knowledge.service";
 
+// These flows use the repository fixture below. Mock its DI token as well so
+// importing the service cannot initialize database/environment infrastructure.
+vi.mock("./knowledge.repository", () => ({ KnowledgeRepository: class {} }));
 vi.mock("../hosted-ai-call", () => ({
   hostedAiCallScope: vi.fn(),
   throwHostedAiRefusal: (error: unknown) => {
