@@ -390,6 +390,56 @@ describe.skipIf(!parentUrl)("native saved-content reuse admission", () => {
       locker.release();
     }
   });
+  it("observed rich-body-only edit pins final source revision CAS without changing plain material or title", async () => {
+    const f = await fixture();
+    const value = await body(f);
+    const before = await connection.pool.query(
+      "select body,title,body_revision from content_items where id=$1",
+      [f.sourceId],
+    );
+    const locker = await connection.pool.connect();
+    let pending: Promise<request.Response> | undefined;
+    try {
+      await locker.query("begin");
+      const edited = await locker.query(
+        "update content_items set rich_body=$1::jsonb where id=$2 returning body,title,body_revision",
+        [
+          JSON.stringify({
+            type: "doc",
+            content: [{ type: "paragraph", content: [{ type: "text", text: "Saved master." }] }],
+          }),
+          f.sourceId,
+        ],
+      );
+      pending = post(f, "rich-body-race-operation", value).then((response) => response);
+      expect(edited.rows[0]).toEqual({
+        body: before.rows[0].body,
+        title: before.rows[0].title,
+        body_revision: before.rows[0].body_revision + 1,
+      });
+      await expect
+        .poll(
+          async () => {
+            const wait = await connection.pool.query(
+              "select count(*)::int n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query ilike '%content_items%' and query ilike '%for share%'",
+            );
+            return wait.rows[0].n;
+          },
+          { timeout: 5000 },
+        )
+        .toBeGreaterThan(0);
+      await locker.query("commit");
+      expect(await pending).toMatchObject({ status: 409, body: { code: "reuse_source_changed" } });
+      expect(await facts(f)).toEqual({ operations: 0, lineage: 0, runs: 0, jobs: 0 });
+    } finally {
+      try {
+        await locker.query("rollback");
+        await pending?.catch(() => undefined);
+      } finally {
+        locker.release();
+      }
+    }
+  });
   it.each(["null", "throw"] as const)(
     "rolls back every durable row when actual queue send %s fails",
     async (failure) => {
