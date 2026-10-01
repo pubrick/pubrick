@@ -333,7 +333,26 @@ describe.skipIf(!url)("native scoped writes and committed replay", () => {
       request(app.getHttpServer())
         .get(`/api/v2/runs/${created.body.id}`)
         .set("Authorization", `Bearer ${f.generation.key}`);
-    expect((await poll()).body.cost).toEqual({ status: "known", amountUsd: "0.250000" });
+    expect((await poll()).body.cost).toEqual({
+      status: "known",
+      amountUsd: "0.250000",
+      estimated: false,
+    });
+    await connection.db.insert(schema.usageLedger).values({
+      orgId: f.orgId,
+      runId: created.body.id,
+      step: "adapter",
+      provider: "openai",
+      modelId: "synthetic",
+      costUsd: "0.125",
+      costSource: "price_table",
+      status: "ok",
+    });
+    expect((await poll()).body.cost).toEqual({
+      status: "known",
+      amountUsd: "0.375000",
+      estimated: true,
+    });
     await connection.db
       .update(schema.pipelineRuns)
       .set({ unrecordedCalls: 1 })
@@ -343,18 +362,16 @@ describe.skipIf(!url)("native scoped writes and committed replay", () => {
       .update(schema.pipelineRuns)
       .set({ unrecordedCalls: 0 })
       .where(eq(schema.pipelineRuns.id, created.body.id));
-    await connection.db
-      .insert(schema.usageLedger)
-      .values({
-        orgId: f.orgId,
-        runId: created.body.id,
-        step: "researcher",
-        provider: "openai",
-        modelId: "synthetic",
-        costUsd: "0.25",
-        costSource: "unknown",
-        status: "ok",
-      });
+    await connection.db.insert(schema.usageLedger).values({
+      orgId: f.orgId,
+      runId: created.body.id,
+      step: "researcher",
+      provider: "openai",
+      modelId: "synthetic",
+      costUsd: "0.25",
+      costSource: "unknown",
+      status: "ok",
+    });
     expect((await poll()).body.cost).toEqual({ status: "unknown" });
     await connection.db.insert(schema.usageLedger).values({
       orgId: f.orgId,
