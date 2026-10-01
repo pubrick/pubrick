@@ -25,6 +25,8 @@ import { pendingSession, signedInSession } from "@/test/auth-client.stub";
 import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../messages/en.json";
+import es from "../../../../../messages/es.json";
+import pt from "../../../../../messages/pt.json";
 import ru from "../../../../../messages/ru.json";
 import ContentItemPage from "./page";
 
@@ -4482,6 +4484,37 @@ describe("asking the model to revise a selection (Task 8)", () => {
     expect(refineControl().getAttribute("aria-describedby")).toBe(
       screen.getByText(en.Errors.refine_needs_ai_draft).id,
     );
+  });
+
+  it.each([
+    ["en", en, "Refine is available for AI-generated drafts."],
+    ["es", es, "El refinado está disponible para borradores generados por IA."],
+    ["ru", ru, "Правки доступны для черновиков, созданных ИИ."],
+    ["pt", pt, "O refinamento está disponível para rascunhos gerados por IA."],
+  ] as const)("keeps imported Refine refusal neutral in %s", async (locale, messages, copy) => {
+    const calls: Call[] = [];
+    installBaseHandlers(
+      {
+        current: makeItem({ origin: "external", body: "Imported source text. Another sentence." }),
+      },
+      calls,
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />, { locale });
+    const field = (await screen.findByLabelText(messages.Publish.bodyLabel)) as HTMLTextAreaElement;
+    field.focus();
+    field.setSelectionRange(0, 8);
+    fireEvent.select(field);
+    const control = screen.getByRole("button", { name: messages.Publish.refine });
+    expect(control).toBeDisabled();
+    const reason = screen.getByText(copy);
+    expect(control.getAttribute("aria-describedby")).toBe(reason.id);
+    expect(reason).not.toHaveTextContent(
+      /written by hand|escribiste tú|написан вручную|escrita à mão/i,
+    );
+    await userEvent.setup().click(control);
+    expect(
+      calls.some(({ path, method }) => method === "POST" && path === "/api/content/c1/refine"),
+    ).toBe(false);
   });
 
   it("asks again with the same verb and the same range on Try again", async () => {
