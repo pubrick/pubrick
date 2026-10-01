@@ -1,8 +1,13 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
-import { encodeContentCursor } from "@pubrick/shared";
+import {
+  encodeContentCursor,
+  encodePublicContentCursorV2,
+  publicContentListV2Schema,
+} from "@pubrick/shared";
 import sharp from "sharp";
 import request from "supertest";
 import ts from "typescript";
@@ -155,6 +160,49 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
           "/api/v1/content",
           "/api/v1/content?status=draft",
           `/api/v1/content?cursor=${encodeURIComponent(justAfter(item.body.createdAt as string))}`,
+        ],
+      };
+    },
+  },
+  {
+    controller: "v2/content",
+    identify: id,
+    rows: (body) => publicContentListV2Schema.parse(body).rows,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const writeKey = await agent
+        .post("/api/api-keys")
+        .send({ name: "V2 import ratchet", scope: "content:create" })
+        .expect(201);
+      const item = await agent
+        .post("/api/v2/content")
+        .set("Authorization", `Bearer ${writeKey.body.key}`)
+        .set("Idempotency-Key", `tenant-list-${brandId}`)
+        .send({ brandId, body: "Imported public read.", channelIds: [channelId] })
+        .expect(201);
+      const key = await agent
+        .post("/api/api-keys")
+        .send({ name: "V2 list ratchet", scope: "content:read" })
+        .expect(201);
+      const detail = await agent
+        .get(`/api/v2/content/${item.body.id}`)
+        .set("Authorization", `Bearer ${key.body.key}`)
+        .expect(200);
+      const cursor = encodePublicContentCursorV2({
+        createdAt: new Date(Date.parse(detail.body.createdAt as string) + 1)
+          .toISOString()
+          .replace("Z", "000Z"),
+        id: "00000000-0000-4000-8000-000000000000",
+      });
+      return {
+        id: item.body.id as string,
+        bearer: key.body.key as string,
+        paths: [
+          "/api/v2/content",
+          "/api/v2/content?status=draft",
+          "/api/v2/content?limit=1",
+          `/api/v2/content?cursor=${encodeURIComponent(cursor)}`,
+          `/api/v2/content?status=draft&limit=1&cursor=${encodeURIComponent(cursor)}`,
         ],
       };
     },
@@ -533,7 +581,7 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
 ];
 
 describe.skipIf(!url)("every list endpoint returns only this org's rows", () => {
-  let app: INestApplication;
+  let app: NestExpressApplication;
 
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
@@ -542,7 +590,9 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
     // Migrations run once for the whole suite in vitest.global-setup.ts.
     const { AppModule } = await import("./app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication({ bodyParser: false });
+    app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+    const { installPublicWriteParser } = await import("./public-api/public-write-parser");
+    installPublicWriteParser(app);
     app.setGlobalPrefix("api");
     await app.init();
     // Listen for the whole file: supertest otherwise starts the server per
@@ -553,6 +603,38 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
 
   afterAll(async () => {
     await app.close();
+  });
+
+  it("v2/content: emitted pagination cursors stay scoped and v1 cursors are refused", async () => {
+    const endpoint = LIST_ENDPOINTS.find((entry) => entry.controller === "v2/content");
+    if (!endpoint) throw new Error("Missing v2 collection contract");
+    const owner = await orgAgent(app);
+    const first = await endpoint.seed(owner);
+    const second = await endpoint.seed(owner);
+    const stranger = await orgAgent(app);
+    const foreign = await endpoint.seed(stranger);
+    const read = (path: string, bearer = first.bearer) =>
+      owner.get(path).set("Authorization", `Bearer ${bearer}`);
+    const page = publicContentListV2Schema.parse(
+      (await read("/api/v2/content?status=draft&limit=1").expect(200)).body,
+    );
+    expect(page.rows.map(id)).toEqual([second.id]);
+    expect(page.nextCursor).toMatch(/^v2\.content\./);
+    const next = `/api/v2/content?status=draft&limit=1&cursor=${encodeURIComponent(page.nextCursor as string)}`;
+    const later = publicContentListV2Schema.parse((await read(next).expect(200)).body);
+    expect(later.rows.map(id)).toEqual([first.id]);
+    expect(later.nextCursor).toBeNull();
+    const outsider = publicContentListV2Schema.parse(
+      (await read(next, foreign.bearer).expect(200)).body,
+    );
+    expect(outsider.rows.map(id)).not.toContain(first.id);
+    expect(outsider.rows.map(id)).not.toContain(second.id);
+    await read(
+      `/api/v2/content?cursor=${encodeURIComponent(justAfter(new Date().toISOString()))}`,
+    ).expect(400);
+    await read("/api/v2/content?unknown=true").expect(400);
+    await read("/api/v2/content?limit=0").expect(400);
+    await read("/api/v2/content?status=unknown").expect(400);
   });
 
   for (const endpoint of LIST_ENDPOINTS) {

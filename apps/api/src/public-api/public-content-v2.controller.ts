@@ -13,10 +13,8 @@ import {
 } from "@nestjs/common";
 import {
   type PublicDraftCreate,
-  type PublicRunCreate,
   publicContentListQuerySchema,
   publicDraftCreateSchema,
-  publicRunCreateSchema,
 } from "@pubrick/shared";
 import { AllowAnonymous } from "@thallesp/nestjs-better-auth";
 import { ZodValidationPipe } from "../validation.pipe";
@@ -73,28 +71,5 @@ export class PublicContentV2Controller {
   @Header("Cache-Control", "private, no-store")
   get(@ApiKeyOrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
     return this.content.get(orgId, id, true);
-  }
-}
-@Controller("v2/runs")
-@AllowAnonymous()
-@RequiredApiKeyScope("generation:create")
-@RequiredApiKeyOperation("generation:create")
-@UseGuards(ApiKeyGuard, PublicRateLimitGuard)
-export class PublicRunsV2Controller {
-  constructor(private readonly writes: PublicWriteRepository) {}
-  @Post()
-  @Header("Cache-Control", "private, no-store")
-  create(
-    @ApiKeyOrgId() orgId: string,
-    @Headers("idempotency-key") key: unknown,
-    @Req() request: { rawHeaders: string[] },
-    @Body(new ZodValidationPipe(publicRunCreateSchema)) body: PublicRunCreate,
-  ) {
-    return this.writes.createRun(orgId, publicIdempotencyKey(key, request.rawHeaders), body);
-  }
-  @Get(":id")
-  @Header("Cache-Control", "private, no-store")
-  get(@ApiKeyOrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
-    return this.writes.status(orgId, id);
   }
 }
