@@ -21,6 +21,22 @@ credential encryption secrets, public origin and ports as described in
 [self-hosting](self-hosting.md). Download `release-images.env` and
 `release-manifest.json` from the same GitHub release.
 
+Before editing `.env`, validate the downloaded asset set against the version and
+full source commit recorded on the chosen release (Node.js 22.12 or newer):
+
+```sh
+node scripts/validate-release-assets.mjs --tag v0.1.0-beta.1 --source-sha FULL_40_CHARACTER_SOURCE_SHA
+```
+
+Replace both example values with the chosen release's identity. The command
+reads `release-images.env` and `release-manifest.json` in the current directory;
+use `--images` and `--manifest` for other locations. Fork maintainers can specify
+`--repository owner/repository`. It refuses missing or duplicate services, mixed
+versions or commits, mutable image tags, inconsistent digest assignments and
+incomplete platform declarations. It never evaluates the environment file or
+prints its contents. This is an offline consistency check: it does not verify
+registry attestations, anonymous pull access or actual architecture support.
+
 Copy the three `PUBRICK_*_IMAGE` assignments from `release-images.env` into `.env`.
 They reference multi-platform manifest **digests**, so later registry tag changes
 cannot silently change this installation. All three must come from one release.
@@ -76,7 +92,8 @@ the installation identity.
    SHAs. Only image jobs can write packages; only draft/manifest jobs can write
    GitHub releases. No job deploys a running instance or writes `main`.
 6. The final job attaches `release-images.env` and `release-manifest.json` to the
-   draft only after all images succeed. Review those assets, set package visibility
+   draft only after all images succeed. Validate those assets with the command
+   above, review them, set package visibility
    and test a disposable install, upgrade and restore using the exact digest
    references. Confirm both architectures before claiming both were tested.
 7. Add the reviewed release notes and publish the draft as a separate deliberate

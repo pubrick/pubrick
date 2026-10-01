@@ -60,6 +60,11 @@ for test scope and follow-up fixes. The current-schema hosted recovery extension
 rotated encryption keys, retained storage and billing receipts; see the
 [recovery acceptance record](reviews/2026-09-30-hosted-recovery.md). No versioned
 images or release have been published yet, so release acceptance remains pending.
+The offline release-asset validator checks that the three downloaded digest
+assignments match one expected version/source manifest before installation;
+see [operator installation](releases.md#operator-installation). Registry access,
+architecture execution and published release acceptance still require their
+separate checks.
 
 ## Iteration 2 — common LLM providers
 
