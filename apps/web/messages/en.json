@@ -1867,7 +1867,17 @@
     "public_operation_capacity": "This workspace has reached its lifetime API operation capacity. Contact the operator.",
     "public_rate_limited": "Too many API requests. Wait, then retry with the same idempotency key and payload.",
     "public_request_unavailable": "API request admission is unavailable. Retry later with the same idempotency key and payload.",
-    "public_authority_revoked": "This key no longer authorizes the operation or its workspace targets. Check the key scope, revocation and selected targets."
+    "public_authority_revoked": "This key no longer authorizes the operation or its workspace targets. Check the key scope, revocation and selected targets.",
+    "editorial_plan_session_required": "Sign in to manage recurring plans.",
+    "editorial_plan_not_found": "This editorial plan no longer exists.",
+    "editorial_plan_revision_conflict": "The plan changed. Reload it before trying again.",
+    "editorial_plan_removed": "This plan has been removed.",
+    "editorial_plan_already_enabled": "This plan is already enabled.",
+    "editorial_plan_limit": "A brand may have at most five plans. Remove a plan to add another.",
+    "editorial_plan_retention_capacity": "Retained occurrence capacity has been reached.",
+    "editorial_plan_channels_missing": "Select existing channels belonging to this brand.",
+    "calendar_recurring_slot": "Edit or pause this recurring plan from Calendar.",
+    "editorial_plan_authority_revoked": "Your session or access to this brand changed. Reload before trying again."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

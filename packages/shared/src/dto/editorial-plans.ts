@@ -171,3 +171,8 @@ export const editorialPlanOccurrencesPageSchema = z.strictObject({
   nextCursor: z.uuid().nullable(),
 });
 export type EditorialPlanOccurrencesPage = z.infer<typeof editorialPlanOccurrencesPageSchema>;
+
+export const editorialPlanRemoveResultSchema = z.strictObject({
+  removed: z.literal(true),
+  revision: z.number().int().positive(),
+});

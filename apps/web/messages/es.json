@@ -1867,7 +1867,17 @@
     "public_operation_capacity": "Este espacio alcanzó su límite total de operaciones API. Contacta al operador.",
     "public_rate_limited": "Demasiadas solicitudes API. Espera y repite con la misma clave de idempotencia y los mismos datos.",
     "public_request_unavailable": "La admisión de solicitudes API no está disponible. Repite más tarde con la misma clave y los mismos datos.",
-    "public_authority_revoked": "Esta clave ya no autoriza la operación o sus destinos. Revisa los permisos, la revocación de la clave y los destinos seleccionados."
+    "public_authority_revoked": "Esta clave ya no autoriza la operación o sus destinos. Revisa los permisos, la revocación de la clave y los destinos seleccionados.",
+    "editorial_plan_session_required": "Inicia sesión para gestionar planes recurrentes.",
+    "editorial_plan_not_found": "Este plan editorial ya no existe.",
+    "editorial_plan_revision_conflict": "El plan cambió. Recárgalo antes de volver a intentarlo.",
+    "editorial_plan_removed": "Este plan se ha eliminado.",
+    "editorial_plan_already_enabled": "Este plan ya está habilitado.",
+    "editorial_plan_limit": "Una marca puede tener hasta cinco planes. Elimina uno para añadir otro.",
+    "editorial_plan_retention_capacity": "Se alcanzó el límite de ocurrencias conservadas.",
+    "editorial_plan_channels_missing": "Selecciona canales existentes de esta marca.",
+    "calendar_recurring_slot": "Edita o pausa este plan recurrente desde Calendario.",
+    "editorial_plan_authority_revoked": "Tu sesión o acceso a esta marca cambió. Recarga antes de volver a intentarlo."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",

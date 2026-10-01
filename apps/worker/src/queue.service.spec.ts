@@ -590,3 +590,50 @@ describe("QueueService.registerAll", () => {
     });
   });
 });
+
+it("registers one global recurring scan and durable scoped materialization without per-plan crons", async () => {
+  const { EDITORIAL_PLAN_QUEUE, EDITORIAL_PLAN_QUEUE_OPTIONS, EDITORIAL_PLAN_SCAN_QUEUE } =
+    await import("@pubrick/shared");
+  const boss = bossStub();
+  const { publish, generate } = serviceStub();
+  const planner = { scan: vi.fn(), handle: vi.fn() };
+  const service = new QueueService(
+    publish as never,
+    generate as never,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    planner as never,
+  );
+  await service.registerAll(boss as never);
+  expect(boss.schedule).toHaveBeenCalledWith(EDITORIAL_PLAN_SCAN_QUEUE, "* * * * *");
+  expect(boss.createQueue).toHaveBeenCalledWith(EDITORIAL_PLAN_QUEUE, {
+    ...EDITORIAL_PLAN_QUEUE_OPTIONS,
+  });
+  expect(boss.updateQueue).toHaveBeenCalledWith(EDITORIAL_PLAN_QUEUE, {
+    ...EDITORIAL_PLAN_QUEUE_OPTIONS,
+  });
+  const scan = boss.work.mock.calls.find(
+    (call) => call[0] === EDITORIAL_PLAN_SCAN_QUEUE,
+  )?.[2] as () => Promise<void>;
+  const consume = boss.work.mock.calls.find((call) => call[0] === EDITORIAL_PLAN_QUEUE)?.[2] as (
+    jobs: { data: { orgId: string; brandId: string; planId: string } }[],
+  ) => Promise<void>;
+  await scan();
+  await consume([{ data: { orgId: "org", brandId: "brand", planId: "plan" } }]);
+  expect(planner.scan).toHaveBeenCalledOnce();
+  expect(planner.handle).toHaveBeenCalledWith({ orgId: "org", brandId: "brand", planId: "plan" });
+});

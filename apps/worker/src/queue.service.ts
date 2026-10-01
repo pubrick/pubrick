@@ -6,6 +6,10 @@ import {
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,
   type ClaimReviewJob,
+  EDITORIAL_PLAN_QUEUE,
+  EDITORIAL_PLAN_QUEUE_OPTIONS,
+  EDITORIAL_PLAN_SCAN_QUEUE,
+  type EditorialPlanJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
@@ -58,6 +62,7 @@ import type { PgBoss } from "pg-boss";
 import { AuthMailService } from "./auth-mail/auth-mail.service";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { EditorialPlanPlannerService } from "./calendar/editorial-plan-planner.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
 import { ChannelHealthService } from "./channels/channel-health.service";
 import { ClaimReviewService } from "./claim-review/claim-review.service";
@@ -174,6 +179,7 @@ export class QueueService {
     @Optional() private readonly paidReplies?: PaidReplyService,
     @Optional() private readonly channelHealth?: ChannelHealthService,
     @Optional() private readonly authMail?: AuthMailService,
+    @Optional() private readonly editorialPlans?: EditorialPlanPlannerService,
   ) {}
 
   /** Seam for job registration; later plans add real queues alongside heartbeat. */
@@ -485,6 +491,22 @@ export class QueueService {
       await boss.work("calendar-scan", { batchSize: 1 }, async () => {
         await this.calendar?.scan(boss);
       });
+    }
+    if (this.editorialPlans && names === DEFAULT_QUEUE_NAMES) {
+      await boss.createQueue(EDITORIAL_PLAN_SCAN_QUEUE);
+      await boss.schedule(EDITORIAL_PLAN_SCAN_QUEUE, "* * * * *");
+      await boss.work(EDITORIAL_PLAN_SCAN_QUEUE, { batchSize: 1 }, async () => {
+        await this.editorialPlans?.scan();
+      });
+      await boss.createQueue(EDITORIAL_PLAN_QUEUE, { ...EDITORIAL_PLAN_QUEUE_OPTIONS });
+      await boss.updateQueue(EDITORIAL_PLAN_QUEUE, { ...EDITORIAL_PLAN_QUEUE_OPTIONS });
+      await boss.work<EditorialPlanJob>(
+        EDITORIAL_PLAN_QUEUE,
+        { batchSize: 1, groupConcurrency: 1 },
+        async ([job]) => {
+          if (job) await this.editorialPlans?.handle(job.data);
+        },
+      );
     }
     if (this.topicPlanner && names === DEFAULT_QUEUE_NAMES) {
       await boss.createQueue("topic-planning-scan");

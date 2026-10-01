@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AuthMailModule } from "./auth-mail/auth-mail.module";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
+import { EditorialPlanPlannerService } from "./calendar/editorial-plan-planner.service";
 import { TopicPlannerService } from "./calendar/topic-planner.service";
 import { ChannelHealthService } from "./channels/channel-health.service";
 import { ClaimReviewWorkerRepository } from "./claim-review/claim-review.repository";
@@ -48,6 +49,7 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     RssRepository,
     RssService,
     CalendarService,
+    EditorialPlanPlannerService,
     TopicPlannerService,
     ChannelHealthService,
     TelegramReader,

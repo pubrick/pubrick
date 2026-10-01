@@ -1867,7 +1867,17 @@
     "public_operation_capacity": "Este espaço atingiu seu limite total de operações API. Contate o operador.",
     "public_rate_limited": "Muitas solicitações API. Aguarde e repita com a mesma chave de idempotência e os mesmos dados.",
     "public_request_unavailable": "A admissão de solicitações API está indisponível. Tente mais tarde com a mesma chave e os mesmos dados.",
-    "public_authority_revoked": "Esta chave não autoriza mais a operação ou seus destinos. Confira as permissões, a revogação da chave e os destinos selecionados."
+    "public_authority_revoked": "Esta chave não autoriza mais a operação ou seus destinos. Confira as permissões, a revogação da chave e os destinos selecionados.",
+    "editorial_plan_session_required": "Entre na conta para gerenciar planos recorrentes.",
+    "editorial_plan_not_found": "Este plano editorial não existe mais.",
+    "editorial_plan_revision_conflict": "O plano mudou. Recarregue antes de tentar novamente.",
+    "editorial_plan_removed": "Este plano foi removido.",
+    "editorial_plan_already_enabled": "Este plano já está ativado.",
+    "editorial_plan_limit": "Uma marca pode ter até cinco planos. Remova um para adicionar outro.",
+    "editorial_plan_retention_capacity": "O limite de ocorrências mantidas foi atingido.",
+    "editorial_plan_channels_missing": "Selecione canais existentes desta marca.",
+    "calendar_recurring_slot": "Edite ou pause este plano recorrente no Calendário.",
+    "editorial_plan_authority_revoked": "Sua sessão ou acesso a esta marca mudou. Recarregue antes de tentar novamente."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",

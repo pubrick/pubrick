@@ -88,3 +88,12 @@ export function calculateEditorialPlanOccurrences(
   }
   return { calculatedAt: clock.toJSDate().toISOString(), occurrences };
 }
+
+/** The server's calendar date in a plan zone, also used for the ended summary. */
+export function editorialPlanLocalDate(timezone: string, now: Date): string {
+  if (timezone !== "UTC" && (/^[+-]/.test(timezone) || !IANAZone.isValidZone(timezone)))
+    throw new RangeError("Use an IANA time zone");
+  const date = DateTime.fromJSDate(now, { zone: timezone }).toISODate();
+  if (!date) throw new RangeError("Use a valid fixed UTC clock");
+  return date;
+}
