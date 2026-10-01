@@ -109,6 +109,13 @@ and the one built-browser journey. Failed original commands and filtered
 affected rechecks remain distinguished above. This is not a claim that one
 full workspace command returned success.
 
+The CI test step was subsequently aligned with the verified native runner by
+setting its explicit `DATABASE_URL` to the same synthetic loopback database as
+`TEST_DATABASE_URL`. This supplies collection-time server environment validation
+for the five suites rechecked above. Independent source review and YAML parsing
+passed; workflow triggers, permissions and billing isolation did not change.
+The earlier PR-head CI result remains separate from this configuration fix.
+
 ## Browser and independent guard evidence
 
 The [built browser journey](2026-10-01-recurring-browser-acceptance.md) passed
