@@ -35,7 +35,7 @@ jobs:
         env:
           POSTGRES_USER: test
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: pubrick_test
+          POSTGRES_DB: pubrick_ci_test
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U test"
@@ -84,12 +84,12 @@ jobs:
           BILLING_POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: >-
           docker exec "$BILLING_POSTGRES_CONTAINER_ID"
-          psql -X --set=ON_ERROR_STOP=1 --username test --dbname pubrick_test
+          psql -X --set=ON_ERROR_STOP=1 --username test --dbname pubrick_ci_test
           --command "CREATE DATABASE pubrick_billing_test"
       - run: pnpm exec turbo run test --force --concurrency=1
         env:
-          DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
-          TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
+          DATABASE_URL: postgres://test:test@localhost:5432/pubrick_ci_test
+          TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_ci_test
           BILLING_TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_billing_test
           PUBRICK_BILLING_DISPOSABLE: "1"
           BETTER_AUTH_SECRET: pubrick-test-secret
