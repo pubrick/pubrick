@@ -35,8 +35,12 @@ context test skipped. That skip is not container evidence.
 
 Actual ARM64 Docker image construction and disposable image-backed installation
 are tracked separately. The first build attempt from the working directory was
-canceled during context transfer before application compilation. A retry uses
-a clean archive of `894fd918`; neither result proves a successful image build.
+canceled during context transfer before application compilation. A retry used
+a clean archive of `894fd918` and completed dependency installation in about
+12 minutes. It reached JavaScript package compilation and declaration builds,
+then was intentionally stopped after the packaging fix superseded its source.
+The owned temporary archive was removed. Neither attempt proves a successful
+image build, and no runtime acceptance is claimed.
 Full image construction and runtime checks must use the corrected source before
 release acceptance. AMD64 execution, anonymous registry pulls, versioned image
 publication and real payment sandbox verification remain unverified.
