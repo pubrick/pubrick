@@ -2440,7 +2440,8 @@ describe.skipIf(!url)("GenerateService (real DB + mock model)", () => {
             message: `the key ${QUIET_KEY} is not authorized for this model`,
             url: "https://example.invalid/v1",
             requestBodyValues: {},
-            statusCode: 403,
+            // Authentication failure: a 403 may instead mean valid-key model permissions.
+            statusCode: 401,
           });
         },
       });

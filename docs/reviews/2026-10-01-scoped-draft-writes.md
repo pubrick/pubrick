@@ -112,3 +112,21 @@ configuration are separate acceptance requirements. Browser journeys use
 isolated accounts and cannot establish a successful session in the user's
 in-app browser, whose automation transport was unavailable. The previously
 verified saved Google connection is separate provider evidence.
+
+## Native CI follow-up
+
+The first PR CI run failed one worker database test (620 passed, one failed)
+before the API test task could complete. Its quiet-credential redaction fixture
+returned HTTP 403 but asserted `invalid_key`. The maintained classifier
+correctly reserves that code for HTTP 401; 403 may mean a valid credential
+lacks model or project permission.
+
+The exact failure was reproduced locally against an owned disposable PostgreSQL
+instance. Only the synthetic status was changed to 401, with an explanatory
+comment. Every existing redaction, provider-prose and stored-code assertion was
+retained. Independent review approved the fixture correction. The entire
+provider-error-prose group then passed all four native tests, and all 49
+classifier tests passed; worker types and the affected file's Biome check passed.
+The database was removed. Production classification and compiled application
+source were not changed. The updated PR receives its ordinary final CI run;
+no workflow rerun was manually dispatched.
