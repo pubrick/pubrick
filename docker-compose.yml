@@ -137,6 +137,9 @@ services:
     restart: unless-stopped
 
   web:
+    environment:
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
+      PUBLIC_SITE_INDEXING: ${PUBLIC_SITE_INDEXING:-false}
     build: { context: ., dockerfile: docker/web.Dockerfile }
     # The one port meant to be reached from outside the host; put your TLS
     # terminator in front of it. Override the host side in .env if 3000 is

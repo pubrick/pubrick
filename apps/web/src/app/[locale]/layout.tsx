@@ -12,8 +12,8 @@ export function generateStaticParams() {
 // locale serves the same one, there is no per-locale manifest.
 export const metadata: Metadata = {
   title: "Pubrick",
-  description:
-    "Pubrick — AI content factory: news in, drafts out, review queue, publish everywhere.",
+  description: "Pubrick — an open-source content studio for sources, AI drafts and human review.",
+  robots: { index: false, follow: false },
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

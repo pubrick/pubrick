@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+/* Public studio: the application's semantic colors, with editorial composition. */
+.public-container { width: min(100%, 80rem); margin-inline: auto; padding-inline: 1.25rem; }
+.public-site a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+.public-skip { position: fixed; z-index: 100; inset: 0.5rem auto auto 0.5rem; background: var(--color-panel); color: var(--color-fg); padding: 0.75rem 1rem; border: 2px solid var(--color-accent); }
+.public-skip:not(:focus) { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; white-space: nowrap; padding: 0; border: 0; }
+.public-hero { display: grid; gap: 3rem; padding-block: 4rem; }
+.public-eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); line-height: 1.6; }
+.public-title { font-size: clamp(2.6rem, 6.2vw, 5.8rem); font-weight: 600; letter-spacing: -0.055em; line-height: 1.06; text-wrap: balance; overflow-wrap: break-word; }
+.public-heading { font-size: clamp(2rem, 3.8vw, 3.3rem); font-weight: 600; letter-spacing: -0.04em; line-height: 1.15; text-wrap: balance; }
+.public-lead { font-size: 1.125rem; line-height: 1.7; color: var(--color-fg-secondary); text-wrap: pretty; }
+.public-statement { font-family: Georgia, "Times New Roman", serif; font-size: clamp(2.7rem, 5.5vw, 5rem); letter-spacing: -0.03em; line-height: 1.12; text-wrap: balance; }
+.public-example { min-width: 0; align-self: center; }
+.public-example-source { width: 92%; padding: 1.5rem 1.75rem; border-left: 3px solid var(--color-accent); background: var(--color-bg-sunken); }
+.public-example-draft { position: relative; margin-top: -0.5rem; margin-left: 1rem; padding: 1.5rem; border: 1px solid var(--color-border); background: var(--color-panel); }
+@media (min-width: 640px) { .public-container { padding-inline: 2rem; } .public-lead { font-size: 1.25rem; } }
+@media (min-width: 1024px) {
+  .public-hero { grid-template-columns: 1.25fr 1fr; gap: 4rem; padding-block: 6rem 7rem; }
+
+}
+
 /*
  * Pubrick design tokens — two layers.
  * Primitives never appear in components; semantic tokens do, via Tailwind.

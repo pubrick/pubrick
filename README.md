@@ -102,6 +102,14 @@ your own HTTPS endpoint, with delivery history and explicit unknown outcomes.
   self-hosted generation at your own API cost.
 - **Own it** — AGPL-3.0, docker compose, Postgres as the only stateful service.
 
+## Public website
+
+The installation includes a public product website at `/en`, with product,
+use-case, open-source, hosting and documentation pages in four languages.
+English is the source language. See [website configuration and search indexing](docs/public-website.md).
+The hosted service remains in development; payments are deferred and the site
+makes no live paid offer.
+
 ## Quickstart (self-hosted)
 
 Requires Docker with Compose v2.

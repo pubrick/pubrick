@@ -1,9 +1,9 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PublicAuthActions as LandingPage } from "@/components/public-site/auth-actions";
 import { routerMock } from "@/test/next-navigation.stub";
 import { render, screen, waitFor } from "@/test/render";
 import en from "../../../messages/en.json";
-import LandingPage from "./page";
 
 vi.mock("@/lib/auth-client", () => ({
   authClient: {
