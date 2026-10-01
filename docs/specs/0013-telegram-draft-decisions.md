@@ -1,0 +1,450 @@
+# Telegram draft decisions
+
+Status: proposed; independent source-grounded review closed three concrete
+setup, snapshot/authority and delivery-history findings. Implementation,
+concrete quotas/retention and new deletion cascades remain review gates. No callback
+decision, Telegram identity binding, webhook, migration or interface described
+below is implemented by this document.
+Date: 2026-10-01.
+
+## 1. First slice and existing code
+
+Provide one interactive action: **Reject**, for a fresh, unsent draft.
+The first notification button starts a private confirmation flow. It does not
+reject the draft. The bound editor must explicitly confirm in their private
+conversation with the same bot. Keep Review, Schedule and Publish as existing
+Pubrick URLs. Do not add Telegram approval, scheduling, publication, generation,
+or paid consent in this slice.
+
+This distinction follows the actual domain operation:
+
+| Existing source | Relevant contract |
+| --- | --- |
+| `apps/worker/src/notifications/notifications.service.ts`, `deliver` | Durable outbound notification claim; draft buttons currently contain URLs and explicitly perform no decision. |
+| `packages/integrations/src/telegram-notification.ts`, `sendTelegramNotification` | URL-only keyboard, one send attempt, explicit sent/rejected/unknown outcome. It currently discards Telegram message IDs. |
+| `packages/db/src/schema/notifications.ts` | One encrypted bot-token/chat destination per organization; this is not a human identity binding. |
+| `apps/api/src/content/content.repository.ts`, `approve` | Approval admits delivery jobs or manual publication readiness. Calling it would expand this slice into publication. |
+| Same repository, `reject` | Owns rejection state, cancellation, delivery-claim protection and prompt decision journaling. Reuse this implementation in one transaction. |
+| `apps/api/src/client-review/client-review.repository.ts` | Existing full editorial snapshot, compatible hash, adaptation-before-item locks and one-shot client verdict. A guest verdict is not a Telegram actor authorization. |
+| `apps/api/src/auth.ts`, `org/active-org.guard.ts`, `request-authority-admission.ts` | Pubrick sessions, current membership, brand grants and editor capability. Telegram identity is absent. |
+| `apps/api/src/sources/telegram-login.repository.ts` | Organization-owned MTProto source-monitoring login. Its session cannot authenticate a Telegram Bot API callback editor. |
+
+Use the existing organization notification bot and maintained HTTP transport.
+No new bot framework, LLM gateway, separate service or MTProto dependency is
+required. Add a narrowly typed Bot API transport for setup, acknowledgment and
+private confirmation; preserve the existing notification sender's semantics.
+
+## 2. Bot ownership and webhook setup
+
+Interactive decisions are an explicit manager opt-in. Resolve the configured
+token with `getMe`; store the verified bot ID as a canonical decimal string,
+separate from its encrypted token. Enforce one active **inbound owner** per bot
+ID across organizations, retaining reserved/uncertain claims until explicitly
+released. A token change is a revisioned operation; never infer bot identity
+from the token's prefix or username.
+
+Outbound-only notification configurations may continue sharing a bot: a token
+or destination gives no identity binding or decision authority. Do not decrypt
+every legacy workspace's token or change existing notification behavior merely
+to enable inbound ownership for one organization. Both interactive setup and
+notification credential replacement for an interactive owner use the same
+identity/generation registry. A verified bot already claimed for inbound use
+by another organization cannot be enabled here. The sole inbound handler's
+namespace includes its owning organization; ignore foreign/bare commands and
+refuse capabilities or bindings from other organizations, even when they use
+the same outbound bot. Sharing a bot is thus not sharing domain authority.
+
+Only HTTPS on a configured public origin is accepted. Each setup generation has
+an unpredictable route identifier and a fresh random `secret_token` within the
+documented character/length contract. Hash the inbound secret for comparison;
+keep any value needed for an uncertain setup retry encrypted. The route ID is
+not authentication. Check the exact secret header before parsing a bounded
+update body; do not log token-bearing URLs, headers, start codes or callbacks.
+
+Setup is a fenced state machine, with network calls outside database locks.
+Database generation compare-and-set alone does not fence Telegram: a delayed
+old `setWebhook` can overwrite a newer route, and a delayed `deleteWebhook` can
+erase it. Maintain one durable remote-mutator lane per verified bot ID, shared
+by setup, rotation and disconnect across API replicas. Persist the claimed
+attempt before network I/O. Never reclaim an uncertain lane merely because a
+lease or local HTTP deadline elapsed; neither proves remote completion.
+
+Within that lane:
+
+1. In a short parent-first transaction, verify manager authority, reserve the
+   verified bot identity and desired setup generation. Disable decisions from
+   the superseded generation and invalidate its capabilities.
+2. Outside locks, inspect `getWebhookInfo`. An existing nonempty webhook URL is
+   accepted only if it exactly matches a route generation already owned by this
+   installation and organization. Refuse foreign URLs; never delete or replace
+   another application's webhook. Do not enable `getUpdates` alongside webhook.
+3. Call `setWebhook` with the desired URL and secret, preserving pending updates
+   rather than dropping them by default. Record its result through a generation
+   compare-and-set: confirmed, rejected, or uncertain. A late response cannot
+   revive a disabled or replaced configuration.
+4. An uncertain HTTP result remains **setup uncertain**, not ready. Read
+   `getWebhookInfo` to detect absent/foreign/old/desired routes. That response
+   does not expose the installed secret: matching URL alone cannot certify a
+   secret rotation. A same-generation retry may repeat only the exact same
+   URL, secret and request options, after a fresh ownership check; a successful
+   identical retry or valid secret-authenticated inbound probe can establish
+   operation of that same desired configuration. They do not prove an earlier
+   unknown request has finished. Such an unresolved attempt continues to block
+   any newer generation, secret change, destructive call or ownership release.
+   Identical delayed installs are harmless only while that exact configuration
+   remains desired. A probe never bypasses subsequent decision checks.
+5. Disable/release is also revisioned. Mark local decision authority disabled
+   first. Remove only the verified owned webhook outside locks, with an honest
+   uncertain outcome and reconciliation. Retain the identity claim until all
+   prior remote attempts are settled and the owned remote configuration is
+   confirmed removed; do not create a second owner while cleanup is uncertain.
+   A late delete must never race an enabled successor.
+
+If a predecessor's completion cannot be established, leave remote mutation
+blocked and keep its ownership reservation. `getWebhookInfo`, two matching
+polls, elapsed time, socket closure and process restart are not completion
+barriers. The Bot API offers no application fencing token for old setup calls.
+Local disable/revocation still takes effect immediately, with no network wait;
+the existing URL-only notification path can continue. An operator may move to
+a separately verified new bot ID while the old bot remains quarantined. Reusing
+the same bot for a different generation after irreducibly uncertain mutation
+requires a separately reviewed provider/control-plane recovery procedure; this
+document does not invent an automatic proof. Display that restriction explicitly
+instead of calling the uncertain bot fully reconciled or ready for rotation.
+
+Webhook delivery may begin before setup finalization. An armed desired route
+can persist a bounded authenticated probe; it cannot apply decisions until its
+generation is active. Retryable admission failure returns non-2xx. Do not return
+2xx before durable update acceptance or a durable terminal refusal. Operator
+instructions must cover reachable HTTPS, proxy body limits and secret headers;
+an outbound-only bot configuration does not imply an inbound webhook works.
+
+## 3. Explicit human account binding
+
+Bindings are scoped by organization, verified bot ID and Pubrick user, and store
+Telegram user ID plus the verified private chat ID. Telegram names/usernames
+are display metadata only. No binding can arise from a group notification,
+chat membership, matching username, arbitrary supplied numeric ID or the
+organization's private-source account.
+
+Two phases prove control of both accounts:
+
+1. A signed-in Pubrick user with current workspace membership requests a
+   five-minute binding challenge in their own settings. Store only its random
+   code hash, user/org/bot generation, expiration and state. Limit issuance per
+   user and organization. A `t.me/<bot>?start=<opaque-code>` link uses a random
+   base64url payload no longer than 64 characters and contains no user/org ID.
+2. The authenticated webhook accepts `/start` only in a private conversation
+   with a non-bot sender. Atomically record that challenge's Telegram `from.id`
+   and private chat ID once; do not create a binding yet. Repeated matching
+   claims acknowledge the same candidate; a different claimant is refused.
+3. The original Pubrick user returns to the signed-in confirmation page. Show
+   the candidate's escaped display name and stable numeric identity, workspace
+   and bot. Explicit confirmation rechecks a real current Pubrick session,
+   same user/organization, challenge freshness, active bot generation and
+   current membership. Consume the challenge and write the binding atomically.
+   A Telegram claim alone cannot bind to someone else's logged-in browser.
+
+Permit at most one active Telegram identity per Pubrick user/org/bot, and one
+active Pubrick user per Telegram user/org/bot. Reject conflicting replacement;
+require explicit unlink/rebind. A person can unlink their own binding; managers
+can revoke workspace bindings without taking over their identity. Revocation
+invalidates outstanding actor capabilities and wins under the same binding
+lock as decisions. Organization/user deletion cascades binding secrets and
+challenges. Membership removal or role/grant changes need not delete identity
+metadata, but immediately remove decision authority.
+
+Expose own binding in the existing Settings → Notifications location without
+adding duplicate settings or sidebar destinations. Ordinary members/editors
+must be able to read/create/confirm/revoke their own binding. Keep credentials,
+webhook setup, organization history and digest controls manager-only, including
+their current endpoint guards. A shared page can show the own-binding section
+and conditionally fetch/render manager controls; a page visit must not grant
+access to configuration APIs. Own-binding endpoints derive the user from a real
+session, never an arbitrary requested user ID.
+
+Possession of a leaked start link proves neither Pubrick account ownership nor
+consent. The web confirmation protects that boundary; the user must recognize
+the displayed Telegram identity. Rate limits, short expiry and safe display
+remain necessary against challenge flooding and misleading display names.
+
+### Maintained authentication alternatives
+
+Evaluate Telegram's current official OIDC login and Better Auth's maintained
+Generic OAuth plugin rather than adopting the archived login widget or writing
+a custom OAuth/JWT/signature verifier. Pubrick already uses Better Auth 1.7.1;
+the workspace also contains maintained `jose` 6 for needs outside the auth
+plugin. Those are the preferred building blocks if provider identity login or
+account linking becomes a separate product feature.
+
+OIDC is not required as a second binding flow for this initial slice. It needs
+BotFather OIDC client registration and allowed URL configuration, whereas the
+proposed Start + real Pubrick-session confirmation works with the existing
+organization bot and proves an actual reachable private chat for confirmation.
+The latter is a narrow product capability, using existing Node crypto for
+random opaque codes/hashes, shared Zod validation, existing Bot API transport
+and Better Auth session checks. It is not a homemade authentication engine or
+signed Telegram login protocol. Do not add a bot framework merely to parse two
+strict inbound update shapes.
+
+Future OIDC linking must verify issuer, audience, nonce/state and tokens through
+the maintained plugin, preserve existing account-linking/session security, and
+explicitly prove any mapping to Bot API user identity. Telegram's official
+examples use an OIDC `sub` and Telegram user ID that differ: never assume
+`sub === callback_query.from.id`, convert one into the other or make a username
+their common key. An OIDC identity alone also does not prove the user has opened
+a private conversation with this organization bot. Reconcile those independent
+claims through an explicitly verified provider contract before authorizing a
+callback or sending a private confirmation.
+
+## 4. Notification and private confirmation capabilities
+
+For an active bot and eligible draft, replace the existing **Reject** URL button
+with one **Reject** callback button. Keep Review, Schedule and Publish URLs. For
+disabled or ineligible interactive handling, retain the existing Reject URL
+fallback; never display duplicate rejection controls. The sender creates the capability before network
+I/O and binds it to organization, bot generation, destination chat, item/brand,
+snapshot hash/version and an expiry no later than 30 minutes. Store only its
+token hash. Use 32 random bytes encoded base64url with a short fixed action
+prefix: the UTF-8 callback value must fit the Bot API's 1–64 byte limit.
+
+This initial capability starts confirmation only. It may serve more than one
+authorized editor without allowing the first unbound or unauthorized group
+member to consume everyone else's opportunity. Bound pending confirmations
+per item/editor, webhook update and organization; expired capabilities cannot
+issue new confirmations. After a terminal decision, invalidate the initial
+capability and all sibling confirmations.
+
+For an authenticated initial callback:
+
+- Require the expected bot generation and original destination message/chat;
+  inline-message callbacks and inaccessible message variants are refused.
+  Record the original message ID from a confirmed send. For an unknown send,
+  accept its first observed message ID only under the same authenticated
+  bot-message/chat/token checks described for private confirmation below;
+  never automatically resend to obtain an ID.
+- Resolve `callback_query.from.id` to a current binding and freshly authorize
+  workspace membership, brand access and editor capability. Group chat ID is
+  not user identity. Refuse unbound/unauthorized senders with generic guidance
+  to account settings; expose no draft body or another user's identity.
+- Compare the initial snapshot to current eligible content before issuing a
+  private actor-specific confirmation. Do not refresh silently after an edit.
+- Send the confirmation only to that binding's private chat. Show draft title,
+  brand, a bounded safe excerpt and a **Review in Pubrick** URL, then explicit
+  **Reject** and **Cancel** controls. The heading and disclosure make this an
+  explicit confirmation of the displayed draft. Telegram metadata/excerpts are
+  an additional disclosure to the configured bot provider; make opt-in clear.
+
+The final capability binds the initial snapshot and action to the exact
+organization/bot/binding/user/private chat. Forwarding it to another chat or
+clicking as another actor cannot apply it. Acknowledging Cancel consumes only
+that actor's confirmation; it changes no content or queue.
+
+Private confirmation delivery uses one claimed send attempt. Preserve
+sent/rejected/unknown outcomes and retain a returned message ID when available.
+An unknown send is not automatically repeated. If the message actually arrived,
+its capability can still be confirmed only by its bound actor, in its intended
+private chat, from an authenticated callback on a message sent by the same bot.
+When the send response lacked a message ID, that validated callback can record
+the observed ID under the capability lock; arbitrary caller-supplied IDs cannot
+complete this reconciliation. This rule must receive a native regression test.
+
+## 5. Snapshot and fresh-draft eligibility
+
+Extract the existing client-review snapshot projection and hash into a shared
+API domain helper. Preserve byte-for-byte hashes for previously issued client
+review links, including conditional omission of zero image revision and absent
+video. Do not introduce a parallel incomplete Telegram serializer. Keep explicit
+projection fields and stable adaptation ordering; the existing hash covers
+title, master, cover/video identity, image revision and channel adaptation IDs,
+names, platforms and effective bodies.
+
+Telegram capabilities additionally bind item ID, brand ID, organization, action
+and hash version. Status and delivery eligibility are fresh predicates, not a
+reason to change legacy client-review hashes. Require at final consumption:
+
+- Parent status exactly `draft`; the item and every channel/adaptation still
+  belong to the bound organization and brand, with an active target channel.
+- Every adaptation is `pending`, unscheduled, with zero attempts; no active
+  claim, publication receipt/history, queue-backed delivery or manual-ready
+  handoff. Unknown or historical delivery evidence is a refusal.
+- The parent `is_safe_to_delete` marker must be true. Existing deletion uses
+  this durable marker to remember delivery history after channel/adaptation
+  removal and to refuse unverifiable historical rows. Zero receipts among
+  surviving adaptations alone does not prove no publication history.
+- At least one current adaptation, a matching complete editorial snapshot,
+  and current actor/binding/bot authorization.
+
+Refuse approved, rejected, failed, archived, scheduled, published and partially
+published content. The existing web rejection workflow still owns its broader
+cases. A stale Telegram confirmation asks the person to review the current draft
+and start again; it never rejects newer content based on an old notification.
+Do not stamp `firstOpenedAt` merely because an alert or callback was received.
+
+## 6. One atomic domain decision and lock order
+
+Extract `ContentRepository.reject` into a transaction-taking domain method such
+as `rejectInTx`, with the existing public wrapper preserving its return shape,
+guard semantics and broader behavior. Telegram does not call a second rejection
+implementation, nest an independent transaction, or fabricate session cookies,
+session IDs or `RequestAuthority.kind = "session"`.
+
+Extract/reuse the common member/brand/editor policy separately from authentication
+proof. Telegram supplies a narrowly typed verified binding actor, not an API key
+or synthetic Better Auth session. Under database locks, recheck actual user,
+hosted ownership requirements, unioned current membership roles, editor capability
+and brand grants. Hold the relevant user and member rows `FOR SHARE` or stronger
+through decision commit, after the canonical parent locks. Existing
+`authorizeRequestActor` reads member roles without row locks; extracting its
+policy alone does not serialize role revocation. Lock and recheck scoped brand
+grants consistently with grant replacement. A persisted binding must never
+freeze a revoked role or grant.
+
+The proposed chain must pass independent review against `docs/lock-order.md`:
+
+```
+organization → user → brand → member / brand_access → bot configuration / binding
+  → adaptations (sorted IDs) → channels (sorted IDs, FOR SHARE) → content_items
+  → publication evidence (existing rejection path) → callback capability / inbox / audit
+```
+
+Read candidate IDs without locks first; then acquire and revalidate scoped parent
+rows. The critical domain order is **adaptations before content_items**, matching
+archive, publication worker and `lockItemForLink`. `requireItem` currently checks
+existence; it must not become an early item lock. Brand grant writers take brand
+before member/grant rows. Do not prescribe member locks before brand or add brand
+lookups to role-change triggers. Bot and binding writers never take domain locks
+after holding callback rows; disconnect/revocation use parent-first ordering.
+User/organization deletion and every new FK cascade must be reviewed explicitly.
+The channel lock is mandatory for both capability issuance and consumption:
+the shared snapshot includes channel name/platform, while channel name edits
+do not take adaptation/item locks. `FOR KEY SHARE` does not block a non-key
+name update; use `FOR SHARE` or stronger and construct the compared projection
+from those same locked rows. Hold item/adaptation mutation locks while reading
+the snapshot, rather than comparing an earlier unlocked projection.
+
+Within that one transaction:
+
+1. Authorize the binding actor and lock domain parents in canonical order.
+2. Re-read the complete snapshot and fresh-draft/delivery predicates under those
+   locks. Lock the capability last; recheck expiry, ownership and consumption.
+3. Apply the existing `rejectInTx` transition, including applicable cancellation
+   and prompt decision evidence. Telegram eligibility adds restrictions and
+   never removes existing domain protections.
+4. Consume the one-shot capability, invalidate sibling confirmations, and commit
+   immutable scoped decision evidence plus `(botId, updateId)` replay identity.
+
+The audit includes actor/binding identifiers, org/brand/item, action, snapshot
+hash/version, bot generation, consumed capability ID, update identity, outcome
+and timestamp. No raw content, token, callback data or full update is retained.
+Sibling invalidation uses stable ID order. All callback writers needing domain
+locks follow the same order; cleanup cannot hold a callback lock then wait for
+its content parent. A transaction rollback leaves no rejected item, consumed
+capability or accepted replay receipt behind.
+
+Concurrent confirmations, duplicate updates and replay after an uncertain HTTP
+response acknowledge one durable result. A reused update ID with a different
+bounded request fingerprint is refused. Recheck actor visibility before returning
+any existing receipt; use a generic acknowledgment after revocation. Distinguish
+terminal refusal from infrastructure failure. No replay can enqueue publication,
+call a model or repeat a prompt decision.
+
+Webhook acknowledgment and `answerCallbackQuery` occur after database outcome.
+Failure to acknowledge or edit a Telegram message cannot undo or repeat the
+decision. Message edits are best-effort display cleanup. A browser receipt and
+notification history must present the durable result even if Telegram still
+shows an old button.
+
+## 7. Bounds, retention and operational states
+
+Use strict shared schemas for setup, status, binding and callback admission.
+Reject bot senders, unsafe numeric identity conversions, arbitrary routes,
+oversized bodies, unexpected update types and missing message provenance.
+Keep decimal IDs lossless; do not conflate signed chat IDs with user IDs.
+Restrict accepted updates to private `/start` binding/probe messages and callback
+queries; unrelated messages neither store content nor change domain state.
+
+Proposed limits requiring explicit product/configuration review: 5-minute
+binding challenge, 30-minute action capability, at most one pending confirmation
+per item/editor, bounded update admission and setup/binding retries, and a
+workspace cap on live capabilities. Enforce quotas atomically and define coded
+refusals, not a silently truncated queue. Transport deadlines and connection
+bounds follow existing integration patterns.
+
+Expired secret hashes and minimal update replay receipts can be swept in bounded
+parent-safe batches after a documented retention window. Decision audit survives
+that sweep until workspace deletion. Expired tokens and terminal draft state
+must still prevent an old update from applying after replay receipt retention;
+an absent old receipt is not permission to issue a new capability. No retention
+choice is an implicit guarantee about Telegram-held messages or provider logs.
+
+Settings distinguish disabled, validating, ownership conflict, setup uncertain,
+active and disconnect uncertain. Human binding states distinguish awaiting
+Telegram, awaiting web confirmation, linked and revoked. Keep secrets write-only;
+offer explicit reconciliation and unlink controls with clear consequences.
+English-first copy and all supported locales are required before release.
+
+## 8. Required acceptance evidence
+
+Implementation is not accepted from outbound notification tests alone. Require:
+
+1. Official transport contract tests for bot identity, owned/foreign webhook
+   checks, secret authentication, uncertainty fencing, safe errors and callback
+   byte bound; no live bot setup during ordinary automated tests.
+2. Native inbound identity uniqueness and outbound-sharing isolation across organizations,
+   token rotation, disconnect/setup races and late provider responses. Prove an
+   old delayed install/delete cannot overwrite an enabled successor, and an
+   unresolved remote lane cannot be stolen after a lease expires or restart.
+3. Two-phase binding tests: Telegram claim alone cannot bind; wrong Pubrick user,
+   expired/used challenges, group `/start`, reused Telegram identity and unlink
+   races are refused without leaking another person's identity.
+4. Native authorization and snapshot races against member removal, role/grant
+   replacement, bot/binding revocation, body/title/adaptation/media changes,
+   channel rename/deletion, approval/publication claim and item deletion. Include
+   removed-channel publication history and a false historical safety marker. Prove actual
+   lock waits and outcomes without weakening domain tests.
+5. Concurrent duplicate final callbacks and different editors produce exactly one
+   rejection/prompt decision/consumption audit. Rollback and transaction/storage
+   failure leave no partial mutation. Include canceled confirmation, forwarded
+   group/private messages, wrong actor, missing message and unknown-send recovery.
+6. Legacy client-review hash fixtures and existing web approval/rejection suites
+   remain unchanged in meaning. No publication, generation or paid call is
+   admitted by any Telegram button in this slice.
+7. A compiled disposable API/worker/web journey: manager configures synthetic bot,
+   user links both accounts, notification is emitted, group button starts only
+   private confirmation, explicit confirmation rejects the exact fresh draft,
+   UI receipt shows durable result and stale/duplicate callback is harmless.
+   Include mobile/keyboard binding and revocation flow. No actual Telegram send
+   or publication is needed to prove this journey.
+8. A separately authorized sandbox bot check proves reachable HTTPS/webhook and
+   real Telegram event shape before claiming production interoperability. Local
+   fixtures are not evidence of a live bot installation.
+
+Maintain native mutation proofs for final snapshot comparison, actor reauthorization
+and one-shot capability consumption. Run focused checks during construction and
+one coherent integration milestone; retain failures and affected closures.
+
+## 9. Open review gates and sources
+
+The following are unresolved design gates, not permission to implement shortcuts:
+inbound bot ownership and outbound-sharing isolation; exact binding/decision retention and
+caps; cross-user/tenant deletion lock order; sharing the client-review snapshot
+without changing old hashes; transaction-bound domain rejection and immutable
+actor evidence; and receipt UX after uncertain Telegram delivery.
+Remote mutation uncertainty without a provider completion barrier is an explicit
+operational limitation, not a solved recovery guarantee. The reviewed initial
+implementation may operate one unchanged setup generation, but must remain
+blocked for incompatible remote changes when a predecessor is unresolved.
+
+Bot API facts used here are based on the official
+[Bot API reference](https://core.telegram.org/bots/api), including `getMe`,
+`setWebhook`, `getWebhookInfo`, callback queries, `answerCallbackQuery`, protected
+webhook secret headers and 1–64 byte callback data. Webhook retries require
+idempotent durable admission; webhook and `getUpdates` are exclusive modes.
+Binding payload limits and allowed characters follow official
+[bot deep linking](https://core.telegram.org/bots/features#deep-linking).
+The maintained auth alternative is described by official
+[Telegram OIDC login](https://core.telegram.org/bots/telegram-login) and
+[Better Auth Generic OAuth](https://better-auth.com/docs/plugins/generic-oauth).
+Reverify official contracts during implementation rather than guessing from an
+old SDK or treating this proposed design as delivered functionality.

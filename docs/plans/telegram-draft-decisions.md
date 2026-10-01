@@ -1,0 +1,75 @@
+# Telegram draft decision execution plan
+
+Status: proposed execution sequence; no implementation claim.
+Date: 2026-10-01. Tracking: `Ozon-tools-0mflt` (design).
+Design: [0013](../specs/0013-telegram-draft-decisions.md).
+
+Independent source review closed three concrete findings in the proposal:
+external webhook mutations need a durable per-bot lane across uncertain results;
+snapshot checks need mandatory channel and membership locks; fresh-draft
+eligibility needs the durable marker for delivery history lost through deletion.
+This closure does not establish executable lock safety or provider interoperability.
+
+## Foundation before callbacks
+
+Resolve concrete issuance/live-capability quotas and retention, then review
+user/organization deletion and every new cascade before generating a migration.
+Use the next available migration number from the integrated journal. One owner
+owns shared strict contracts, bot mutation-lane/identity tables, scoped binding
+challenges, capability/replay/audit storage, export/cleanup inventory and native
+constraints. No bot network request occurs while holding database locks.
+
+Keep setup disabled until verified bot ownership and a confirmed generation
+allow it. An unresolved remote request blocks incompatible mutations and owner
+release; a local timeout never fabricates remote completion. A new verified bot
+may recover service while the old identity remains quarantined. Confirm these
+state-machine boundaries with scripted transport before wiring settings.
+
+## Reuse domain rules and prove admission
+
+One API owner extracts the existing complete client-review snapshot without
+changing old hashes, separates common editorial policy from session proof,
+and extracts rejection into a transaction-taking method. Preserve web behavior
+and adaptation-before-item locking. Telegram authority comes only from the
+verified binding, authenticated bot generation and exact capability.
+
+Implement two-phase binding, inbound bounded update admission, initial private
+confirmation and atomic final rejection as one coherent backend slice. Recheck
+membership, brand grant, binding, bot generation, full snapshot and durable
+unsent history under the reviewed locks. Commit one result, capability consumption
+and replay evidence with the domain mutation. Acknowledgment failures cannot
+repeat rejection or prompt decision evidence. No Telegram action admits delivery,
+generation or model calls in this slice.
+
+Run focused contract and native race/replay checks during construction. After
+the native baseline is stable, use the project's three-run proof protocol for
+the selected snapshot, actor authorization and one-shot consumption guards.
+Do not call mocked method order a concurrency proof.
+
+## One settings location and one rejection control
+
+One UI owner exposes the member's own binding at Settings → Notifications,
+with existing manager configuration/history/digest APIs still protected.
+Use the shared design system, English source copy and all supported locales.
+An eligible active bot notification replaces the existing Reject URL with one
+Reject callback. Inactive/ineligible modes retain the URL fallback. The callback
+opens actor-specific private confirmation; only its explicit Reject applies
+the decision. Review, Schedule and Publish stay authenticated web links.
+
+Show durable setup uncertainty, linkage/revocation and decision outcomes without
+secrets, raw updates or misleading resend controls. Validate mobile/keyboard
+linking and revocation with synthetic identities.
+
+## Integrate once and record limits
+
+Run the affected package gates and one compiled disposable API/worker/web
+journey with scripted Telegram transport. Require account binding, notification,
+private confirmation, exact fresh-draft rejection, durable receipt and harmless
+duplicate/stale callbacks. No real Telegram message is required for local
+acceptance. Run an independently authorized real sandbox before claiming live
+webhook compatibility.
+
+Independently review the coherent implementation and native evidence, update
+user/operator guides only after actual acceptance, and push the verified feature
+milestone. Release to main requires separate exact-head approval. The proposed
+design is not an available user workflow.

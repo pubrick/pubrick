@@ -21,6 +21,7 @@ and some older document prefixes are shared.
 | [0010](0010-scoped-draft-write-api.md) | Scoped draft writes | Paid BYOK consent, scoped API/MCP operations, durable replay and imported-draft review | scoped draft write design |
 | [0011](0011-recurring-editorial-plans.md) | Weekly editorial plans | Finite weekly generation, preview, paid enablement, dispatch and occurrence evidence | recurring plan design; feature release tracked in the roadmap |
 | [0012](0012-evergreen-draft-reuse.md) | Evergreen draft reuse | Manually confirmed saved-master generation, lineage, replay and source erasure | local integration and built-browser acceptance complete; main release pending |
+| [0013](0013-telegram-draft-decisions.md) | Telegram draft decisions | Verified identity, private draft rejection, snapshot checks and callback replay | proposed design; reviewed findings closed, implementation gates remain |
 
 ## Additional historical design files
 
