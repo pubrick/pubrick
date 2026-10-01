@@ -93,6 +93,18 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const tt = useTranslations("Topics");
   const te = useTranslations("Errors");
   const locale = useLocale();
+  const dateFormats = useMemo(
+    () => ({
+      month: new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }),
+      selectedDay: new Intl.DateTimeFormat(locale, { dateStyle: "long" }),
+      weekday: new Intl.DateTimeFormat(locale, { weekday: "short" }),
+      day: new Intl.DateTimeFormat(locale, { dateStyle: "full" }),
+      time: new Intl.DateTimeFormat(locale, { timeStyle: "short" }),
+      preview: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }),
+    }),
+    [locale],
+  );
+  const timezone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, []);
   const router = useRouter();
   const { data: session } = authClient.useSession();
   const { data: organization } = authClient.useActiveOrganization();
@@ -462,13 +474,8 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setMonth(next);
     setSelectedDay(dayKey(next));
   }
-  const monthLabel = new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(
-    month,
-  );
-  const dateLabel = new Intl.DateTimeFormat(locale, { dateStyle: "long" }).format(
-    new Date(`${selectedDay}T12:00`),
-  );
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const monthLabel = dateFormats.month.format(month);
+  const dateLabel = dateFormats.selectedDay.format(new Date(`${selectedDay}T12:00`));
   const selectedTopic = topics.find((topic) => topic.id === selectedTopicId);
   const effectiveContentType = selectedTopic?.contentType ?? contentType;
 
@@ -702,9 +709,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
             <legend className="sr-only">{monthLabel}</legend>
             {Array.from({ length: 7 }, (_, i) => (
               <span key={WEEKDAY_KEYS[i]} className="pb-2 text-center text-xs text-fg-secondary">
-                {new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
-                  new Date(2024, 0, i + 1),
-                )}
+                {dateFormats.weekday.format(new Date(2024, 0, i + 1))}
               </span>
             ))}
             {days.map((day) => {
@@ -720,7 +725,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                     if (outside) setMonth(monthStart(day));
                   }}
                   aria-label={t("dayLabel", {
-                    day: new Intl.DateTimeFormat(locale, { dateStyle: "full" }).format(day),
+                    day: dateFormats.day.format(day),
                     count,
                   })}
                   aria-pressed={selectedDay === key}
@@ -778,9 +783,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                         <p className="mt-1 text-xs text-fg-secondary">{t("linkedTopic")}</p>
                       )}
                       <p className="mt-1 text-sm text-fg-secondary">
-                        {new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(
-                          new Date(slot.scheduledAt),
-                        )}
+                        {dateFormats.time.format(new Date(slot.scheduledAt))}
                         {" · "}
                         {slot.channelIds
                           .map(
@@ -1038,10 +1041,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                     </p>
                   )}
                   <p className="mt-1 text-fg-secondary">
-                    {new Intl.DateTimeFormat(locale, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    }).format(new Date(row.dateInput))}
+                    {dateFormats.preview.format(new Date(row.dateInput))}
                     {" · "}
                     {bulkChannels
                       .map(

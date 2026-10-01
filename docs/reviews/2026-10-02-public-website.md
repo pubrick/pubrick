@@ -47,6 +47,8 @@ The example is prewritten, clearly labeled, and sends no data to AI providers.
   Its cause remains unresolved; the full run is not represented as green.
   No timeout was raised and no assertions were removed. This pre-existing
   calendar issue is tracked separately from the accepted public-site scenario.
+  It was subsequently fixed and the complete calendar-page file passed; see
+  [calendar performance acceptance](2026-10-02-calendar-render-performance.md).
 
 ## Limits
 
