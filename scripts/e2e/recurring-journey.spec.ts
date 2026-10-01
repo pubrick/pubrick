@@ -104,7 +104,11 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     await textSettings.getByRole("button", { name: "Save", exact: true }).click();
     await expect(textSettings.getByText("Text settings saved.", { exact: true })).toBeVisible();
     // No provider probe: every model call must belong to the scheduled run.
+    await page.setViewportSize({ width: 375, height: 812 });
     await page.goto(`/en/brands/${brand.id}/calendar`);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
     const form = page.getByRole("form", { name: "Add weekly plan" });
     await form.getByLabel("Plan name", { exact: true }).fill("Weekly acceptance");
     await form
@@ -140,6 +144,10 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
       ).toBe(true);
     };
     await schedule();
+    await page.screenshot({
+      path: test.info().outputPath("weekly-plan-mobile-preview.png"),
+      fullPage: true,
+    });
     const created = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -182,17 +190,29 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     const enable = async () => {
       await card.getByRole("button", { name: "Enable", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Enable paid generation?" });
-      await dialog
-        .getByRole("checkbox", {
-          name: "I authorize paid generation with my saved provider credentials for this plan.",
-        })
-        .check();
+      const consent = dialog.getByRole("checkbox", {
+        name: "I authorize paid generation with my saved provider credentials for this plan.",
+      });
+      await consent.focus();
+      await page.keyboard.press("Space");
+      await expect(consent).toBeChecked();
+      const enableButton = dialog.getByRole("button", { name: "Enable", exact: true });
+      await expect(enableButton).toBeEnabled();
+      await enableButton.focus();
+      await page.keyboard.press("Tab");
+      await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(enableButton).toBeFocused();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await page.screenshot({ path: test.info().outputPath("weekly-plan-mobile-consent.png") });
       const admitted = page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&
           response.url().includes(`/editorial-plans/${plan.id}/enable`),
       );
-      await dialog.getByRole("button", { name: "Enable", exact: true }).click();
+      await page.keyboard.press("Enter");
       const admission = await admitted;
       expect(admission.ok()).toBe(true);
       const payload = admission.request().postDataJSON();
@@ -275,6 +295,7 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     const dispatched = admittedOccurrences[0];
     if (!dispatched) throw new Error("Dispatched occurrence missing");
     expect(dispatched.run_id).toBe(generated.id);
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/en/content/${generated.content_item_id}`);
     await expect(page.getByLabel("Body", { exact: true })).toHaveValue(new RegExp(marker));
     const postActionDeadline = Date.now() + 180_000;
