@@ -1,5 +1,5 @@
-import { appendFileSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute } from "node:path";
+import { appendFileSync, lstatSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 export const SYNTHETIC_KEY = "AIzaSy-Pubrick-disposable-weekly-browser-only";
 export const MODEL = "gemini-3.8-flash";
@@ -100,4 +100,20 @@ export function adapterReceiptRole(request, context, marker) {
   )
     throw new Error("Unexpected adapter channel");
   return `adapter:${context.id}`;
+}
+
+/** Next loads these from its build project and runtime dir, even with a clean process env. */
+export function refuseNextEnvironmentFiles(...directories) {
+  for (const directory of directories)
+    for (const name of [".env.production.local", ".env.local", ".env.production", ".env"]) {
+      try {
+        lstatSync(join(directory, name));
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      throw new Error(
+        `Disposable browser runner refuses ${name} in its Next project/runtime directory`,
+      );
+    }
 }

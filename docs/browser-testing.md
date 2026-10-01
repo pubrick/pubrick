@@ -117,7 +117,9 @@ This manual runner owns web/API ports 31320/31321, a fresh PostgreSQL 16
 container, media directory and random authentication/encryption secrets. It
 builds API, worker and web from the same checkout and verifies the latest
 migration before starting the journey. Application environment variables and
-real provider keys are not inherited.
+real provider keys are not inherited. Before build and runtime, the runner
+refuses Next.js environment files in the web project and standalone directory;
+it checks file metadata without reading or changing those files.
 
 A test-only Node preload intercepts the compiled worker's Google SDK fetch
 transport. It accepts only the synthetic key, exact Gemini model endpoint,
@@ -126,7 +128,8 @@ schema-valid role outputs. A runner-owned channel context file correlates the
 adapter receipt with the actual channel created through the UI; its marker, UUID,
 manual platform and prompt are checked. Unexpected requests are durably recorded before
 throwing, and the runner checks this failure latch even when the SDK catches an
-error. There is no forwarding to the original fetch. This covers the Google
+error. Worker exit and failed/cancelled generation are monitored outside browser
+poll assertions, so swallowed polling errors cannot consume the full deadline. There is no forwarding to the original fetch. This covers the Google
 transport, rather than all possible Node networking APIs; the fresh brand has
 no knowledge, news, images or webhooks, and its manual channel has no publishing
 credentials. No production endpoint or provider hook is added.

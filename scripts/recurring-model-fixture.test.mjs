@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,7 @@ import {
   adapterReceiptRole,
   appendReceipt,
   MODEL_URL,
+  refuseNextEnvironmentFiles,
   SYNTHETIC_KEY,
   scriptedResponse,
   validateFixtureEnvironment,
@@ -149,5 +150,26 @@ test("all five role envelopes carry the journey and valid step shapes", () => {
     assert.deepEqual(Object.keys(output).sort(), keys.sort());
     assert.equal(result.response.usageMetadata.promptTokenCount, 10);
     if (role !== "factcheck") assert.ok(JSON.stringify(output).includes(marker));
+  }
+});
+
+test("Next environment preflight refuses every actual loader filename without reading secrets", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pubrick-recurring-env-test-"));
+  const project = join(directory, "web");
+  const runtime = join(directory, "standalone");
+  mkdirSync(project);
+  mkdirSync(runtime);
+  try {
+    writeFileSync(join(project, ".env.example"), "safe template");
+    refuseNextEnvironmentFiles(project, runtime);
+    for (const location of [project, runtime])
+      for (const name of [".env.production.local", ".env.local", ".env.production", ".env"]) {
+        symlinkSync(join(directory, "missing-secret"), join(location, name));
+        assert.throws(() => refuseNextEnvironmentFiles(project, runtime), /refuses/);
+        rmSync(join(location, name));
+      }
+    refuseNextEnvironmentFiles(project, runtime);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });

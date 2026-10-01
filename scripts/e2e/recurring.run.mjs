@@ -4,7 +4,7 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { readReceipts } from "./recurring-model-fixture.mjs";
+import { readReceipts, refuseNextEnvironmentFiles } from "./recurring-model-fixture.mjs";
 
 // Never accept a target URL or inherited app secrets: this runner owns its stack.
 const container = `pubrick-browser-recurring-${randomUUID()}`;
@@ -17,6 +17,7 @@ const channelContext = join(receiptDirectory, "channel.json");
 await writeFile(channelContext, "{}", { mode: 0o600 });
 const journeyMarker = `weekly-browser-${randomUUID()}`;
 let worker;
+let observations;
 const env = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
@@ -120,6 +121,7 @@ async function cleanupStack() {
       await new Promise((accept) => child.once("exit", accept));
     }
   }
+  await observations?.end();
   const removed = spawnSync("docker", ["rm", "-f", "-v", container], { encoding: "utf8" });
   if (removed.status !== 0 && !removed.stderr.includes("No such container")) {
     process.exitCode = 1;
@@ -137,6 +139,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 try {
+  refuseNextEnvironmentFiles("apps/web", "apps/web/.next/standalone/apps/web");
   command("pnpm", ["exec", "tsc", "--noEmit", "-p", "scripts/e2e"]);
   const webPort = 31320;
   const apiPort = 31321;
@@ -204,16 +207,16 @@ try {
     connectionTimeoutMillis: 2000,
     statement_timeout: 5000,
   });
-  try {
+  observations = pool;
+  {
     const journal = JSON.parse(await readFile("packages/db/migrations/meta/_journal.json", "utf8"));
     const result = await pool.query(
       "SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1",
     );
     if (Number(result.rows[0]?.created_at) !== journal.entries.at(-1).when)
       throw new Error("Built stack migration mismatch");
-  } finally {
-    await pool.end();
   }
+  refuseNextEnvironmentFiles("apps/web", "apps/web/.next/standalone/apps/web");
   worker = await startWorker();
   const standalone = "apps/web/.next/standalone/apps/web";
   await cp("apps/web/.next/static", `${standalone}/.next/static`, { recursive: true, force: true });
@@ -228,7 +231,10 @@ try {
   );
   const deadline = Date.now() + 8 * 60_000;
   await new Promise((accept, reject) => {
-    const monitor = setInterval(() => {
+    let monitoring = false;
+    const monitor = setInterval(async () => {
+      if (monitoring) return;
+      monitoring = true;
       try {
         if (Date.now() >= deadline) throw new Error("Recurring journey exceeded eight minutes");
         if (
@@ -240,12 +246,18 @@ try {
           web.signalCode !== null
         )
           throw new Error("Built application exited during journey");
+        const failed = await observations.query(
+          "SELECT id FROM pipeline_runs WHERE status IN ('failed','cancelled') LIMIT 1",
+        );
+        if (failed.rows.length) throw new Error("Scheduled generation failed during journey");
         if (readReceipts(receipts).some((record) => record.kind === "unexpected"))
           throw new Error("Unexpected worker model request latched");
       } catch (error) {
         clearInterval(monitor);
         signalGroup(browser, "SIGTERM");
         reject(error);
+      } finally {
+        monitoring = false;
       }
     }, 250);
     browser.once("error", (error) => {
