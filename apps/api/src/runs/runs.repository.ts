@@ -10,6 +10,7 @@ import {
   type ApiErrorCode,
   COVER_SUPPORTED_PLATFORMS,
   type ContentOrigin,
+  type ContentReuseAttribution,
   DISMISSABLE_RUN_STATUSES,
   IMAGE_CALL_STEPS,
   isLiveRunStatus,
@@ -28,6 +29,7 @@ import {
 } from "@pubrick/shared";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, forbidden, notFound } from "../api-error";
+import { BrandAccessRepository } from "../brand-access/brand-access.repository";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
 import { currentRequestAuthority } from "../request-authority";
@@ -240,6 +242,64 @@ export type RunsBeforeInsert = (
   }>,
 ) => Promise<string | null | { topicId?: string | null; sourceAttribution: RunSourceAttribution }>;
 
+/** Internal detail only: no raw source identity is returned without current scoped read authority. */
+export async function readRunInternalSource(
+  orgId: string,
+  brandId: string,
+  runId: string,
+): Promise<ContentReuseAttribution | null> {
+  const [lineage] = await db
+    .select({
+      sourceContentId: schema.runSourceLineage.sourceContentId,
+      sourceRevision: schema.runSourceLineage.sourceRevision,
+      sourceTitle: schema.runSourceLineage.sourceTitle,
+      sourceOrigin: schema.runSourceLineage.sourceOrigin,
+      sourceRedactedAt: schema.runSourceLineage.sourceRedactedAt,
+    })
+    .from(schema.runSourceLineage)
+    .where(
+      and(
+        eq(schema.runSourceLineage.orgId, orgId),
+        eq(schema.runSourceLineage.brandId, brandId),
+        eq(schema.runSourceLineage.derivedRunId, runId),
+      ),
+    )
+    .limit(1);
+  if (!lineage) return null;
+  if (lineage.sourceRedactedAt !== null)
+    return { state: "redacted", sourceRevision: lineage.sourceRevision };
+  const actor = currentRequestAuthority();
+  const unavailable: ContentReuseAttribution = {
+    state: "unavailable",
+    sourceRevision: lineage.sourceRevision,
+  };
+  if (
+    actor?.kind !== "session" ||
+    actor.orgId !== orgId ||
+    !(await new BrandAccessRepository().hasAccess(orgId, brandId, actor.userId))
+  )
+    return unavailable;
+  const [source] = await db
+    .select({ id: schema.contentItems.id })
+    .from(schema.contentItems)
+    .where(
+      and(
+        eq(schema.contentItems.orgId, orgId),
+        eq(schema.contentItems.brandId, brandId),
+        eq(schema.contentItems.id, lineage.sourceContentId),
+      ),
+    )
+    .limit(1);
+  if (!source || lineage.sourceOrigin === null) return unavailable;
+  return {
+    state: "available",
+    sourceContentId: source.id,
+    sourceRevision: lineage.sourceRevision,
+    title: lineage.sourceTitle,
+    origin: lineage.sourceOrigin,
+  };
+}
+
 @Injectable()
 export class RunsRepository {
   constructor(private readonly queue: QueueService) {}
@@ -302,7 +362,17 @@ export class RunsRepository {
       .limit(1);
     const run = rows[0];
     if (!run) throw notFound("run_not_found", "Run not found");
-    return run;
+    const internalSource = await readRunInternalSource(orgId, run.brandId, run.id);
+    if (internalSource && internalSource.state !== "available") {
+      return {
+        ...run,
+        input: { kind: "redacted" as const },
+        steps: {},
+        errorCode: null,
+        internalSource,
+      };
+    }
+    return { ...run, internalSource };
   }
 
   /**
@@ -680,7 +750,18 @@ export class RunsRepository {
       .limit(1);
     if (!row) throw notFound("run_not_found", "Run not found");
     const [lineage] = await tx
-      .select()
+      .select({
+        derivedRunId: schema.runSourceLineage.derivedRunId,
+        orgId: schema.runSourceLineage.orgId,
+        brandId: schema.runSourceLineage.brandId,
+        sourceContentId: schema.runSourceLineage.sourceContentId,
+        sourceRevision: schema.runSourceLineage.sourceRevision,
+        sourceTitle: schema.runSourceLineage.sourceTitle,
+        sourceDigest: schema.runSourceLineage.sourceDigest,
+        sourceOrigin: schema.runSourceLineage.sourceOrigin,
+        acceptedAt: schema.runSourceLineage.acceptedAt,
+        sourceRedactedAt: schema.runSourceLineage.sourceRedactedAt,
+      })
       .from(schema.runSourceLineage)
       .where(
         and(

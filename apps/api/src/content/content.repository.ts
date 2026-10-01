@@ -89,6 +89,7 @@ import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
 import { currentRequestAuthority } from "../request-authority";
 import { authorizeRequestActor } from "../request-authority-admission";
+import { readRunInternalSource } from "../runs/runs.repository";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
 import { assertImagesFitBody } from "./content-images.repository";
@@ -1612,7 +1613,12 @@ export class ContentRepository {
     orgId: string,
     contentItemId: string,
     brandId: string,
-  ): Promise<{ id: string; input: RunInput; topicId: string | null } | null> {
+  ): Promise<{
+    id: string;
+    input: RunInput | null;
+    topicId: string | null;
+    internalSource: import("@pubrick/shared").ContentReuseAttribution | null;
+  } | null> {
     const rows = await db
       .select({
         id: schema.pipelineRuns.id,
@@ -1638,8 +1644,11 @@ export class ContentRepository {
       .orderBy(asc(schema.pipelineRuns.createdAt), asc(schema.pipelineRuns.id))
       .limit(1);
     const run = rows[0];
-    if (!run || run.input.kind === "redacted") return null;
-    return { ...run, input: run.input };
+    if (!run) return null;
+    const internalSource = await readRunInternalSource(orgId, brandId, run.id);
+    if (run.input.kind === "redacted" || (internalSource && internalSource.state !== "available"))
+      return internalSource ? { id: run.id, input: null, topicId: null, internalSource } : null;
+    return { ...run, input: run.input, internalSource };
   }
 
   async get(orgId: string, id: string) {
@@ -1732,6 +1741,7 @@ export class ContentRepository {
        * hand-written description of a column that has two already.
        */
       runInput: run?.input ?? null,
+      internalSource: run?.internalSource ?? null,
       /**
        * The origin badge's answer — computed here rather than in the browser,
        * because the QUEUE has to be able to give it too and the queue has no
@@ -5932,6 +5942,30 @@ export class ContentRepository {
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, candidate.brandId)))
         .for("no key update");
       if (!brand) throw notFound("content_not_found", "Content item not found");
+      // The strong brand lock serializes lineage creation and every retry.
+      // Inspect unscoped references too: corrupt foreign ownership must refuse deletion.
+      const sourceLineages = await tx
+        .select({
+          id: schema.runSourceLineage.derivedRunId,
+          orgId: schema.runSourceLineage.orgId,
+          brandId: schema.runSourceLineage.brandId,
+        })
+        .from(schema.runSourceLineage)
+        .where(eq(schema.runSourceLineage.sourceContentId, id));
+      if (
+        sourceLineages.some(
+          (lineage) => lineage.orgId !== orgId || lineage.brandId !== candidate.brandId,
+        )
+      )
+        throw conflict(
+          "content_delete_run_tenant_mismatch",
+          "Linked source ownership is inconsistent",
+        );
+      const lineageRunIds = new Set(sourceLineages.map((lineage) => lineage.id));
+      const relatedRunPredicate = or(
+        eq(schema.pipelineRuns.contentItemId, id),
+        sql`exists (select 1 from ${schema.runSourceLineage} where ${schema.runSourceLineage.derivedRunId} = ${schema.pipelineRuns.id} and ${schema.runSourceLineage.sourceContentId} = ${id})`,
+      );
       const linkedRuns = await tx
         .select({
           id: schema.pipelineRuns.id,
@@ -5941,7 +5975,7 @@ export class ContentRepository {
           updatedAt: schema.pipelineRuns.updatedAt,
         })
         .from(schema.pipelineRuns)
-        .where(eq(schema.pipelineRuns.contentItemId, id))
+        .where(relatedRunPredicate)
         .orderBy(asc(schema.pipelineRuns.id))
         .for("update");
       if (linkedRuns.some((run) => run.orgId !== orgId || run.brandId !== candidate.brandId)) {
@@ -5950,9 +5984,22 @@ export class ContentRepository {
           "Linked run ownership is inconsistent",
         );
       }
+      const activeReuseRuns = linkedRuns.filter(
+        (run) => isLiveRunStatus(run.status) && lineageRunIds.has(run.id),
+      );
+      if (activeReuseRuns.length > 0)
+        throw new ConflictException({
+          ...refusalBody(
+            409,
+            "content_delete_reuse_active",
+            "A generation run reusing this source is still active",
+          ),
+          runIds: activeReuseRuns.slice(0, 20).map((run) => run.id),
+        });
       if (linkedRuns.some((run) => isLiveRunStatus(run.status))) {
         throw conflict("content_delete_run_active", "A linked generation run is still active");
       }
+      const lockedRunIds = new Set(linkedRuns.map((run) => run.id));
       const adaptations = await this.lockAdaptations(tx, orgId, id, [...ADAPTATION_STATUSES]);
       const [item] = await tx
         .select({
@@ -5988,6 +6035,27 @@ export class ContentRepository {
 
       // The FK is not composite. Check ALL linked runs, including another
       // tenant's accidental reference, once the item lock prevents new links.
+      const currentLineages = await tx
+        .select({
+          id: schema.runSourceLineage.derivedRunId,
+          orgId: schema.runSourceLineage.orgId,
+          brandId: schema.runSourceLineage.brandId,
+        })
+        .from(schema.runSourceLineage)
+        .where(eq(schema.runSourceLineage.sourceContentId, id));
+      if (
+        currentLineages.length !== sourceLineages.length ||
+        currentLineages.some(
+          (lineage) =>
+            lineage.orgId !== orgId ||
+            lineage.brandId !== candidate.brandId ||
+            !lineageRunIds.has(lineage.id),
+        )
+      )
+        throw conflict(
+          "content_delete_run_links_changed",
+          "Linked source runs changed during deletion",
+        );
       const currentRuns = await tx
         .select({
           id: schema.pipelineRuns.id,
@@ -5995,14 +6063,12 @@ export class ContentRepository {
           brandId: schema.pipelineRuns.brandId,
         })
         .from(schema.pipelineRuns)
-        .where(eq(schema.pipelineRuns.contentItemId, id));
+        .where(relatedRunPredicate);
       if (
         currentRuns.length !== linkedRuns.length ||
         currentRuns.some(
           (run) =>
-            run.orgId !== orgId ||
-            run.brandId !== candidate.brandId ||
-            !linkedRuns.some((locked) => locked.id === run.id),
+            run.orgId !== orgId || run.brandId !== candidate.brandId || !lockedRunIds.has(run.id),
         )
       ) {
         throw conflict(
@@ -6082,11 +6148,27 @@ export class ContentRepository {
               eq(schema.pipelineRuns.id, run.id),
               eq(schema.pipelineRuns.orgId, orgId),
               eq(schema.pipelineRuns.brandId, candidate.brandId),
-              eq(schema.pipelineRuns.contentItemId, id),
             ),
           );
       }
 
+      if (sourceLineages.length > 0) {
+        await tx
+          .update(schema.runSourceLineage)
+          .set({
+            sourceRedactedAt: sql`coalesce(${schema.runSourceLineage.sourceRedactedAt}, now())`,
+            sourceTitle: null,
+            sourceDigest: null,
+            sourceOrigin: null,
+          })
+          .where(
+            and(
+              eq(schema.runSourceLineage.orgId, orgId),
+              eq(schema.runSourceLineage.brandId, candidate.brandId),
+              eq(schema.runSourceLineage.sourceContentId, id),
+            ),
+          );
+      }
       const deleted = await tx
         .delete(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
