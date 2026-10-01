@@ -9,6 +9,7 @@ import {
 import {
   type ApiErrorCode,
   COVER_SUPPORTED_PLATFORMS,
+  type ContentOrigin,
   DISMISSABLE_RUN_STATUSES,
   IMAGE_CALL_STEPS,
   isLiveRunStatus,
@@ -221,6 +222,23 @@ const parseStoredInput = new ZodValidationPipe(runInputSchema);
 const parseRunCreate = new ZodValidationPipe(runCreateSchema);
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type RunSourceAttribution = Readonly<{
+  sourceContentId: string;
+  sourceRevision: number;
+  sourceTitle: string | null;
+  sourceDigest: string;
+  sourceOrigin: ContentOrigin;
+  acceptedAt: Date;
+}>;
+export type RunsBeforeInsert = (
+  tx: Tx,
+  prepared: Readonly<{
+    material: string | null;
+    title: string | undefined;
+    brief: string | null;
+    channelIds: readonly string[];
+  }>,
+) => Promise<string | null | { topicId?: string | null; sourceAttribution: RunSourceAttribution }>;
 
 @Injectable()
 export class RunsRepository {
@@ -460,7 +478,7 @@ export class RunsRepository {
    * count taken outside would be stale by the time the insert commits, which is
    * the same reason it is taken under the advisory lock.
    */
-  async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<string | null>) {
+  async create(orgId: string, data: RunCreate, beforeInsert?: RunsBeforeInsert) {
     const id = await withQuotaErrors(() =>
       db.transaction((tx) => this.createInTx(tx, orgId, data, tenantQuotaMode(), beforeInsert)),
     );
@@ -473,7 +491,7 @@ export class RunsRepository {
     orgId: string,
     data: RunCreate,
     mode: TenantResourceQuotaMode,
-    beforeInsert?: (tx: Tx) => Promise<string | null>,
+    beforeInsert?: RunsBeforeInsert,
     expected?: ExpectedApiOperation,
   ): Promise<string> {
     if (
@@ -513,7 +531,19 @@ export class RunsRepository {
       await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
     // A topic id can only come from a server-side check under this same
     // transaction. The public RunCreate body has no topicId field.
-    const topicId = beforeInsert ? await beforeInsert(tx) : null;
+    const accepted = beforeInsert
+      ? await beforeInsert(
+          tx,
+          Object.freeze({
+            material,
+            title: data.title,
+            brief,
+            channelIds: Object.freeze([...data.channelIds]),
+          }),
+        )
+      : null;
+    const topicId =
+      typeof accepted === "object" && accepted !== null ? (accepted.topicId ?? null) : accepted;
     // Capture a bounded, deterministic by-value snapshot under the same
     // transaction as admission and enqueue. Both sides of the join carry the
     // tenant predicate; the item supplies the brand boundary.
@@ -596,6 +626,14 @@ export class RunsRepository {
       })
       .returning({ id: schema.pipelineRuns.id });
     const runId = inserted[0]?.id as string;
+    if (typeof accepted === "object" && accepted !== null) {
+      await tx.insert(schema.runSourceLineage).values({
+        derivedRunId: runId,
+        orgId,
+        brandId: data.brandId,
+        ...accepted.sourceAttribution,
+      });
+    }
     await this.queue.enqueueGenerate(tx, { id: runId, orgId });
     return runId;
   }
@@ -629,6 +667,63 @@ export class RunsRepository {
    * Nothing about the run being retried changes — dismissing it is a separate
    * act, done by the screen once the new run is known to exist.
    */
+  /** Reads a frozen internal snapshot; the reuse caller rechecks it under canonical locks. */
+  async prepareReuseRetryInTx(tx: Tx, orgId: string, id: string) {
+    const [row] = await tx
+      .select({
+        brandId: schema.pipelineRuns.brandId,
+        topicId: schema.pipelineRuns.topicId,
+        input: schema.pipelineRuns.input,
+      })
+      .from(schema.pipelineRuns)
+      .where(and(eq(schema.pipelineRuns.orgId, orgId), eq(schema.pipelineRuns.id, id)))
+      .limit(1);
+    if (!row) throw notFound("run_not_found", "Run not found");
+    const [lineage] = await tx
+      .select()
+      .from(schema.runSourceLineage)
+      .where(
+        and(
+          eq(schema.runSourceLineage.orgId, orgId),
+          eq(schema.runSourceLineage.brandId, row.brandId),
+          eq(schema.runSourceLineage.derivedRunId, id),
+        ),
+      )
+      .limit(1);
+    if (!lineage) throw conflict("invalid_request", "This run has no internal source attribution");
+    if (
+      row.input.kind === "redacted" ||
+      lineage.sourceRedactedAt !== null ||
+      lineage.sourceDigest === null ||
+      lineage.sourceOrigin === null
+    )
+      throw conflict("run_redacted", "A redacted run cannot be retried");
+    const stored = parseStoredInput.transform(row.input);
+    const data = parseRunCreate.transform({
+      brandId: row.brandId,
+      title: stored.title,
+      contentType: stored.contentType,
+      generateCover: stored.generateCover,
+      generateInlineImages: stored.generateInlineImages,
+      seoKeywords: stored.seoKeywords,
+      useEditorialFeedback: stored.useEditorialFeedback,
+      brief: stored.text ?? undefined,
+      ...(stored.kind === "source"
+        ? { material: stored.material, sourceUrl: stored.sourceUrl ?? undefined }
+        : {}),
+      channelIds: stored.channelIds,
+    });
+    return {
+      data,
+      topicId: row.topicId,
+      lineage: {
+        ...lineage,
+        sourceDigest: lineage.sourceDigest,
+        sourceOrigin: lineage.sourceOrigin,
+      },
+    };
+  }
+
   async retry(orgId: string, id: string) {
     const rows = await db
       .select({
@@ -648,6 +743,18 @@ export class RunsRepository {
       throw conflict("run_redacted", "A redacted run cannot be retried");
     }
 
+    const [internalSource] = await db
+      .select({ id: schema.runSourceLineage.derivedRunId })
+      .from(schema.runSourceLineage)
+      .where(
+        and(eq(schema.runSourceLineage.orgId, orgId), eq(schema.runSourceLineage.derivedRunId, id)),
+      )
+      .limit(1);
+    if (internalSource)
+      throw conflict(
+        "invalid_request",
+        "Retry this internal source through the consented reuse action",
+      );
     const stored = parseStoredInput.transform(row.input);
     const originalTopicId = row.topicId;
     // `?? undefined` on both nullable members, and it is the same defect twice:
@@ -710,6 +817,21 @@ export class RunsRepository {
         if (!current || current.input.kind === "redacted") {
           throw conflict("run_redacted", "A redacted run cannot be retried");
         }
+        const [internalSource] = await tx
+          .select({ id: schema.runSourceLineage.derivedRunId })
+          .from(schema.runSourceLineage)
+          .where(
+            and(
+              eq(schema.runSourceLineage.orgId, orgId),
+              eq(schema.runSourceLineage.derivedRunId, id),
+            ),
+          )
+          .limit(1);
+        if (internalSource)
+          throw conflict(
+            "invalid_request",
+            "Retry this internal source through the consented reuse action",
+          );
         return originalTopicId;
       },
     );
