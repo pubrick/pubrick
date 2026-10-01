@@ -13,7 +13,7 @@ const base = "/api/calendar/editorial-plans";
 const scoped = (brandId: string, path = "") =>
   `${base}${path}?brandId=${encodeURIComponent(brandId)}`;
 export const editorialPlans = {
-  list: (brandId: string) => api<EditorialPlanSummary[]>(scoped(brandId)),
+  list: (brandId: string) => api<EditorialPlanSummary[]>(scoped(brandId), { cache: "no-store" }),
   create: (body: EditorialPlanCreate) =>
     api<EditorialPlanSummary>(base, { method: "POST", body: JSON.stringify(body) }),
   preview: (brandId: string, body: EditorialPlanPreview) =>

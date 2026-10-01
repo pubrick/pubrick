@@ -244,6 +244,8 @@ describe("weekly editorial plans", () => {
       fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.enable }));
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText(t.updatingSchedule)).toBeInTheDocument();
+    expect(screen.queryByText(t.reason.plan_paused, { exact: false })).not.toBeInTheDocument();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: t.history }));
     });
@@ -258,6 +260,11 @@ describe("weekly editorial plans", () => {
       await vi.advanceTimersByTimeAsync(10_000);
     });
     expect(screen.getByText(t.state.planned, { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText(t.updatingSchedule)).not.toBeInTheDocument();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `/api/calendar/editorial-plans?brandId=${brandId}`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
     expect(screen.getByLabelText(t.brief)).toHaveValue("Unsaved editorial idea");
     expect(
       within(screen.getByRole("dialog")).getByText(t.reason.plan_paused, { exact: false }),

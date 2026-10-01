@@ -22,8 +22,12 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
+import { usePoll } from "@/hooks/use-poll";
 import { ApiError, errorMessage } from "@/lib/api";
 import { editorialPlans, editorialPlanUtcOffset } from "@/lib/editorial-plans";
+
+// Active schedules and external changes remain live while this Calendar is mounted.
+const keepCalendarLive = () => false;
 
 type Form = Omit<EditorialPlanUpdate, "expectedRevision">;
 function initialForm(): Form {
@@ -69,7 +73,14 @@ export function RecurringPlans({
   const t = useTranslations("CalendarRecurring");
   const te = useTranslations("Errors");
   const locale = useLocale();
-  const [plans, setPlans] = useState<EditorialPlanSummary[] | null>(null);
+  const fetchPlans = useCallback(() => editorialPlans.list(brandId), [brandId]);
+  const {
+    data: plans,
+    error: pollError,
+    refresh: load,
+    mutate: setPlans,
+  } = usePoll(fetchPlans, keepCalendarLive, { intervalMs: 10_000 });
+  const previousRefreshVersion = useRef(refreshVersion);
   const [form, setForm] = useState<Form>(initialForm);
   const [editing, setEditing] = useState<EditorialPlanSummary | null>(null);
   const unavailableChannelIds = form.channelIds.filter(
@@ -91,28 +102,18 @@ export function RecurringPlans({
     rows: EditorialPlanOccurrence[];
     cursor: string | null;
   } | null>(null);
-  const sequence = useRef(0);
+
   const describe = (err: unknown) => {
     setError(errorMessage(err, t("genericError"), te));
     if (err instanceof ApiError && err.status === 409) setConflict(true);
   };
-  const load = useCallback(async () => {
-    const current = ++sequence.current;
-    try {
-      const rows = await editorialPlans.list(brandId);
-      if (current === sequence.current) setPlans(rows);
-    } catch (err) {
-      if (current === sequence.current) setError(errorMessage(err, t("genericError"), te));
-    }
-  }, [brandId, t, te]);
   useEffect(() => {
-    // A parent Calendar mutation refreshes snapshots without resetting the draft.
-    if (refreshVersion < 0) return;
+    // Parent mutations refresh summaries, preserving the unsaved form and history snapshot.
+    if (previousRefreshVersion.current === refreshVersion) return;
+    previousRefreshVersion.current = refreshVersion;
     void load();
-    return () => {
-      sequence.current++;
-    };
   }, [load, refreshVersion]);
+  const visibleError = error ?? (pollError ? errorMessage(pollError, t("genericError"), te) : null);
   function change<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((current) => ({ ...current, [key]: value }));
     setPreview(null);
@@ -227,7 +228,7 @@ export function RecurringPlans({
   async function reloadConflict() {
     await perform(async () => {
       const rows = await editorialPlans.list(brandId);
-      setPlans(rows);
+      setPlans(() => rows);
       if (editing) {
         const latest = rows.find((p) => p.id === editing.id);
         if (latest) setEditing(latest);
@@ -252,35 +253,46 @@ export function RecurringPlans({
       });
     }, false);
   }
-  function occurrences(rows: (EditorialPlanCalculatedOccurrence | EditorialPlanOccurrence)[]) {
+  function occurrences(
+    rows: (EditorialPlanCalculatedOccurrence | EditorialPlanOccurrence)[],
+    active = false,
+  ) {
     return (
       <ol className="space-y-2">
-        {rows.map((row) => (
-          <li
-            key={"id" in row ? row.id : row.localDate}
-            className="rounded-card border border-border p-3 text-sm"
-          >
-            <p>
-              {row.localDate} · {row.localTime} · {row.timezone}
-              {row.offsetMinutes !== null && ` · ${editorialPlanUtcOffset(row.offsetMinutes)}`}
-            </p>
-            <p className="text-fg-secondary">
-              {t(`state.${row.state}`)}
-              {row.reason && ` · ${t(`reason.${row.reason}`)}`}
-            </p>
-            {row.scheduledAt && (
-              <p className="text-fg-tertiary">{t("utcInstant", { instant: row.scheduledAt })}</p>
-            )}
-            {"runId" in row && row.runId && (
-              <Link
-                className="inline-block min-h-11 content-center text-accent underline"
-                href={`/${locale}/content/runs/${row.runId}`}
-              >
-                {t("openRun")}
-              </Link>
-            )}
-          </li>
-        ))}
+        {rows.map((row) => {
+          const pending =
+            active &&
+            row.state === "suspended" &&
+            row.reason === "plan_paused" &&
+            row.scheduledAt !== null &&
+            new Date(row.scheduledAt).getTime() > Date.now();
+          return (
+            <li
+              key={"id" in row ? row.id : row.localDate}
+              className="rounded-card border border-border p-3 text-sm"
+            >
+              <p>
+                {row.localDate} · {row.localTime} · {row.timezone}
+                {row.offsetMinutes !== null && ` · ${editorialPlanUtcOffset(row.offsetMinutes)}`}
+              </p>
+              <p className="text-fg-secondary" role={pending ? "status" : undefined}>
+                {pending ? t("updatingSchedule") : t(`state.${row.state}`)}
+                {!pending && row.reason && ` · ${t(`reason.${row.reason}`)}`}
+              </p>
+              {row.scheduledAt && (
+                <p className="text-fg-tertiary">{t("utcInstant", { instant: row.scheduledAt })}</p>
+              )}
+              {"runId" in row && row.runId && (
+                <Link
+                  className="inline-block min-h-11 content-center text-accent underline"
+                  href={`/${locale}/content/runs/${row.runId}`}
+                >
+                  {t("openRun")}
+                </Link>
+              )}
+            </li>
+          );
+        })}
       </ol>
     );
   }
@@ -290,9 +302,9 @@ export function RecurringPlans({
       <p className="mt-2 text-sm text-fg-secondary">{t("intro")}</p>
       <p className="mt-2 text-sm text-fg-secondary">{t("cost")}</p>
       <p className="mt-2 text-sm text-fg-secondary">{t("limits")}</p>
-      {error && (
+      {visibleError && (
         <p role="alert" className="my-3 text-sm text-danger">
-          {error}
+          {visibleError}
         </p>
       )}
       {conflict && (
@@ -407,7 +419,7 @@ export function RecurringPlans({
               </div>
               <h4 className="my-2 text-sm font-medium">{t("upcoming")}</h4>
               {plan.occurrences.length ? (
-                occurrences(plan.occurrences)
+                occurrences(plan.occurrences, plan.enabled && !plan.ended && !plan.blockedReason)
               ) : (
                 <p className="text-sm text-fg-secondary">{t("noUpcoming")}</p>
               )}

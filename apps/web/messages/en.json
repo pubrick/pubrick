@@ -2798,6 +2798,7 @@
     "enable": "Enable",
     "remove": "Remove",
     "history": "History",
+    "updatingSchedule": "Updating upcoming schedule…",
     "upcoming": "Upcoming",
     "noUpcoming": "No dates in the next 14 local days. Check the range and weekdays.",
     "createForm": "Add weekly plan",

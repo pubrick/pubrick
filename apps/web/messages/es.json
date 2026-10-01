@@ -2798,6 +2798,7 @@
     "enable": "Activar",
     "remove": "Eliminar",
     "history": "Historial",
+    "updatingSchedule": "Actualizando la programación de próximos eventos…",
     "upcoming": "Próximos eventos",
     "noUpcoming": "Sin fechas en los próximos 14 días locales. Comprueba el período y los días.",
     "createForm": "Añadir plan semanal",
