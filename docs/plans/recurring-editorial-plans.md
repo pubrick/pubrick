@@ -2,7 +2,7 @@
 
 Status: calendar prerequisite, shared contracts/calculator, transactional
 persistence, API/worker integration and Calendar UI landed in the feature branch;
-isolated built-browser acceptance in progress.
+isolated built-browser acceptance passed; integrated local gate in progress.
 Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
@@ -129,7 +129,7 @@ access and required hosted verification, matching the canonical identity policy.
 The author's test storage was removed. Independent API/worker source review passed.
 Selected dispatch guard proofs and their deliberately narrow scope are recorded
 in the [native guard review](../reviews/2026-10-01-recurring-dispatch-guards.md).
-The integrated full gate/browser journey remain pending.
+The integrated full gate remains pending; the built-browser journey is recorded below.
 
 ### 4. Calendar UI and documentation
 
@@ -163,8 +163,13 @@ now repairs only unavailable selections, including changes while editing, and
 preserves the remaining draft. Its final component/locale tier passed 34 assertions
 (13 component and 21 locale checks). Shared tokens, four locales, strict wire
 round trips and localized refusal bodies are covered. Earlier web typecheck and
-scoped lint passed; final whole-feature types/build and real browser/mobile
-acceptance are still required.
+scoped lint passed. The built-browser journey additionally reproduced a stale
+Settings revision after saving the first key, and a recurring summary that did
+not refresh after asynchronous Resume. Both fixes preserve unsaved input and
+have RED regressions, green focused tiers and independent source reviews. The
+final built journey passed on mobile with keyboard consent and without a manual
+reload; see the [acceptance record](../reviews/2026-10-01-recurring-browser-acceptance.md).
+Whole-project build, typecheck and lint passed; the final test tier is in progress.
 
 ## Integrated acceptance
 

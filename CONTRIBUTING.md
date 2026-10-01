@@ -28,6 +28,28 @@ fix needs the affected checks; repeat the full gate only if the fix changes a
 shared contract or leaves a concrete integration risk. Let one CI run verify
 the final PR head instead of pushing every intermediate commit to trigger CI.
 
+### Native database checks
+
+Set `TEST_DATABASE_URL` to a disposable PostgreSQL 16 database. Billing
+persistence also requires a separate `BILLING_TEST_DATABASE_URL` and
+`PUBRICK_BILLING_DISPOSABLE=1`. Without these settings, a passing unit run does
+not establish database acceptance. Use synthetic `BETTER_AUTH_SECRET` and
+`APP_ENCRYPTION_KEY` values; the test database role must be able to create and
+drop its owned fixture databases. Run the workspace test tier without cached
+results and with one package and test worker at a time on a shared machine:
+
+```sh
+pnpm test --force --concurrency=1 -- --maxWorkers=1
+```
+
+The migration matrix clones and upgrades every historical schema. Docker
+Desktop volume I/O can exceed its existing timeout even when individual
+upgrades pass. For that disposable fixture, a PostgreSQL container with
+`--tmpfs /var/lib/postgresql/data:rw,size=512m` avoids repeated disk flushes.
+Keep the full matrix, assertions and time limits unchanged; record the server
+version and fixture storage with the result. The tmpfs data is temporary and
+disappears when its test container is removed.
+
 ## Production browser journeys
 
 [Browser testing](docs/browser-testing.md) runs a disposable PostgreSQL instance
