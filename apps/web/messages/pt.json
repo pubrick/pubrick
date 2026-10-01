@@ -1866,7 +1866,8 @@
     "public_result_gone": "O resultado original foi excluído. Esta operação não pode criá-lo novamente.",
     "public_operation_capacity": "Este espaço atingiu seu limite total de operações API. Contate o operador.",
     "public_rate_limited": "Muitas solicitações API. Aguarde e repita com a mesma chave de idempotência e os mesmos dados.",
-    "public_request_unavailable": "A admissão de solicitações API está indisponível. Tente mais tarde com a mesma chave e os mesmos dados."
+    "public_request_unavailable": "A admissão de solicitações API está indisponível. Tente mais tarde com a mesma chave e os mesmos dados.",
+    "public_authority_revoked": "Esta chave não autoriza mais a operação ou seus destinos. Confira as permissões, a revogação da chave e os destinos selecionados."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",

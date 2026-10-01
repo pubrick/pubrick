@@ -589,6 +589,7 @@ it("retains hosted subscription refusal codes at the 403 transport boundary", as
 });
 
 it.each([
+  [403, "public_authority_revoked"],
   [409, "idempotency_conflict"],
   [410, "public_result_gone"],
   [409, "public_operation_capacity"],

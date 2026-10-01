@@ -1866,7 +1866,8 @@
     "public_result_gone": "The original result was deleted. This operation cannot create it again.",
     "public_operation_capacity": "This workspace has reached its lifetime API operation capacity. Contact the operator.",
     "public_rate_limited": "Too many API requests. Wait, then retry with the same idempotency key and payload.",
-    "public_request_unavailable": "API request admission is unavailable. Retry later with the same idempotency key and payload."
+    "public_request_unavailable": "API request admission is unavailable. Retry later with the same idempotency key and payload.",
+    "public_authority_revoked": "This key no longer authorizes the operation or its workspace targets. Check the key scope, revocation and selected targets."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

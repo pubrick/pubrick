@@ -28,6 +28,7 @@ export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 
 /** Everything `errorMessage` can translate: the wire's codes plus the web's own. */
 const HOSTED_ERROR_CODES = [
+  "public_authority_revoked",
   "idempotency_conflict",
   "public_result_gone",
   "public_operation_capacity",
@@ -99,6 +100,7 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  public_authority_revoked: "public_authority_revoked",
   idempotency_conflict: "idempotency_conflict",
   public_result_gone: "public_result_gone",
   public_operation_capacity: "public_operation_capacity",

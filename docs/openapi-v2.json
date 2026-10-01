@@ -766,7 +766,7 @@
             "type": "string",
             "enum": [
               "invalid_request",
-              "forbidden",
+              "public_authority_revoked",
               "not_found",
               "idempotency_conflict",
               "public_result_gone",

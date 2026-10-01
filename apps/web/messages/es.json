@@ -1866,7 +1866,8 @@
     "public_result_gone": "El resultado original se eliminó. Esta operación no puede crearlo de nuevo.",
     "public_operation_capacity": "Este espacio alcanzó su límite total de operaciones API. Contacta al operador.",
     "public_rate_limited": "Demasiadas solicitudes API. Espera y repite con la misma clave de idempotencia y los mismos datos.",
-    "public_request_unavailable": "La admisión de solicitudes API no está disponible. Repite más tarde con la misma clave y los mismos datos."
+    "public_request_unavailable": "La admisión de solicitudes API no está disponible. Repite más tarde con la misma clave y los mismos datos.",
+    "public_authority_revoked": "Esta clave ya no autoriza la operación o sus destinos. Revisa los permisos, la revocación de la clave y los destinos seleccionados."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
