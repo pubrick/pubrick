@@ -42,7 +42,7 @@ export function hashContentReuseRequest(
     version: CONTENT_REUSE_HASH_VERSION,
     operation: parsedOperation,
     requestTargetKind: parsedOperation === "reuse" ? "content" : "run",
-    requestTargetId: targetSchema.parse(targetId),
+    requestTargetId: targetSchema.parse(targetId).toLowerCase(),
     body:
       parsedOperation === "reuse"
         ? contentReuseCreateSchema.parse(body)
