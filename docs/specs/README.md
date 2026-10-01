@@ -1,10 +1,11 @@
 # Design specs
 
-Numbered decision records, in the order the product was built. Each one is a
-**historical record of a decision the codebase still lives with** — not
-living documentation. Comments in the code cite them as "the design" or "the
-spec"; use this index to find the right file, since several of them share
-section numbers.
+Design and decision records. Implemented decisions are historical records;
+proposed designs do not establish available functionality. Use the
+[roadmap](../roadmap.md), [porting status](../porting-status.md) and linked
+verification records for current delivery status. Comments cite these files as
+"the design" or "the spec"; use the full filename, because both section numbers
+and some older document prefixes are shared.
 
 | # | Document | Covers | Cited in code as |
 |---|---|---|---|
@@ -16,6 +17,26 @@ section numbers.
 | [0006](0006-api-can-call-a-model.md) | The API can call a model | Increment 2b-2a — provider resolution, cancellation and abort accounting for an editor-side model call | not yet cited by name in code comments as of this copy |
 | [0007](0007-partial-delivery-design.md) | Partial delivery: what a half-sent post is | Issue #16 — what an item whose channels disagree IS, the `unknown` refusal and its human resolver, `nextItemStatus` as the one promotion rule | shipped; cited by section number (§4.2, §4.3, §4.4) in the content repository and the item screen |
 | [0008](0008-schedule-staleness-design.md) | Schedule staleness: how late is too late | Issue #17 — the worker-side lateness bound and its derived floor, `adaptations.failure_reason` as a closed list, the coded sentence on the screens, the sweep for a `scheduled` or `queued` row whose queue job is gone | shipped; cited as "the staleness design/bound" in the publish repository, the worker's env schema and `docs/lock-order.md` |
+| [0009](0009-queue-paging-design.md) | Queue paging | Bounded list pages, batched adaptation queries and cursor semantics | queue paging design |
+| [0010](0010-scoped-draft-write-api.md) | Scoped draft writes | Paid BYOK consent, scoped API/MCP operations, durable replay and imported-draft review | scoped draft write design |
+| [0011](0011-recurring-editorial-plans.md) | Weekly editorial plans | Finite weekly generation, preview, paid enablement, dispatch and occurrence evidence | recurring plan design; feature release tracked in the roadmap |
+| [0012](0012-evergreen-draft-reuse.md) | Evergreen draft reuse | Manually confirmed saved-master generation, lineage, replay and source erasure | evergreen reuse design; implementation tracked in its execution plan |
+
+## Additional historical design files
+
+These older files reuse numeric prefixes. Their full filenames identify distinct
+features; the prefix alone is not a unique spec identifier. Front matter records
+the original design stage and can predate implementation. Consult current source
+and the roadmap before treating a proposed contract as shipped.
+
+| Document | Scope |
+| --- | --- |
+| [Paid reply analysis](0002-paid-reply-analysis.md) | Explicit paid consent after bounded automatic Telegram reply collection |
+| [Versioned role templates](0003-versioned-role-templates.md) | Versioned generation-role configuration and run snapshots |
+| [Rich master editor](0004-rich-master-editor.md) | Structured master text, plain-text projection and revision concurrency |
+| [Telegram long posts](0004-telegram-long-posts.md) | Reviewed bounded multi-message Telegram delivery |
+
+## Recorded implementation deviations
 
 `0007` has shipped WITH THE THREE DEVIATIONS BELOW: the `unknown` refusal and
 its resolver, the `partially_published` status with its migration and backfill,
