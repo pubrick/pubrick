@@ -77,6 +77,25 @@ afterEach(() => {
   vi.resetModules();
 });
 
+describe("public write operation capacity is validated at boot", () => {
+  it.each([undefined, ""])("defaults an unset or blank capacity (%s)", async (value) => {
+    expect(await boot({ PUBLIC_API_MAX_OPERATION_RECORDS: value })).toBeNull();
+    expect((await import("./env")).env.PUBLIC_API_MAX_OPERATION_RECORDS).toBe(100_000);
+  });
+  it.each(["1", "54321", "1000000"])("accepts bounded integer capacity %s", async (value) => {
+    expect(await boot({ PUBLIC_API_MAX_OPERATION_RECORDS: value })).toBeNull();
+    expect((await import("./env")).env.PUBLIC_API_MAX_OPERATION_RECORDS).toBe(Number(value));
+  });
+  it.each(["0", "-1", "1.5", "1000001", "not-a-number"])(
+    "refuses invalid capacity %s before startup",
+    async (value) => {
+      expect(refusal(await boot({ PUBLIC_API_MAX_OPERATION_RECORDS: value }))).toMatch(
+        /PUBLIC_API_MAX_OPERATION_RECORDS:/,
+      );
+    },
+  );
+});
+
 describe("the key ring is validated at boot", () => {
   it("validates the optional Google forward proxy without exposing its credential", async () => {
     expect(await boot({ GOOGLE_API_PROXY: "" })).toBeNull();
