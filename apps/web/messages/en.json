@@ -3107,6 +3107,13 @@
       "api": "API & MCP",
       "workflow": "Workflow & feature inventory"
     },
-    "studioNotes": "Studio notes"
+    "studioNotes": "Studio notes",
+    "nav": {
+      "product": "Product",
+      "useCases": "Use cases",
+      "openSource": "Open source",
+      "hosting": "Hosting",
+      "docs": "Docs"
+    }
   }
 }

@@ -3107,6 +3107,13 @@
       "api": "API y MCP",
       "workflow": "Proceso e inventario de funciones"
     },
-    "studioNotes": "Notas del estudio"
+    "studioNotes": "Notas del estudio",
+    "nav": {
+      "product": "Producto",
+      "useCases": "Casos de uso",
+      "openSource": "Código abierto",
+      "hosting": "Alojamiento",
+      "docs": "Documentación"
+    }
   }
 }
