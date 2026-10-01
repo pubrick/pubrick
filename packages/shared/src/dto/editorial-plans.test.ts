@@ -4,10 +4,12 @@ import {
   EDITORIAL_PLAN_REASONS,
   editorialPlanCreateSchema,
   editorialPlanEnableSchema,
+  editorialPlanOccurrenceSchema,
   editorialPlanOccurrencesQuerySchema,
   editorialPlanPauseSchema,
   editorialPlanPreviewResultSchema,
   editorialPlanRemoveSchema,
+  editorialPlanSummarySchema,
   editorialPlanUpdateSchema,
 } from "./editorial-plans.js";
 import { PAID_GENERATION_CONSENT_VERSION } from "./public-write.js";
@@ -25,6 +27,71 @@ const draft = {
   endDate: "2026-12-31",
 };
 describe("editorial plan wire contracts", () => {
+  it("round trips opaque consenting actor IDs and durable consent snapshots", () => {
+    const actorId = "user_00000000-0000-4000-8000-000000000001";
+    const consent = {
+      consentVersion: PAID_GENERATION_CONSENT_VERSION,
+      consentedRevision: 2,
+      consentedAt: "2026-01-01T00:00:00Z",
+      consentingActorId: actorId,
+    };
+    const occurrence = {
+      id,
+      planId: id,
+      localDate: "2026-01-02",
+      localTime: "09:00",
+      timezone: "UTC",
+      scheduledAt: "2026-01-02T09:00:00Z",
+      offsetMinutes: 0,
+      planRevision: 2,
+      brief: draft.brief,
+      channelIds: draft.channelIds,
+      state: "dispatched",
+      reason: null,
+      ...consent,
+      slotId: null,
+      runId: id,
+    };
+    expect(editorialPlanOccurrenceSchema.parse(occurrence)).toEqual(occurrence);
+    const summary = {
+      ...draft,
+      weekdays: [1, 7],
+      id,
+      enabled: true,
+      ended: false,
+      revision: 2,
+      ...consent,
+      blockedReason: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      occurrences: [occurrence],
+    };
+    expect(editorialPlanSummarySchema.parse(summary)).toEqual(summary);
+    const clearedConsent = {
+      consentVersion: null,
+      consentedRevision: null,
+      consentedAt: null,
+      consentingActorId: null,
+    };
+    const paused = { ...summary, enabled: false, revision: 3, ...clearedConsent };
+    expect(editorialPlanSummarySchema.parse(paused)).toEqual(paused);
+    // The dispatched snapshot still names the previous consent after the active plan clears it.
+    expect(editorialPlanSummarySchema.parse(paused).occurrences[0]?.consentingActorId).toBe(
+      actorId,
+    );
+    const opaque = { ...summary, consentingActorId: "Ba8n3O9pK6xQ4eW2tR5yU7iL1sD0fGvH" };
+    expect(editorialPlanSummarySchema.parse(opaque)).toEqual(opaque);
+    for (const invalid of ["", "bad\0id", "x".repeat(256)]) {
+      expect(
+        editorialPlanSummarySchema.safeParse({ ...summary, consentingActorId: invalid }).success,
+      ).toBe(false);
+      expect(
+        editorialPlanOccurrenceSchema.safeParse({ ...occurrence, consentingActorId: invalid })
+          .success,
+      ).toBe(false);
+    }
+  });
+
   it("saves without paid consent, canonicalizing unique weekdays and channel order", () => {
     const second = "00000000-0000-4000-8000-000000000002";
     expect(editorialPlanCreateSchema.parse({ ...draft, channelIds: [second, id] })).toEqual({

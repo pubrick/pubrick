@@ -1,3 +1,4 @@
+import { editorialPlanPreviewResultSchema } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import {
   calculateEditorialPlanOccurrences,
@@ -14,6 +15,26 @@ const schedule = {
 const calc = (patch: Partial<typeof schedule>, clock: string) =>
   calculateEditorialPlanOccurrences({ ...schedule, ...patch }, new Date(clock));
 describe("weekly editorial occurrence calculation", () => {
+  it.each([
+    ["Europe/Paris", 9.35, "1800-01-01T08:50:39.000Z"],
+    ["America/Metlakatla", 913.7, "1799-12-31T17:46:18.000Z"],
+    ["Asia/Manila", -956.1333333333333, "1800-01-02T00:56:08.000Z"],
+  ])(
+    "round trips historical seconds-resolution offsets for %s",
+    (timezone, offsetMinutes, scheduledAt) => {
+      const result = calc(
+        { timezone, startDate: "1800-01-01", endDate: "1800-01-01" },
+        "1799-12-31T00:00:00Z",
+      );
+      expect(result.occurrences[0]).toMatchObject({
+        localDate: "1800-01-01",
+        offsetMinutes,
+        scheduledAt,
+      });
+      expect(editorialPlanPreviewResultSchema.parse(result)).toEqual(result);
+    },
+  );
+
   it("uses exactly fourteen local calendar dates and skips at/before the fixed clock", () => {
     const result = calc({}, "2026-01-01T09:00:00Z");
     expect(result.occurrences).toHaveLength(14);

@@ -89,12 +89,23 @@ export type EditorialPlanEnable = z.infer<typeof editorialPlanEnableSchema>;
 export const editorialPlanPreviewSchema = editorialPlanScheduleSchema;
 export type EditorialPlanPreview = z.infer<typeof editorialPlanPreviewSchema>;
 
+/** Auth uses opaque text identifiers, including BetterAuth's default generated IDs. */
+const consentingActorIdSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine((value) => !hasNulByte(value), NO_NUL_BYTE_MESSAGE);
+/** Minutes may be fractional: historical IANA offsets retain seconds resolution.
+ * Historical date-line offsets can exceed the modern fourteen-hour envelope.
+ */
+const offsetMinutesSchema = z.number().min(-1440).max(1440);
+
 export const editorialPlanCalculatedOccurrenceSchema = z.strictObject({
   localDate: z.iso.date(),
   localTime: editorialPlanScheduleSchema.shape.localTime,
   timezone: editorialPlanScheduleSchema.shape.timezone,
   scheduledAt: z.iso.datetime().nullable(),
-  offsetMinutes: z.number().int().min(-840).max(840).nullable(),
+  offsetMinutes: offsetMinutesSchema.nullable(),
   state: z.enum(["planned", "skipped"]),
   reason: z.enum(["dst_gap", "generation_window_expired"]).nullable(),
 });
@@ -113,7 +124,7 @@ export const editorialPlanOccurrenceSchema = z.strictObject({
   localTime: editorialPlanScheduleSchema.shape.localTime,
   timezone: editorialPlanScheduleSchema.shape.timezone,
   scheduledAt: z.iso.datetime().nullable(),
-  offsetMinutes: z.number().int().min(-840).max(840).nullable(),
+  offsetMinutes: offsetMinutesSchema.nullable(),
   planRevision: z.number().int().positive(),
   brief: fields.brief,
   channelIds: fields.channelIds,
@@ -122,7 +133,7 @@ export const editorialPlanOccurrenceSchema = z.strictObject({
   consentVersion: z.literal(PAID_GENERATION_CONSENT_VERSION).nullable(),
   consentedRevision: z.number().int().positive().nullable(),
   consentedAt: z.iso.datetime().nullable(),
-  consentingActorId: z.uuid().nullable(),
+  consentingActorId: consentingActorIdSchema.nullable(),
   slotId: z.uuid().nullable(),
   runId: z.uuid().nullable(),
 });
@@ -135,7 +146,7 @@ export const editorialPlanSummarySchema = editorialPlanCreateSchema.safeExtend({
   consentVersion: z.literal(PAID_GENERATION_CONSENT_VERSION).nullable(),
   consentedRevision: z.number().int().positive().nullable(),
   consentedAt: z.iso.datetime().nullable(),
-  consentingActorId: z.uuid().nullable(),
+  consentingActorId: consentingActorIdSchema.nullable(),
   blockedReason: z.enum(EDITORIAL_PLAN_REASONS).nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
