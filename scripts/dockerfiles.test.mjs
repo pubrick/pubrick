@@ -43,5 +43,17 @@ for (const service of ["api", "worker", "web"]) {
         `${service} image must install ${manifestPath} before building`,
       );
     }
+    // pnpm install is unfiltered: even a copied non-target application's
+    // workspace dependencies must exist when the lockfile is installed.
+    for (const { manifestPath, manifest } of packages.values()) {
+      if (!depsStage.includes(`COPY ${manifestPath} ${manifestPath}`)) continue;
+      for (const dependency of workspaceClosure(manifest.name)) {
+        const dependencyPath = packages.get(dependency).manifestPath;
+        assert.ok(
+          depsStage.includes(`COPY ${dependencyPath} ${dependencyPath}`),
+          `${service} unfiltered install copies ${manifestPath} and also needs ${dependencyPath}`,
+        );
+      }
+    }
   });
 }
