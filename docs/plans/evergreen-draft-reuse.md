@@ -1,11 +1,12 @@
 # Evergreen draft reuse execution plan
 
-Status: independently reviewed design; shared/database foundation verified
-after weekly integration. Session admission and deletion integration are next.
+Status: independently reviewed design; shared/database foundation and session
+backend verified with focused native checks. UI and critical guard proofs are
+in progress; integrated build/browser acceptance and release remain pending.
 Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
-Implementation baseline: reviewed weekly candidate `b4ab01db` (PR #155);
+Implementation baseline: reviewed weekly candidate `bf66930b` (PR #155);
 its main release remains separate and pending. Design source: `9be8abb2`.
 Tracking: `Ozon-tools-3xwei` (root owns status updates); design review
 `Ozon-tools-44lpl` is complete.
@@ -130,6 +131,13 @@ returns 410. Verify no exported raw source evidence after erasure and no
 cross-org cleanup. Add a mutation proof for each critical race/erasure guard only after
 native baseline stability; follow the project's three-run isolation rule and
 label inconclusive host failures honestly.
+
+Backend milestone `e25b88c0` includes atomic session admission, frozen-source
+retry, terminal snapshot erasure and permission-safe detail attribution.
+Focused native checks and independent source review passed; selected critical
+guard proofs and the user-facing workflow remain pending. See the
+[backend receipt](../reviews/2026-10-01-evergreen-reuse-backend.md) for the
+exact scope and retained failures. This is not integrated feature acceptance.
 
 ## 4. Existing compose/content UI and guide
 
