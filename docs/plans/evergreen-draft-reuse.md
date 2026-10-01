@@ -1,11 +1,13 @@
 # Evergreen draft reuse execution plan
 
-Status: independently reviewed design; implementation starts after the weekly
-integration gate. Operator setup is not required. No implementation or release claim.
+Status: independently reviewed design; shared/database foundation in progress
+after verified weekly integration. Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
-Source baseline: `81b346fb` (main); separate from the weekly-plan release.
-Tracking: `Ozon-tools-44lpl` (root owns status updates).
+Implementation baseline: reviewed weekly candidate `b4ab01db` (PR #155);
+its main release remains separate and pending. Design source: `9be8abb2`.
+Tracking: `Ozon-tools-3xwei` (root owns status updates); design review
+`Ozon-tools-44lpl` is complete.
 
 ## Delivery boundary
 
