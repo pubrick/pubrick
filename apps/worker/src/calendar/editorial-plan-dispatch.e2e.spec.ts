@@ -164,6 +164,30 @@ describe.skipIf(!url)("recurring calendar paid dispatch", () => {
         .where(eq(schema.pipelineRuns.orgId, f.orgId)),
     ).toEqual([]);
   });
+  it("rolls back the run and dispatch marker when the queue returns no job", async () => {
+    const f = await fixture();
+    const mocked = vi.spyOn(boss, "send").mockResolvedValueOnce(null);
+    try {
+      await expect(service.trigger(boss, f.orgId, f.slotId, () => due)).rejects.toThrow(
+        "Calendar generation job was not enqueued",
+      );
+    } finally {
+      mocked.mockRestore();
+    }
+    expect(await occurrence(f.occurrenceId)).toMatchObject({
+      state: "planned",
+      runId: null,
+      dispatchedAt: null,
+    });
+    expect((await slot(f.slotId))?.runId).toBeNull();
+    expect(
+      await connection.db
+        .select({ id: schema.pipelineRuns.id })
+        .from(schema.pipelineRuns)
+        .where(eq(schema.pipelineRuns.orgId, f.orgId)),
+    ).toEqual([]);
+    expect(await boss.findJobs("generate", { data: { orgId: f.orgId } })).toEqual([]);
+  });
   it("settles missing configuration and closes expired identities without catchup", async () => {
     const f = await fixture(false);
     await service.trigger(boss, f.orgId, f.slotId, () => due);
