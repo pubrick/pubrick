@@ -206,8 +206,11 @@ retained snapshots and run identifiers, which may outlive deleted runs.
 A stale revision refuses with a conflict. **Reload** refreshes the saved
 revision while preserving unsaved form input; review it before saving again.
 If another editor removed the plan, saving stays disabled and your text remains
-available until you cancel editing. Missing channels require editing and enabling
-again; missing provider configuration can be repaired in Settings.
+available until you cancel editing. The edit form flags destinations that are no
+longer available, including ones removed while the form is open. Its **Remove**
+control excludes only unavailable selections and keeps other choices and unsaved
+text. Select active replacement channels, Save and enable again. Missing provider
+configuration can be repaired in Settings.
 
 There are at most five nonremoved plans and 10,000 retained occurrences per
 brand. These are workload bounds, not monetary spending caps. Removing a plan

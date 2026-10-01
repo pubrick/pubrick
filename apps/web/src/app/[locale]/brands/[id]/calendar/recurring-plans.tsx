@@ -72,6 +72,9 @@ export function RecurringPlans({
   const [plans, setPlans] = useState<EditorialPlanSummary[] | null>(null);
   const [form, setForm] = useState<Form>(initialForm);
   const [editing, setEditing] = useState<EditorialPlanSummary | null>(null);
+  const unavailableChannelIds = form.channelIds.filter(
+    (id) => !channels.some((channel) => channel.id === id),
+  );
   const [preview, setPreview] = useState<EditorialPlanPreviewResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -496,6 +499,27 @@ export function RecurringPlans({
           <p className="text-sm text-fg-secondary">{t("scheduleHint")}</p>
           <fieldset className="rounded-card border border-border p-3">
             <legend className="px-1 text-sm">{t("channels")}</legend>
+            {unavailableChannelIds.length > 0 && (
+              <div className="mb-3 space-y-2">
+                <p role="status" className="text-sm text-fg-secondary">
+                  {t("unavailableChannels")}
+                </p>
+                <Button
+                  className="min-h-11"
+                  variant="secondary"
+                  aria-label={t("removeUnavailableChannels")}
+                  disabled={busy}
+                  onClick={() =>
+                    change(
+                      "channelIds",
+                      form.channelIds.filter((id) => !unavailableChannelIds.includes(id)),
+                    )
+                  }
+                >
+                  {t("remove")}
+                </Button>
+              </div>
+            )}
             <div className="flex flex-wrap gap-3">
               {channels.map((channel) => (
                 <label key={channel.id} className="flex min-h-11 items-center gap-2 text-sm">
