@@ -64,6 +64,12 @@
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
  */
 export const API_ERROR_CODES = [
+  "public_authority_revoked",
+  "idempotency_conflict",
+  "public_result_gone",
+  "public_operation_capacity",
+  "public_rate_limited",
+  "public_request_unavailable",
   "client_review_role_required",
   "client_review_required",
   "client_review_link_invalid",

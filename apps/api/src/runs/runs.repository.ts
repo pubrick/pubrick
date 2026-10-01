@@ -29,6 +29,8 @@ import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { badRequest, conflict, forbidden, notFound } from "../api-error";
 import { db } from "../db";
 import { QueueService } from "../queue/queue.service";
+import { currentRequestAuthority } from "../request-authority";
+import { authorizeRequestActor, type ExpectedApiOperation } from "../request-authority-admission";
 import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 import { ZodValidationPipe } from "../validation.pipe";
 
@@ -298,15 +300,19 @@ export class RunsRepository {
    * so the message names the actual problem ("this brand has no channels")
    * rather than blaming the ids the caller sent.
    */
-  private async resolveChannels(orgId: string, data: RunCreate): Promise<void> {
-    const brand = await db
+  private async resolveChannels(
+    orgId: string,
+    data: RunCreate,
+    reader: Pick<Tx, "select"> = db,
+  ): Promise<void> {
+    const brand = await reader
       .select({ id: schema.brands.id })
       .from(schema.brands)
       .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
       .limit(1);
     if (brand.length === 0) throw notFound("brand_not_found", "Brand not found");
 
-    const brandChannels = await db
+    const brandChannels = await reader
       .select({ id: schema.channels.id, platform: schema.channels.platform })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.brandId, data.brandId)));
@@ -337,7 +343,7 @@ export class RunsRepository {
       }
     }
     if (data.generateCover || data.generateInlineImages) {
-      const google = await db
+      const google = await reader
         .select({ id: schema.aiCredentials.id })
         .from(schema.aiCredentials)
         .where(
@@ -455,141 +461,143 @@ export class RunsRepository {
    * the same reason it is taken under the advisory lock.
    */
   async create(orgId: string, data: RunCreate, beforeInsert?: (tx: Tx) => Promise<string | null>) {
-    await this.resolveChannels(orgId, data);
+    const id = await withQuotaErrors(() =>
+      db.transaction((tx) => this.createInTx(tx, orgId, data, tenantQuotaMode(), beforeInsert)),
+    );
+    return this.get(orgId, id);
+  }
 
-    // The SAME two expressions `runCreateSchema`'s cross-field refine uses, read
-    // once each here. Trimmed, because `material: "   "` passes
-    // `z.string().min(1)`: branching untrimmed would store `kind: "source"` with
-    // three spaces of material — and pay for a SOURCE block of whitespace on
-    // three model calls — over a request the refine had already admitted on the
-    // brief alone.
-    //
-    // The brief's trim is what makes a blank one `null` rather than `""`, and
-    // `?? null` alone would not: the compose screen sends `brief` unconditionally
-    // from an empty-string default, so an ordinary paste-only run arrives as
-    // `{brief: "", material: "…"}` and `"" ?? null` is `""`. A stored `""` buys a
-    // labelled but EMPTY brief block on three paid calls, which tells the model
-    // the person wrote nothing USEFUL rather than that they wrote nothing.
-    // `sourceRunInputSchema.text`'s `.min(1)` is the guard behind this line;
-    // never reach for `?? ""` anywhere on this path.
+  /** Owned transaction only: the caller can commit replay audit and the actual queue job atomically. */
+  async createInTx(
+    tx: Tx,
+    orgId: string,
+    data: RunCreate,
+    mode: TenantResourceQuotaMode,
+    beforeInsert?: (tx: Tx) => Promise<string | null>,
+    expected?: ExpectedApiOperation,
+  ): Promise<string> {
+    if (
+      currentRequestAuthority()?.kind === "api-key" &&
+      (expected?.operation !== "generation:create" ||
+        expected.brandId !== data.brandId ||
+        expected.channelIds.join(",") !== data.channelIds.join(","))
+    )
+      throw forbidden("public_authority_revoked", "An explicit generation operation is required");
+    if (currentRequestAuthority()?.kind === "api-key" && expected)
+      mode = {
+        ...mode,
+        authorizeActor: (targetTx, targetOrg) =>
+          authorizeRequestActor(targetTx, targetOrg, expected),
+      };
+    await this.resolveChannels(orgId, data, tx);
     const brief = (data.brief ?? "").trim() === "" ? null : (data.brief as string);
     const material = (data.material ?? "").trim() === "" ? null : (data.material as string);
 
-    const mode = tenantQuotaMode();
-    const id = await withQuotaErrors(() =>
-      db.transaction(async (tx) => {
-        // Hosted billing locks precede selector credential/settings and topic/brand child locks.
-        if (mode.mode === "hosted" || mode.authorizeActor)
-          await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
-        const aiState = await lockAiTextSelection(orgId, tx);
-        if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
-        if (
-          !aiState.settings.provider ||
-          !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
-        )
-          throw conflict(
-            "ai_default_key_missing",
-            "The selected text provider has no key. Review Settings before generating text.",
-          );
-        const textSelection = snapshotAiTextSelection(aiState);
-        if (!textSelection)
-          throw conflict(
-            "ai_default_key_missing",
-            "Add an AI key in Settings before generating text.",
-          );
-        if (mode.mode === "self-hosted" && !mode.authorizeActor)
-          await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
-        // A topic id can only come from a server-side check under this same
-        // transaction. The public RunCreate body has no topicId field.
-        const topicId = beforeInsert ? await beforeInsert(tx) : null;
-        // Capture a bounded, deterministic by-value snapshot under the same
-        // transaction as admission and enqueue. Both sides of the join carry the
-        // tenant predicate; the item supplies the brand boundary.
-        const editorialFeedback = data.useEditorialFeedback
-          ? (
-              await tx
-                .select({ id: schema.editorialNotes.id, note: schema.editorialNotes.note })
-                .from(schema.editorialNotes)
-                .innerJoin(
-                  schema.contentItems,
-                  eq(schema.editorialNotes.contentItemId, schema.contentItems.id),
-                )
-                .where(
-                  and(
-                    eq(schema.editorialNotes.orgId, orgId),
-                    eq(schema.contentItems.orgId, orgId),
-                    eq(schema.contentItems.brandId, data.brandId),
-                  ),
-                )
-                .orderBy(desc(schema.editorialNotes.createdAt), desc(schema.editorialNotes.id))
-                .limit(5)
-            ).map(({ id, note }) => ({
-              id,
-              // A split surrogate pair is not valid JSONB text in PostgreSQL.
-              note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
-            }))
-          : undefined;
-        if (
-          (mode.mode === "hosted" || mode.authorizeActor) &&
-          (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId)))
-        )
-          throw new ForbiddenException("Workspace authority changed; sign in and retry");
-        const inserted = await tx
-          .insert(schema.pipelineRuns)
-          .values({
-            orgId,
-            brandId: data.brandId,
-            topicId,
-            textSelection,
-            // MATERIAL decides the kind: a brief is an instruction ABOUT the
-            // material, not a second thing to work from, so a request carrying
-            // both is a source run with `text` set. A `sourceUrl` with no material
-            // has nothing to attribute and is dropped — the belt behind the
-            // compose screen's own inline refusal.
-            input:
-              material === null
-                ? // The refine guarantees at least one of the two is non-blank, so
-                  // with no material the brief is non-null. This is the one place
-                  // that guarantee is invisible to the compiler.
-                  {
-                    kind: "brief",
-                    ...(data.title !== undefined && { title: data.title }),
-                    text: brief as string,
-                    channelIds: data.channelIds,
-                    ...(data.generateCover && { generateCover: true }),
-                    ...(data.generateInlineImages && { generateInlineImages: true }),
-                    ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
-                    ...(data.useEditorialFeedback && {
-                      useEditorialFeedback: true,
-                      editorialFeedback,
-                    }),
-                    ...(data.contentType && { contentType: data.contentType }),
-                  }
-                : {
-                    kind: "source",
-                    ...(data.title !== undefined && { title: data.title }),
-                    text: brief,
-                    sourceUrl: data.sourceUrl ?? null,
-                    material,
-                    channelIds: data.channelIds,
-                    ...(data.generateCover && { generateCover: true }),
-                    ...(data.generateInlineImages && { generateInlineImages: true }),
-                    ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
-                    ...(data.useEditorialFeedback && {
-                      useEditorialFeedback: true,
-                      editorialFeedback,
-                    }),
-                    ...(data.contentType && { contentType: data.contentType }),
-                  },
-          })
-          .returning({ id: schema.pipelineRuns.id });
-        const runId = inserted[0]?.id as string;
-        await this.queue.enqueueGenerate(tx, { id: runId, orgId });
-        return runId;
-      }),
-    );
-
-    return this.get(orgId, id);
+    // Hosted billing locks precede selector credential/settings and topic/brand child locks.
+    if (mode.mode === "hosted" || mode.authorizeActor)
+      await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
+    const aiState = await lockAiTextSelection(orgId, tx);
+    if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
+    if (
+      !aiState.settings.provider ||
+      !aiState.credentials.some((key) => key.provider === aiState.settings.provider)
+    )
+      throw conflict(
+        "ai_default_key_missing",
+        "The selected text provider has no key. Review Settings before generating text.",
+      );
+    const textSelection = snapshotAiTextSelection(aiState);
+    if (!textSelection)
+      throw conflict("ai_default_key_missing", "Add an AI key in Settings before generating text.");
+    if (mode.mode === "self-hosted" && !mode.authorizeActor)
+      await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
+    // A topic id can only come from a server-side check under this same
+    // transaction. The public RunCreate body has no topicId field.
+    const topicId = beforeInsert ? await beforeInsert(tx) : null;
+    // Capture a bounded, deterministic by-value snapshot under the same
+    // transaction as admission and enqueue. Both sides of the join carry the
+    // tenant predicate; the item supplies the brand boundary.
+    const editorialFeedback = data.useEditorialFeedback
+      ? (
+          await tx
+            .select({ id: schema.editorialNotes.id, note: schema.editorialNotes.note })
+            .from(schema.editorialNotes)
+            .innerJoin(
+              schema.contentItems,
+              eq(schema.editorialNotes.contentItemId, schema.contentItems.id),
+            )
+            .where(
+              and(
+                eq(schema.editorialNotes.orgId, orgId),
+                eq(schema.contentItems.orgId, orgId),
+                eq(schema.contentItems.brandId, data.brandId),
+              ),
+            )
+            .orderBy(desc(schema.editorialNotes.createdAt), desc(schema.editorialNotes.id))
+            .limit(5)
+        ).map(({ id, note }) => ({
+          id,
+          // A split surrogate pair is not valid JSONB text in PostgreSQL.
+          note: note.slice(0, 500).replace(/[\uD800-\uDBFF]$/, ""),
+        }))
+      : undefined;
+    if (
+      (mode.mode === "hosted" || mode.authorizeActor) &&
+      (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId)))
+    )
+      throw new ForbiddenException("Workspace authority changed; sign in and retry");
+    const inserted = await tx
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId,
+        brandId: data.brandId,
+        topicId,
+        textSelection,
+        // MATERIAL decides the kind: a brief is an instruction ABOUT the
+        // material, not a second thing to work from, so a request carrying
+        // both is a source run with `text` set. A `sourceUrl` with no material
+        // has nothing to attribute and is dropped — the belt behind the
+        // compose screen's own inline refusal.
+        input:
+          material === null
+            ? // The refine guarantees at least one of the two is non-blank, so
+              // with no material the brief is non-null. This is the one place
+              // that guarantee is invisible to the compiler.
+              {
+                kind: "brief",
+                ...(data.title !== undefined && { title: data.title }),
+                text: brief as string,
+                channelIds: data.channelIds,
+                ...(data.generateCover && { generateCover: true }),
+                ...(data.generateInlineImages && { generateInlineImages: true }),
+                ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
+                ...(data.useEditorialFeedback && {
+                  useEditorialFeedback: true,
+                  editorialFeedback,
+                }),
+                ...(data.contentType && { contentType: data.contentType }),
+              }
+            : {
+                kind: "source",
+                ...(data.title !== undefined && { title: data.title }),
+                text: brief,
+                sourceUrl: data.sourceUrl ?? null,
+                material,
+                channelIds: data.channelIds,
+                ...(data.generateCover && { generateCover: true }),
+                ...(data.generateInlineImages && { generateInlineImages: true }),
+                ...(data.seoKeywords && { seoKeywords: data.seoKeywords }),
+                ...(data.useEditorialFeedback && {
+                  useEditorialFeedback: true,
+                  editorialFeedback,
+                }),
+                ...(data.contentType && { contentType: data.contentType }),
+              },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    const runId = inserted[0]?.id as string;
+    await this.queue.enqueueGenerate(tx, { id: runId, orgId });
+    return runId;
   }
 
   /**

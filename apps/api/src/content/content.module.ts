@@ -27,6 +27,7 @@ import { RefineCaller } from "./refine.caller";
  */
 @Module({
   imports: [AiCredentialsModule, MediaModule],
+  exports: [ContentRepository],
   controllers: [ContentController, PublicationOperationsController, ArchivedPublicationsController],
   providers: [
     ContentRepository,
