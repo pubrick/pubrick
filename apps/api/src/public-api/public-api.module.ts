@@ -7,10 +7,11 @@ import { ApiKeysRepository } from "./api-keys.repository";
 import { ApiKeysManagerGuard } from "./api-keys-manager.guard";
 import { PublicContentController } from "./public-content.controller";
 import { PublicContentRepository } from "./public-content.repository";
+import { PublicContentV2Controller } from "./public-content-v2.controller";
 import { PublicPublicationController } from "./public-publication.controller";
 import { PublicPublicationRepository } from "./public-publication.repository";
 import { PublicRateLimitGuard, PublicRateLimitService } from "./public-rate-limit.service";
-import { PublicContentV2Controller, PublicRunsV2Controller } from "./public-v2.controller";
+import { PublicRunsV2Controller } from "./public-runs-v2.controller";
 import { PublicWriteRepository } from "./public-write.repository";
 
 @Module({
