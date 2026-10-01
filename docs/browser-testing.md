@@ -105,3 +105,49 @@ and a `FROM scratch` image. It verifies that the repository's `.dockerignore`
 excludes root and nested environment secrets and local data while retaining
 `.env.example` files. It never copies the operator checkout or configuration,
 requires no downloaded base image, and removes its temporary fixture afterward.
+
+## Weekly plan generation journey
+
+```sh
+node --test scripts/recurring-model-fixture.test.mjs
+node scripts/e2e/recurring.run.mjs
+```
+
+This manual runner owns web/API ports 31320/31321, a fresh PostgreSQL 16
+container, media directory and random authentication/encryption secrets. It
+builds API, worker and web from the same checkout and verifies the latest
+migration before starting the journey. Application environment variables and
+real provider keys are not inherited. Before build and runtime, the runner
+refuses Next.js environment files in the web project and standalone directory;
+it checks file metadata without reading or changing those files.
+
+A test-only Node preload intercepts the compiled worker's Google SDK fetch
+transport. It accepts only the synthetic key, exact Gemini model endpoint,
+structured generation request and unique journey marker. It returns five
+schema-valid role outputs. A runner-owned channel context file correlates the
+adapter receipt with the actual channel created through the UI; its marker, UUID,
+manual platform and prompt are checked. Unexpected requests are durably recorded before
+throwing, and the runner checks this failure latch even when the SDK catches an
+error. Worker exit and failed/cancelled generation are monitored outside browser
+poll assertions, so swallowed polling errors cannot consume the full deadline. There is no forwarding to the original fetch. This covers the Google
+transport, rather than all possible Node networking APIs; the fresh brand has
+no knowledge, news, images or webhooks, and its manual channel has no publishing
+credentials. No production endpoint or provider hook is added.
+
+The actual browser signs up, configures the synthetic Google key and selected
+model without testing the provider, saves a disabled weekly plan, previews it
+and authorizes paid generation. The real planner, calendar dispatcher and
+compiled pipeline generate one draft at a UTC minute two to three minutes
+away. The journey verifies five role calls, checkpoints and metered calls,
+opens and edits the draft without approving it, pauses/resumes the plan, skips
+a future date and observes a completed planner pass before checking that skip
+is permanent. Removing the plan retains the immutable dispatch evidence. No
+publication record or publish job may exist.
+
+The journey deadline is eight minutes after build/readiness, generation is
+bounded to the due time plus two minutes and post-generation actions to three
+minutes. Failures retain synthetic browser traces/screenshots under
+`.data/recurring-browser-tests` and a printed bounded receipt path. Successful
+runs remove the receipt directory. Child process groups are stopped before
+owned container volumes and media are removed; build outputs remain reusable.
+This acceptance complements native concurrency tests and does not replace them.

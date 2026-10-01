@@ -15,6 +15,7 @@ export * from "./content-images.js";
 export * from "./content-items.js";
 export * from "./draft-revision.js";
 export * from "./editorial-notes.js";
+export * from "./editorial-plans.js";
 export * from "./feeds.js";
 export * from "./generation.js";
 export * from "./hosted-account-admission.js";

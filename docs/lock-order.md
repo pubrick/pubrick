@@ -13,9 +13,16 @@ it never goes backwards.
 
 The dated-topic planner, topic edits, and manual calendar writers serialize on
 the brand row with `FOR NO KEY UPDATE` before touching topics or calendar slots.
-This is compatible with the `FOR KEY SHARE` lock taken by generation's brand
-foreign key after it has locked a slot or topic. The worker then locks
-its config and topic rows in stable ID order before checking the day's slots.
+Calendar admission takes `brands FOR KEY SHARE` before its slot `FOR UPDATE`
+and optional topic `FOR SHARE`, after acquiring the AI selection locks. It
+scopes both the brand and slot lookup by tenant and rechecks the brand when
+claiming the slot. This is compatible with planner `FOR NO KEY UPDATE` but
+blocks brand deletion's `FOR UPDATE` before the worker holds a slot. Otherwise
+calendar holds a slot while its run insert's FK waits for the brand, and the
+brand deletion cascade waits for that slot: the native calendar selection test
+reproduces PostgreSQL `40P01` without this parent lock.
+
+The topic-planning worker locks its config and topic rows in stable ID order before checking the day's slots.
 This makes the daily cap and linked-topic check atomic across worker replicas
 and manual placement. Removing a linked slot holds the brand lock while
 clearing the topic's target date, so the next scan does not undo the editor's
@@ -753,17 +760,20 @@ finish without a deadlock or an attempted insert into the deleted tenant.
 
 ## Workspace text defaults and credential admission
 
-Text settings and credential writes, manual/Autopilot run admission, worker claim,
+Text settings and credential writes, manual/Autopilot/calendar run admission, worker claim,
 worker `beginStep`, and every physical text model request share this order:
 
 1. The existing organization run-admission advisory transaction lock.
 2. The organization row `FOR SHARE` directly (never upgrade a weaker lock).
 3. The organization's text-settings row `FOR UPDATE`.
 4. Its credential rows ordered by UUID, `FOR UPDATE` directly.
-5. Run or background-request rows, when needed.
+5. Brand, calendar slot, topic, run or background-request rows, when needed.
 
-The helper runs before a run row is locked. It must never be called from a
-transaction already holding a run/request lock. Credential revision admission
+Calendar admission takes the selection helper before its calendar slot lock,
+then retains the snapshot alongside the run and transactional generation job.
+It takes tenant SHARE directly rather than upgrading `holdOrganization`'s
+KEY SHARE. The helper runs before a run row is locked. It must never be called
+from a transaction already holding a run/request lock. Credential revision admission
 commits before HTTP starts: key rotation cannot retract an already admitted call,
 but subsequent retries and schema repairs must admit the retained revision again.
 A default-provider/model edit does not invalidate a run's retained snapshot.

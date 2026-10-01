@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { EditorialPlansPersistence, lockEditorialPlanOccurrence, schema } from "@pubrick/db";
 import {
   type CalendarSlotCreate,
   type CalendarSlotsBulkCreate,
@@ -12,9 +12,13 @@ import { and, asc, eq, gte, inArray, lt, ne, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
 import { holdOrganization } from "../organization-lock";
+import { currentRequestAuthority } from "../request-authority";
+import { authorizeRequestActor } from "../request-authority-admission";
+import { editorialPlanApiError } from "./editorial-plans.repository";
 
 const SLOT_COLUMNS = {
   id: schema.calendarSlots.id,
+  recurringOccurrenceId: schema.calendarSlots.recurringOccurrenceId,
   brandId: schema.calendarSlots.brandId,
   scheduledAt: schema.calendarSlots.scheduledAt,
   brief: schema.calendarSlots.brief,
@@ -40,8 +44,29 @@ const SLOT_COLUMNS = {
 export class CalendarRepository {
   async list(orgId: string, brandId: string, from: Date, to: Date) {
     return db
-      .select(SLOT_COLUMNS)
+      .select({
+        ...SLOT_COLUMNS,
+        recurringPlanId: schema.editorialPlanOccurrences.planId,
+        recurringPlanName: schema.editorialPlans.name,
+        recurringOccurrenceState: schema.editorialPlanOccurrences.state,
+      })
       .from(schema.calendarSlots)
+      .leftJoin(
+        schema.editorialPlanOccurrences,
+        and(
+          eq(schema.editorialPlanOccurrences.orgId, orgId),
+          eq(schema.editorialPlanOccurrences.brandId, brandId),
+          eq(schema.editorialPlanOccurrences.id, schema.calendarSlots.recurringOccurrenceId),
+        ),
+      )
+      .leftJoin(
+        schema.editorialPlans,
+        and(
+          eq(schema.editorialPlans.orgId, orgId),
+          eq(schema.editorialPlans.brandId, brandId),
+          eq(schema.editorialPlans.id, schema.editorialPlanOccurrences.planId),
+        ),
+      )
       .where(
         and(
           eq(schema.calendarSlots.orgId, orgId),
@@ -318,14 +343,60 @@ export class CalendarRepository {
       throw badRequest("calendar_time_in_past", "Schedule a future time for draft generation");
     }
     return db.transaction(async (tx) => {
+      const [organization] = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId))
+        .for("share");
+      if (!organization) throw notFound("brand_not_found", "Brand not found");
+      const [attribution] = await tx
+        .select({ occurrenceId: schema.calendarSlots.recurringOccurrenceId })
+        .from(schema.calendarSlots)
+        .where(
+          and(
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.brandId, brandId),
+            eq(schema.calendarSlots.id, id),
+          ),
+        );
+      if (attribution?.occurrenceId) {
+        const actor = currentRequestAuthority();
+        if (actor?.kind !== "session" || !(await authorizeRequestActor(tx, orgId)))
+          throw conflict(
+            "calendar_recurring_slot",
+            "Edit or pause the recurring plan from Calendar",
+          );
+      }
+
       const [brand] = await tx
         .select({ id: schema.brands.id })
         .from(schema.brands)
         .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, brandId)))
         .for("no key update");
       if (!brand) throw notFound("brand_not_found", "Brand not found");
+      if (attribution?.occurrenceId) {
+        const [identity] = await tx
+          .select({ planId: schema.editorialPlanOccurrences.planId })
+          .from(schema.editorialPlanOccurrences)
+          .where(
+            and(
+              eq(schema.editorialPlanOccurrences.orgId, orgId),
+              eq(schema.editorialPlanOccurrences.brandId, brandId),
+              eq(schema.editorialPlanOccurrences.id, attribution.occurrenceId),
+            ),
+          );
+        if (!identity) throw notFound("calendar_slot_not_found", "Slot not found");
+        await lockEditorialPlanOccurrence(
+          orgId,
+          tx,
+          brandId,
+          identity.planId,
+          attribution.occurrenceId,
+        );
+      }
       const [existing] = await tx
         .select({
+          recurringOccurrenceId: schema.calendarSlots.recurringOccurrenceId,
           topicId: schema.calendarSlots.topicId,
           runId: schema.calendarSlots.runId,
           channelIds: schema.calendarSlots.channelIds,
@@ -344,6 +415,8 @@ export class CalendarRepository {
         )
         .for("update");
       if (!existing) throw notFound("calendar_slot_not_found", "Slot not found");
+      if (existing.recurringOccurrenceId)
+        throw conflict("calendar_recurring_slot", "Edit or pause the recurring plan from Calendar");
       if (existing.runId)
         throw conflict("calendar_slot_started", "Generation has already started for this slot");
       const generateInlineImages = data.generateInlineImages ?? existing.generateInlineImages;
@@ -473,7 +546,36 @@ export class CalendarRepository {
   }
 
   async delete(orgId: string, brandId: string, id: string) {
+    const [attribution] = await db
+      .select({ occurrenceId: schema.calendarSlots.recurringOccurrenceId })
+      .from(schema.calendarSlots)
+      .where(
+        and(
+          eq(schema.calendarSlots.orgId, orgId),
+          eq(schema.calendarSlots.brandId, brandId),
+          eq(schema.calendarSlots.id, id),
+        ),
+      );
+    if (attribution?.occurrenceId) {
+      const plans = new EditorialPlansPersistence(db, async (tenant, tx, brand) => {
+        const actor = currentRequestAuthority();
+        return (
+          actor?.kind === "session" &&
+          actor.orgId === tenant &&
+          actor.brandId === brand &&
+          (await authorizeRequestActor(tx, tenant))
+        );
+      });
+      try {
+        await plans.skipSlot(orgId, brandId, id, new Date());
+        return { deleted: true };
+      } catch (error) {
+        editorialPlanApiError(error);
+      }
+    }
     return db.transaction(async (tx) => {
+      await holdOrganization(tx, orgId);
+
       // Serialize an editor's removal with the per-brand automatic planner.
       // Clearing the topic's target date below keeps an intentionally removed
       // slot from being recreated on the next hourly scan.

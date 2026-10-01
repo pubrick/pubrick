@@ -169,6 +169,15 @@ const ZONED_COLUMNS = [
   "editorial_notes.created_at",
   "editorial_placeholders.created_at",
   "editorial_placeholders.updated_at",
+  "editorial_plan_occurrences.consented_at",
+  "editorial_plan_occurrences.created_at",
+  "editorial_plan_occurrences.dispatched_at",
+  "editorial_plan_occurrences.scheduled_at",
+  "editorial_plan_occurrences.updated_at",
+  "editorial_plans.consented_at",
+  "editorial_plans.created_at",
+  "editorial_plans.removed_at",
+  "editorial_plans.updated_at",
   "feed_entries.published_at",
   "hosted_account_creation_claims.created_at",
   "hosted_ai_call_leases.created_at",
@@ -342,6 +351,24 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // 0126 tables do not exist in seedEveryTable's historical pre-0009 schema.
+  // The dedicated "0126 refuses each weekly-plan check" test below inserts
+  // populated valid bases and proves all fourteen refusals by constraint name,
+  // including the state/reason enums; an empty-table UPDATE cannot prove them.
+  "editorial_plan_occurrences_state_check",
+  "editorial_plan_occurrences_reason_check",
+  "editorial_plan_occurrences_revision_check",
+  "editorial_plan_occurrences_dispatch_check",
+  "editorial_plan_occurrences_time_check",
+  "editorial_plan_occurrences_instant_check",
+  "editorial_plan_occurrences_consent_check",
+  "editorial_plans_revision_check",
+  "editorial_plans_text_check",
+  "editorial_plans_time_check",
+  "editorial_plans_dates_check",
+  "editorial_plans_arrays_check",
+  "editorial_plans_consent_check",
+  "editorial_plans_blocked_reason_check",
   "public_api_operations_operation_check",
   "public_api_operations_idempotency_key_check",
   "public_api_operations_request_hash_check",
@@ -2749,6 +2776,109 @@ describe.skipIf(!url)("runMigrations", () => {
           expect(
             await refusal(pool, "UPDATE channels SET credentials_encrypted = 'unexpected'"),
           ).toBe(CHECK_VIOLATION);
+        }
+      } finally {
+        await pool.end();
+      }
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  it("0126 refuses each weekly-plan check on otherwise valid populated rows", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    try {
+      await runMigrations(fresh.url);
+      const pool = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const org = "org_weekly_checks";
+        const { brandId, channelId } = await seedEveryTable(pool, org);
+        const plan = {
+          org_id: org,
+          brand_id: brandId,
+          name: "Weekly",
+          brief: "A valid brief",
+          channel_ids: JSON.stringify([channelId]),
+          weekdays: "[4]",
+          local_time: "09:00",
+          timezone: "UTC",
+          start_date: "2026-10-01",
+          end_date: "2026-10-08",
+        };
+        const insert = (table: string, row: Record<string, unknown>) => {
+          const columns = Object.keys(row);
+          return pool.query<{ id: string }>(
+            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map((_, index) => `$${index + 1}`).join(", ")}) RETURNING id`,
+            Object.values(row),
+          );
+        };
+        const savedPlan = await insert("editorial_plans", plan);
+        const occurrence = {
+          org_id: org,
+          brand_id: brandId,
+          plan_id: savedPlan.rows[0]?.id,
+          local_date: "2026-10-01",
+          local_time: "09:00",
+          timezone: "UTC",
+          scheduled_at: "2026-10-01T09:00:00Z",
+          offset_minutes: 0,
+          plan_revision: 1,
+          brief: "A valid brief",
+          channel_ids: JSON.stringify([channelId]),
+          state: "planned",
+        };
+        await insert("editorial_plan_occurrences", occurrence);
+        const cases: ReadonlyArray<{
+          table: "editorial_plans" | "editorial_plan_occurrences";
+          check: string;
+          invalid: Record<string, unknown>;
+        }> = [
+          { table: "editorial_plans", check: "revision", invalid: { revision: 0 } },
+          { table: "editorial_plans", check: "text", invalid: { name: " " } },
+          { table: "editorial_plans", check: "time", invalid: { local_time: "25:00" } },
+          { table: "editorial_plans", check: "dates", invalid: { end_date: "2026-09-30" } },
+          { table: "editorial_plans", check: "arrays", invalid: { weekdays: "[]" } },
+          { table: "editorial_plans", check: "consent", invalid: { enabled: true } },
+          {
+            table: "editorial_plans",
+            check: "blocked_reason",
+            invalid: { blocked_reason: "unknown" },
+          },
+          { table: "editorial_plan_occurrences", check: "state", invalid: { state: "unknown" } },
+          { table: "editorial_plan_occurrences", check: "reason", invalid: { reason: "unknown" } },
+          { table: "editorial_plan_occurrences", check: "revision", invalid: { plan_revision: 0 } },
+          {
+            table: "editorial_plan_occurrences",
+            check: "dispatch",
+            invalid: { state: "dispatched" },
+          },
+          { table: "editorial_plan_occurrences", check: "time", invalid: { local_time: "25:00" } },
+          {
+            table: "editorial_plan_occurrences",
+            check: "instant",
+            invalid: { scheduled_at: null },
+          },
+          {
+            table: "editorial_plan_occurrences",
+            check: "consent",
+            invalid: { consent_version: "unknown" },
+          },
+        ];
+        expect(cases.map(({ table, check }) => `${table}_${check}_check`).sort()).toEqual(
+          NON_ENUM_CHECKS.filter((name) => name.startsWith("editorial_plan")).sort(),
+        );
+        for (const { table, check, invalid } of cases) {
+          const base =
+            table === "editorial_plans" ? plan : { ...occurrence, local_date: "2026-10-02" };
+          await expect(insert(table, { ...base, ...invalid })).rejects.toMatchObject({
+            code: CHECK_VIOLATION,
+            constraint: `${table}_${check}_check`,
+          });
+        }
+        // Every rejected INSERT leaves the independently valid seed intact.
+        for (const table of ["editorial_plans", "editorial_plan_occurrences"]) {
+          const rows = await pool.query(`SELECT count(*)::int AS n FROM ${table}`);
+          expect(rows.rows[0].n).toBe(1);
         }
       } finally {
         await pool.end();

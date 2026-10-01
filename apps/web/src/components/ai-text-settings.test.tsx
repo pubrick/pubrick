@@ -1,7 +1,11 @@
-import type { AiCredentialPublic, AiTextSettings } from "@pubrick/shared";
+import {
+  type AiCredentialPublic,
+  type AiTextSettings,
+  aiTextSettingsUpdateSchema,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@/test/render";
+import { act, render, screen, waitFor } from "@/test/render";
 import en from "../../messages/en.json";
 import { AiTextSettingsForm } from "./ai-text-settings";
 
@@ -114,6 +118,68 @@ describe("workspace text settings", () => {
     await waitFor(() => expect(mockApi).toHaveBeenCalledTimes(2));
     expect(screen.getByLabelText(en.SettingsPage.aiTextProvider)).toHaveValue("openai");
     expect(screen.getByText(en.SettingsPage.aiTextUnsaved)).toBeInTheDocument();
+  });
+
+  it("uses the refreshed first-key revision without discarding an in-progress model choice", async () => {
+    let stored: AiTextSettings = {
+      provider: null,
+      model: null,
+      modelId: null,
+      revision: 0,
+      configured: false,
+    };
+    let resolveRefresh!: (value: AiTextSettings) => void;
+    const refresh = new Promise<AiTextSettings>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let reads = 0;
+    mockApi.mockImplementation(async (_path, init) => {
+      if (!init?.method) return ++reads === 1 ? stored : refresh;
+      const body = aiTextSettingsUpdateSchema.parse(JSON.parse(String(init.body)));
+      if (body.expectedRevision !== stored.revision) {
+        throw new ApiError(
+          409,
+          "AI settings changed. Reload and try again.",
+          false,
+          "ai_settings_changed",
+        );
+      }
+      stored = {
+        provider: body.provider,
+        model: body.model,
+        modelId: body.model,
+        revision: stored.revision + 1,
+        configured: true,
+      };
+      return stored;
+    });
+    const changed = vi.fn();
+    const view = render(<AiTextSettingsForm credentials={[]} onChanged={changed} />);
+    await screen.findByLabelText(en.SettingsPage.aiTextProvider);
+    stored = { ...initial, revision: 1 };
+    view.rerender(
+      <AiTextSettingsForm
+        credentials={credentials.filter((row) => row.provider === "google")}
+        onChanged={changed}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText(en.SettingsPage.aiTextProvider), "google");
+    await user.click(screen.getByText(en.SettingsPage.aiTextModelOptions));
+    await user.type(screen.getByLabelText(en.SettingsPage.aiModelLabel), "gemini-3.8-flash");
+    await act(async () => resolveRefresh(stored));
+    expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 1 }));
+    expect(screen.getByLabelText(en.SettingsPage.aiTextProvider)).toHaveValue("google");
+    expect(screen.getByLabelText(en.SettingsPage.aiModelLabel)).toHaveValue("gemini-3.8-flash");
+    expect(screen.getByText(en.SettingsPage.aiTextUnsaved)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.SettingsPage.aiTextSave }));
+    await screen.findByText(en.SettingsPage.aiTextSaved);
+    const request = mockApi.mock.calls.find(([, init]) => init?.method === "PUT")?.[1];
+    const literal = { provider: "google", model: "gemini-3.8-flash", expectedRevision: 1 };
+    expect(JSON.parse(String(request?.body))).toEqual(literal);
+    expect(aiTextSettingsUpdateSchema.parse(JSON.parse(String(request?.body)))).toEqual(literal);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(changed).toHaveBeenLastCalledWith(expect.objectContaining({ revision: 2 }));
   });
 
   it("retains a missing default rather than visually switching to another saved key", async () => {

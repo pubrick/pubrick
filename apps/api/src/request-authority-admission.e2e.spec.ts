@@ -10,6 +10,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => {
   let app: INestApplication;
+  let identity: typeof import("./env").identity;
+  let priorHosted: boolean;
   let connection: ReturnType<typeof createDb>;
   const prior = {
     mode: process.env.PUBRICK_DEPLOYMENT_MODE,
@@ -21,6 +23,8 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     process.env.PUBRICK_DEPLOYMENT_MODE = "self-hosted";
     process.env.BETTER_AUTH_SECRET ??= "pubrick-test-secret";
     process.env.APP_ENCRYPTION_KEY ??= "6DGyBr9BbF2sVZmyO8dQ7HkNq1w4x5z6A7B8C9D0E1E=";
+    identity = (await import("./env")).identity;
+    priorHosted = identity.hosted;
     const { AppModule } = await import("./app.module");
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
@@ -29,6 +33,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     connection = createDb(url as string);
   });
   afterAll(async () => {
+    if (identity) identity.hosted = priorHosted;
     await app?.close();
     await connection?.pool.end();
     for (const [key, value] of Object.entries({
@@ -41,6 +46,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
     }
   });
   async function fixture() {
+    identity.hosted = false;
     process.env.PUBRICK_DEPLOYMENT_MODE = "self-hosted";
     const agent = request.agent(app.getHttpServer());
     const signup = await agent
@@ -70,6 +76,7 @@ describe.skipIf(!url)("hosted authority after real HTTP admission waits", () => 
       .values({ orgId, name: "Authority brand" })
       .returning({ id: schema.brands.id });
     if (!brand) throw new Error("Missing fixture brand");
+    identity.hosted = true;
     process.env.PUBRICK_DEPLOYMENT_MODE = "hosted";
     process.env.BILLING_DRIVER = "fixture";
     process.env.BILLING_ACCOUNT_ID = "fixture_authority";

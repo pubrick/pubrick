@@ -88,6 +88,7 @@ jobs:
           --command "CREATE DATABASE pubrick_billing_test"
       - run: pnpm exec turbo run test --force --concurrency=1
         env:
+          DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
           TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_test
           BILLING_TEST_DATABASE_URL: postgres://test:test@localhost:5432/pubrick_billing_test
           PUBRICK_BILLING_DISPOSABLE: "1"

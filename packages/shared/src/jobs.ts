@@ -486,3 +486,13 @@ export const AUTH_MAIL_WORK_OPTIONS = {
   groupConcurrency: 4,
   perJobResults: true,
 } as const;
+
+/** One global bounded recurrence scan; enable requests the same materializer for one plan. */
+export const EDITORIAL_PLAN_SCAN_QUEUE = "editorial-plan-scan";
+export const EDITORIAL_PLAN_QUEUE = "editorial-plan-materialize";
+export const EDITORIAL_PLAN_QUEUE_OPTIONS = {
+  retryLimit: 3,
+  retryDelay: 30,
+  expireInSeconds: 300,
+} as const;
+export type EditorialPlanJob = { orgId: string; brandId: string; planId: string };

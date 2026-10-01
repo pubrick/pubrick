@@ -26,9 +26,11 @@
   "dependencies": {
     "@pubrick/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
+    "luxon": "3.7.2",
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@types/luxon": "^3.7.6",
     "@types/node": "^22",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.10",

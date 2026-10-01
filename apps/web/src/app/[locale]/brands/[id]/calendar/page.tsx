@@ -27,6 +27,7 @@ import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { EditorialPlaceholders } from "./editorial-placeholders";
 import { MemorableDates } from "./memorable-dates";
+import { RecurringPlans } from "./recurring-plans";
 
 type Channel = { id: string; name: string; platform: string };
 type Slot = {
@@ -44,6 +45,10 @@ type Slot = {
   runId: string | null;
   errorCode: string | null;
   retryAfter: string | null;
+  recurringOccurrenceId?: string | null;
+  recurringPlanId?: string | null;
+  recurringPlanName?: string | null;
+  recurringOccurrenceState?: string | null;
 };
 type BulkRow = { topicId: string; dateInput: string };
 type BulkPreviewRow = BulkRow & {
@@ -83,6 +88,7 @@ function monthStart(date: Date): Date {
 export default function CalendarPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: brandId } = use(params);
   const t = useTranslations("Calendar");
+  const tr = useTranslations("CalendarRecurring");
   const tc = useTranslations("ContentNew");
   const tt = useTranslations("Topics");
   const te = useTranslations("Errors");
@@ -99,6 +105,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [recurringRefresh, setRecurringRefresh] = useState(0);
   const [placeholderCounts, setPlaceholderCounts] = useState<Record<string, number>>({});
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [topics, setTopics] = useState<TopicDto[]>([]);
@@ -260,6 +267,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           notes: notes.trim() || null,
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       setBrief("");
       setSelectedTopicId("");
       setNotes("");
@@ -321,6 +329,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           notes: notes.trim() || null,
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       setEditing(null);
       await load();
     } catch (err) {
@@ -338,6 +347,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
     setBusy(true);
     try {
       await api(`/api/calendar/slots/${removing.id}?brandId=${brandId}`, { method: "DELETE" });
+      setRecurringRefresh((current) => current + 1);
       setRemoving(null);
       await load();
     } catch (err) {
@@ -419,6 +429,7 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           })),
         }),
       });
+      setRecurringRefresh((current) => current + 1);
       const firstDate = new Date(
         Math.min(...bulkPreviewRows.map((row) => new Date(row.dateInput).getTime())),
       );
@@ -755,6 +766,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-medium text-fg">{slot.brief}</p>
+                      {slot.recurringOccurrenceId && (
+                        <p className="mt-1 text-sm text-fg-secondary">
+                          {tr("attribution", {
+                            name: slot.recurringPlanName ?? tr("title"),
+                            state: tr(`state.${slot.recurringOccurrenceState ?? "planned"}`),
+                          })}
+                        </p>
+                      )}
                       {slot.topicId && (
                         <p className="mt-1 text-xs text-fg-secondary">{t("linkedTopic")}</p>
                       )}
@@ -814,11 +833,20 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
                         </Link>
                       ) : canMutateCalendar ? (
                         <>
-                          <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
-                            {t("edit")}
-                          </Button>
+                          {slot.recurringOccurrenceId ? (
+                            <a
+                              href="#recurring-plans"
+                              className="min-h-11 content-center text-sm text-accent underline"
+                            >
+                              {tr("manage")}
+                            </a>
+                          ) : (
+                            <Button size="sm" variant="secondary" onClick={() => beginEdit(slot)}>
+                              {t("edit")}
+                            </Button>
+                          )}
                           <Button size="sm" variant="danger" onClick={() => setRemoving(slot)}>
-                            {t("remove")}
+                            {slot.recurringOccurrenceId ? tr("skip") : t("remove")}
                           </Button>
                         </>
                       ) : null}
@@ -830,6 +858,14 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           </div>
         )}
       </section>
+      <RecurringPlans
+        key={brandId}
+        brandId={brandId}
+        channels={channels ?? []}
+        canEdit={canMutateCalendar}
+        onChange={load}
+        refreshVersion={recurringRefresh}
+      />
       <EditorialPlaceholders
         brandId={brandId}
         month={month}
@@ -1046,19 +1082,21 @@ export default function CalendarPage({ params }: { params: Promise<{ id: string 
           <Modal
             open={removing !== null}
             onClose={() => setRemoving(null)}
-            title={t("removeTitle")}
+            title={removing?.recurringOccurrenceId ? tr("skipTitle") : t("removeTitle")}
             footer={
               <>
                 <Button variant="secondary" onClick={() => setRemoving(null)}>
                   {t("cancel")}
                 </Button>
                 <Button variant="danger" onClick={remove} disabled={busy}>
-                  {t("remove")}
+                  {removing?.recurringOccurrenceId ? tr("skip") : t("remove")}
                 </Button>
               </>
             }
           >
-            <p className="text-sm text-fg-secondary">{t("removeBody")}</p>
+            <p className="text-sm text-fg-secondary">
+              {removing?.recurringOccurrenceId ? tr("skipBody") : t("removeBody")}
+            </p>
           </Modal>
         </>
       )}

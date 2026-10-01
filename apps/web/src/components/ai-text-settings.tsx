@@ -54,12 +54,12 @@ export function AiTextSettingsForm({
       .then((body) => {
         if (!live) return;
         const value = aiTextSettingsSchema.parse(body);
+        setSaved(value);
         if (draftDirty.current && !forceReload.current) {
           onChanged(value);
           return;
         }
         forceReload.current = false;
-        setSaved(value);
         setProvider(value.provider ?? "");
         setModel(value.model ?? "");
         onChanged(value);

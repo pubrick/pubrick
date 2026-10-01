@@ -4,6 +4,9 @@ import type { INestApplication } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import {
+  editorialPlanCreateSchema,
+  editorialPlanListSchema,
+  editorialPlanSummarySchema,
   encodeContentCursor,
   encodePublicContentCursorV2,
   publicContentListV2Schema,
@@ -118,6 +121,35 @@ function justAfter(createdAt: string): string {
 }
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
+  {
+    controller: "calendar/editorial-plans",
+    identify: id,
+    rows: (body) => editorialPlanListSchema.parse(body),
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const today = new Date().toISOString().slice(0, 10);
+      const draft = editorialPlanCreateSchema.parse({
+        brandId,
+        name: "Scoped weekly plan",
+        brief: "Write a useful social post",
+        channelIds: [channelId],
+        weekdays: [1, 2, 3, 4, 5, 6, 7],
+        localTime: "23:59",
+        timezone: "UTC",
+        startDate: today,
+        endDate: today,
+      });
+      const response = await agent.post("/api/calendar/editorial-plans").send(draft).expect(201);
+      const plan = editorialPlanSummarySchema.parse(response.body);
+      expect(plan.enabled).toBe(false);
+      expect(plan.occurrences).toEqual([]);
+      return {
+        id: plan.id,
+        paths: [`/api/calendar/editorial-plans?brandId=${brandId}`],
+      };
+    },
+  },
   {
     controller: "webhooks",
     identify: id,

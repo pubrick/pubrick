@@ -7,6 +7,7 @@ import {
   type PublicWriteOperation,
 } from "@pubrick/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { identity } from "./env";
 import { brandIdForResource } from "./org/brand-resource";
 import { currentRequestAuthority } from "./request-authority";
 
@@ -84,7 +85,7 @@ export async function authorizeRequestActor(
     .from(schema.user)
     .where(eq(schema.user.id, actor.userId))
     .for("share");
-  if (!user?.verified) return false;
+  if (!user || (identity.hosted && !user.verified)) return false;
   const members = await tx
     .select({ id: schema.member.id, role: schema.member.role })
     .from(schema.member)

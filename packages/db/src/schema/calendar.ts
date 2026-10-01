@@ -4,17 +4,20 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import { organization } from "./auth.js";
 import { manualTopicPlanAttempts } from "./autopilot.js";
 import { brands } from "./content.js";
+import { editorialPlanOccurrences } from "./editorial-plans.js";
 import { enumCheck } from "./enum-check.js";
 import { pipelineRuns } from "./generation.js";
 import { topics } from "./topics.js";
@@ -30,6 +33,7 @@ export const calendarSlots = pgTable(
     brandId: uuid("brand_id")
       .notNull()
       .references(() => brands.id, { onDelete: "cascade" }),
+    recurringOccurrenceId: uuid("recurring_occurrence_id"),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
     brief: text("brief").notNull(),
     contentType: text("content_type", { enum: CONTENT_TYPES }).default("social_post").notNull(),
@@ -58,6 +62,19 @@ export const calendarSlots = pgTable(
       .$onUpdate(() => new Date()),
   },
   (t) => [
+    uniqueIndex("calendar_slots_scope_id_idx").on(t.orgId, t.brandId, t.id),
+    uniqueIndex("calendar_slots_recurring_occurrence_idx")
+      .on(t.recurringOccurrenceId)
+      .where(sql`${t.recurringOccurrenceId} is not null`),
+    foreignKey({
+      name: "calendar_slots_recurring_occurrence_fk",
+      columns: [t.orgId, t.brandId, t.recurringOccurrenceId],
+      foreignColumns: [
+        editorialPlanOccurrences.orgId,
+        editorialPlanOccurrences.brandId,
+        editorialPlanOccurrences.id,
+      ],
+    }).onDelete("cascade"),
     index("calendar_slots_org_brand_date_idx").on(t.orgId, t.brandId, t.scheduledAt),
     index("calendar_slots_topic_idx").on(t.topicId),
     index("calendar_slots_manual_plan_attempt_idx").on(t.manualPlanAttemptId),

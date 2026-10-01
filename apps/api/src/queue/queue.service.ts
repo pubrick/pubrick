@@ -13,6 +13,9 @@ import {
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,
   type ClaimReviewJob,
+  EDITORIAL_PLAN_QUEUE,
+  EDITORIAL_PLAN_QUEUE_OPTIONS,
+  type EditorialPlanJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
@@ -144,6 +147,8 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     await boss.createQueue(TOPIC_SUGGESTIONS_DLQ);
     await boss.createQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
     await boss.updateQueue(TOPIC_SUGGESTIONS_QUEUE, { ...TOPIC_SUGGESTIONS_QUEUE_OPTIONS });
+    await boss.createQueue(EDITORIAL_PLAN_QUEUE, { ...EDITORIAL_PLAN_QUEUE_OPTIONS });
+    await boss.updateQueue(EDITORIAL_PLAN_QUEUE, { ...EDITORIAL_PLAN_QUEUE_OPTIONS });
     await boss.createQueue(MANUAL_TOPIC_PLAN_DLQ);
     await boss.createQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
     await boss.updateQueue(MANUAL_TOPIC_PLAN_QUEUE, { ...MANUAL_TOPIC_PLAN_QUEUE_OPTIONS });
@@ -479,5 +484,13 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
       .map((job) => job.id);
     if (live.length === 0) return;
     await this.boss.cancel(GENERATE_QUEUE, live, { db });
+  }
+  async enqueueEditorialPlan(payload: EditorialPlanJob, tx: Tx): Promise<void> {
+    if (!this.boss) throw new Error("Queue is not started");
+    const id = await this.boss.send(EDITORIAL_PLAN_QUEUE, payload, {
+      group: { id: payload.orgId },
+      db: fromDrizzle(tx, sql),
+    });
+    if (id === null) throw new Error("Editorial plan materialization job was not enqueued");
   }
 }

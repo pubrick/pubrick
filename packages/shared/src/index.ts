@@ -61,6 +61,7 @@ export * from "./dto/content-images.js";
 export * from "./dto/draft-revision.js";
 export * from "./dto/editorial-notes.js";
 export * from "./dto/editorial-placeholders.js";
+export * from "./dto/editorial-plans.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";
 export * from "./dto/media.js";
@@ -115,6 +116,10 @@ export {
   CLAIM_REVIEW_QUEUE,
   CLAIM_REVIEW_QUEUE_OPTIONS,
   type ClaimReviewJob,
+  EDITORIAL_PLAN_QUEUE,
+  EDITORIAL_PLAN_QUEUE_OPTIONS,
+  EDITORIAL_PLAN_SCAN_QUEUE,
+  type EditorialPlanJob,
   GENERATE_DLQ,
   GENERATE_QUEUE,
   GENERATE_QUEUE_OPTIONS,
