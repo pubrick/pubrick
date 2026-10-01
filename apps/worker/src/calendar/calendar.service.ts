@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { lockAiTextSelection, schema, snapshotAiTextSelection } from "@pubrick/db";
 import {
   COVER_SUPPORTED_PLATFORMS,
   contentTypeRequiresMaterial,
@@ -18,7 +18,6 @@ import { and, asc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
 import { admitHostedJob, workerJobQuotaMode } from "../hosted-job-admission";
-import { holdOrganization } from "../organization-lock";
 
 const SCAN_LIMIT = 100;
 
@@ -65,7 +64,25 @@ export class CalendarService {
         this.logger.debug(`Calendar admission deferred: ${quotaRefusal}`);
         return;
       }
-      if (!(await holdOrganization(tx, orgId))) return;
+      // Acquire tenant SHARE directly and pin selection locks before the slot.
+      // A later settings edit cannot change a queued run's provider or key revision.
+      const aiState = await lockAiTextSelection(orgId, tx);
+      if (!aiState) return;
+      // Brand deletion holds UPDATE before cascading slots. Hold its parent
+      // first so the run insert's brand FK cannot close a slot/brand cycle.
+      const [brand] = await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .innerJoin(schema.calendarSlots, eq(schema.calendarSlots.brandId, schema.brands.id))
+        .where(
+          and(
+            eq(schema.brands.orgId, orgId),
+            eq(schema.calendarSlots.orgId, orgId),
+            eq(schema.calendarSlots.id, slotId),
+          ),
+        )
+        .for("key share", { of: schema.brands });
+      if (!brand) return;
       const rows = await tx
         .select({
           id: schema.calendarSlots.id,
@@ -88,6 +105,7 @@ export class CalendarService {
           and(
             eq(schema.calendarSlots.orgId, orgId),
             eq(schema.calendarSlots.id, slotId),
+            eq(schema.calendarSlots.brandId, brand.id),
             isNull(schema.calendarSlots.runId),
             isNull(schema.calendarSlots.errorCode),
             lte(schema.calendarSlots.scheduledAt, new Date()),
@@ -267,6 +285,7 @@ export class CalendarService {
           brandId: slot.brandId,
           topicId: slot.topicId,
           input,
+          textSelection: snapshotAiTextSelection(aiState),
         })
         .returning({ id: schema.pipelineRuns.id });
       const runId = inserted[0]?.id;
