@@ -27,6 +27,8 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-pubrick}:${POSTGRES_PASSWORD:-pubrick}@postgres:5432/${POSTGRES_DB:-pubrick}
       API_PORT: "3001"
+      # Lifetime public-write replay records per workspace; separate from plan quotas.
+      PUBLIC_API_MAX_OPERATION_RECORDS: "${PUBLIC_API_MAX_OPERATION_RECORDS:-100000}"
       # No fallbacks on purpose: an unset secret must break the install, not ship a
       # publicly known key. Generate both with `openssl rand -base64 32` (see .env.example).
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?set it in .env - generate one with `openssl rand -base64 32`, see .env.example}"

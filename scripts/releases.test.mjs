@@ -53,6 +53,7 @@ test("image deployment removes builds and preserves runtime wiring", {
     PUBLIC_ORIGIN: "http://localhost:3999",
     BETTER_AUTH_SECRET: "release-contract-secret",
     APP_ENCRYPTION_KEY: "release-contract-key",
+    PUBLIC_API_MAX_OPERATION_RECORDS: "54321",
     PUBRICK_API_IMAGE: `ghcr.io/pubrick/pubrick-api@sha256:${"a".repeat(64)}`,
     PUBRICK_WORKER_IMAGE: `ghcr.io/pubrick/pubrick-worker@sha256:${"b".repeat(64)}`,
     PUBRICK_WEB_IMAGE: `ghcr.io/pubrick/pubrick-web@sha256:${"c".repeat(64)}`,
@@ -72,6 +73,16 @@ test("image deployment removes builds and preserves runtime wiring", {
   const configuration = JSON.parse(
     execFileSync("docker", args, { cwd: root, env, encoding: "utf8", stdio: "pipe" }),
   );
+  assert.equal(configuration.services.api.environment.PUBLIC_API_MAX_OPERATION_RECORDS, "54321");
+  const defaults = JSON.parse(
+    execFileSync("docker", args, {
+      cwd: root,
+      env: { ...env, PUBLIC_API_MAX_OPERATION_RECORDS: "" },
+      encoding: "utf8",
+      stdio: "pipe",
+    }),
+  );
+  assert.equal(defaults.services.api.environment.PUBLIC_API_MAX_OPERATION_RECORDS, "100000");
   for (const service of ["api", "worker", "web"]) {
     assert.equal(
       configuration.services[service].build,
