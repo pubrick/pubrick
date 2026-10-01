@@ -57,323 +57,31 @@
             }
           },
           "400": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error400"
           },
           "401": {
-            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "const": 401
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["statusCode", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error401"
           },
           "402": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error402"
           },
           "403": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error403"
           },
           "404": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error404"
           },
           "409": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error409"
           },
           "410": {
-            "description": "Original result deleted; operation tombstone retained",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error410"
           },
           "429": {
-            "description": "Rate limited; Retry-After is bounded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error503"
           }
         }
       },
@@ -427,323 +135,31 @@
             }
           },
           "400": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error400"
           },
           "401": {
-            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "const": 401
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["statusCode", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error401"
           },
           "402": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error402"
           },
           "403": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error403"
           },
           "404": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error404"
           },
           "409": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error409"
           },
           "410": {
-            "description": "Original result deleted; operation tombstone retained",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error410"
           },
           "429": {
-            "description": "Rate limited; Retry-After is bounded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error503"
           }
         }
       }
@@ -785,323 +201,31 @@
             }
           },
           "400": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error400"
           },
           "401": {
-            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "const": 401
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["statusCode", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error401"
           },
           "402": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error402"
           },
           "403": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error403"
           },
           "404": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error404"
           },
           "409": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error409"
           },
           "410": {
-            "description": "Original result deleted; operation tombstone retained",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error410"
           },
           "429": {
-            "description": "Rate limited; Retry-After is bounded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error503"
           }
         }
       }
@@ -1133,323 +257,31 @@
             }
           },
           "400": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error400"
           },
           "401": {
-            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "const": 401
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["statusCode", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error401"
           },
           "402": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error402"
           },
           "403": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error403"
           },
           "404": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error404"
           },
           "409": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error409"
           },
           "410": {
-            "description": "Original result deleted; operation tombstone retained",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error410"
           },
           "429": {
-            "description": "Rate limited; Retry-After is bounded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error503"
           }
         }
       }
@@ -1481,323 +313,31 @@
             }
           },
           "400": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error400"
           },
           "401": {
-            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "statusCode": {
-                      "type": "integer",
-                      "const": 401
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "error": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["statusCode", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error401"
           },
           "402": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error402"
           },
           "403": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error403"
           },
           "404": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error404"
           },
           "409": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error409"
           },
           "410": {
-            "description": "Original result deleted; operation tombstone retained",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error410"
           },
           "429": {
-            "description": "Rate limited; Retry-After is bounded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error429"
           },
           "503": {
-            "description": "Closed sanitized refusal",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "code": {
-                      "type": "string",
-                      "enum": [
-                        "invalid_request",
-                        "forbidden",
-                        "not_found",
-                        "idempotency_conflict",
-                        "public_result_gone",
-                        "public_operation_capacity",
-                        "public_rate_limited",
-                        "public_request_unavailable",
-                        "subscription_required",
-                        "billing_identity_mismatch",
-                        "resource_limit",
-                        "ai_default_key_missing",
-                        "ai_credential_not_found",
-                        "channels_not_in_brand",
-                        "run_limit_reached",
-                        "media_generation_limit"
-                      ]
-                    },
-                    "message": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["code", "message"]
-                }
-              }
-            }
+            "$ref": "#/components/responses/Error503"
           }
         }
       }
@@ -2218,6 +758,144 @@
         },
         "required": ["rows", "nextCursor"],
         "additionalProperties": false
+      },
+      "PublicError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "invalid_request",
+              "forbidden",
+              "not_found",
+              "idempotency_conflict",
+              "public_result_gone",
+              "public_operation_capacity",
+              "public_rate_limited",
+              "public_request_unavailable",
+              "subscription_required",
+              "billing_identity_mismatch",
+              "resource_limit",
+              "ai_default_key_missing",
+              "ai_credential_not_found",
+              "channels_not_in_brand",
+              "run_limit_reached",
+              "media_generation_limit"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"]
+      },
+      "AuthenticationError": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "const": 401
+          },
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": ["statusCode", "message"]
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AuthenticationError"
+            }
+          }
+        }
+      },
+      "Error402": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error409": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error410": {
+        "description": "Original result deleted; operation tombstone retained",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error429": {
+        "description": "Rate limited; Retry-After is bounded",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
+      },
+      "Error503": {
+        "description": "Closed sanitized refusal",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PublicError"
+            }
+          }
+        }
       }
     }
   }
