@@ -349,7 +349,7 @@ describe.skipIf(!url)("media library e2e", () => {
     expect(proof).toMatchObject({ assetId: uploaded.body.id, state: "pending", kind: "image" });
   });
 
-  it("deletes a brand whose post still holds a cover", async () => {
+  it("deletes a brand whose post still holds a cover and retains durable file cleanup proof", async () => {
     const owner = await agent();
     const brand = await owner.post("/api/brands").send({ name: "Covered brand" }).expect(201);
     const channel = await owner
@@ -377,8 +377,46 @@ describe.skipIf(!url)("media library e2e", () => {
       .send({ mediaId: uploaded.body.id })
       .expect(200);
     const file = path.join(mediaDir, `${uploaded.body.id}.jpg`);
+    const saved = await readFile(file);
+    expect(saved.length).toBeGreaterThan(0);
+    const [asset] = await direct.db
+      .select({ orgId: schema.mediaAssets.orgId, kind: schema.mediaAssets.kind })
+      .from(schema.mediaAssets)
+      .where(eq(schema.mediaAssets.id, uploaded.body.id));
+    if (!asset) throw new Error("Test cover was not persisted");
+    expect((await owner.get(`/api/content/${post.body.id}`).expect(200)).body).toMatchObject({
+      brandId: brand.body.id,
+      coverMediaId: uploaded.body.id,
+    });
     await owner.delete(`/api/brands/${brand.body.id}`).expect(200);
-    await expect(readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const [table, id] of [
+      [schema.brands, brand.body.id],
+      [schema.contentItems, post.body.id],
+      [schema.mediaAssets, uploaded.body.id],
+    ] as const) {
+      expect(await direct.db.select({ id: table.id }).from(table).where(eq(table.id, id))).toEqual(
+        [],
+      );
+    }
+    const proofs = await direct.db
+      .select()
+      .from(schema.mediaCleanupWork)
+      .where(eq(schema.mediaCleanupWork.assetId, uploaded.body.id));
+    expect(proofs).toHaveLength(1);
+    expect(proofs[0]).toMatchObject({
+      assetId: uploaded.body.id,
+      orgId: asset.orgId,
+      kind: asset.kind,
+      byteSize: BigInt(saved.length),
+      state: "pending",
+      attempts: 0,
+      leaseToken: null,
+      leaseUntil: null,
+      lastError: null,
+      completedAt: null,
+    });
+    // The worker consumes the retained proof after the domain deletion commits.
+    expect(await readFile(file)).toEqual(saved);
   });
 
   it("attaches only a same-brand image to an editable Telegram post and protects it from deletion", async () => {
