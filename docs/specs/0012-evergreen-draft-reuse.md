@@ -1,6 +1,6 @@
 # Evergreen draft reuse
 
-Status: PROPOSED; pending independent design review. No implementation or release claim.
+Status: independently reviewed design; implementation pending. No implementation or release claim.
 Date: 2026-10-01.
 Source baseline: `81b346fb` (main). Weekly editorial plans are a separate integration.
 Execution: [plan](../plans/evergreen-draft-reuse.md).
@@ -179,7 +179,7 @@ redaction, quota or AI configuration. A committed reuse-retry can therefore
 recover its result after its original run is deleted/redacted; this grants no
 new work or access to erased text. Changing provider,
 source or channels after admission cannot cause another run. A changed parsed
-request under the same key refuses `idempotency_conflict`. If the original run
+request under the same key refuses `idempotency_conflict`. If the admitted result run
 is gone, return 410 and keep the tombstone; never recreate it. Audit records have
 no expiry/delete endpoint; cap fresh reuse operation records at 10,000 per
 organization with a shared constant, while replays remain available at the cap.

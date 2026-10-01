@@ -1,7 +1,7 @@
 # Evergreen draft reuse execution plan
 
-Status: PROPOSED; implementation blocked on independent design review, not on
-operator setup. No implementation or release claim.
+Status: independently reviewed design; implementation starts after the weekly
+integration gate. Operator setup is not required. No implementation or release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
 Source baseline: `81b346fb` (main); separate from the weekly-plan release.
