@@ -360,4 +360,61 @@ describe("weekly editorial plans", () => {
       within(screen.getByRole("dialog")).queryByRole("button", { name: t.more }),
     ).not.toBeInTheDocument();
   });
+  it("shows a Russian history-page refusal inside the dialog and preserves rows and cursor for retry", async () => {
+    const user = userEvent.setup();
+    const cursor = "3c6c2460-c41e-4b7c-a9e6-5ff559935ead";
+    let shouldFail = true;
+    const occurrence = {
+      id: "first",
+      localDate: "2026-10-05",
+      localTime: "09:00",
+      timezone: "UTC",
+      scheduledAt: "2026-10-05T09:00:00.000Z",
+      offsetMinutes: 0,
+      state: "dispatched",
+      reason: null,
+      runId: null,
+    };
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      requests.push({ url, method: "GET", body: null });
+      if (url.includes("/occurrences")) {
+        if (url.includes("cursor=") && shouldFail)
+          return response(
+            403,
+            refusalBody(403, "editorial_plan_authority_revoked", "English history refusal"),
+          );
+        return response(200, {
+          rows: [
+            {
+              ...occurrence,
+              id: url.includes("cursor=") ? "second" : "first",
+              localDate: url.includes("cursor=") ? "2026-10-06" : "2026-10-05",
+            },
+          ],
+          nextCursor: url.includes("cursor=") ? null : cursor,
+        });
+      }
+      return response(200, [plan]);
+    });
+    setup(true, "ru");
+    await screen.findByText(plan.name);
+    await user.click(screen.getByRole("button", { name: ru.CalendarRecurring.history }));
+    const dialog = screen.getByRole("dialog");
+    await within(dialog).findByText(/2026-10-05 · 09:00/);
+    await user.click(within(dialog).getByRole("button", { name: ru.CalendarRecurring.more }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      ru.Errors.editorial_plan_authority_revoked,
+    );
+    expect(within(dialog).queryByText("English history refusal")).not.toBeInTheDocument();
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: ru.CalendarRecurring.more })).toBeEnabled();
+    shouldFail = false;
+    await user.click(within(dialog).getByRole("button", { name: ru.CalendarRecurring.more }));
+    await waitFor(() => expect(within(dialog).getAllByRole("listitem")).toHaveLength(2));
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    const pages = requests.filter((request) => request.url.includes("cursor="));
+    expect(pages).toHaveLength(2);
+    expect(pages[1]?.url).toBe(pages[0]?.url);
+  });
 });

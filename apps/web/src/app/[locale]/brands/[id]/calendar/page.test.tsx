@@ -752,6 +752,38 @@ describe("brand calendar", () => {
       }
       if (url.includes("/api/calendar/memorable-dates"))
         return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/editorial-plans"))
+        return jsonResponse([
+          {
+            id: "plan",
+            brandId: "brand-1",
+            name: "Weekly update",
+            brief: "Recurring draft brief",
+            channelIds: [],
+            weekdays: [1],
+            localTime: "09:00",
+            timezone: "UTC",
+            startDate: "2026-10-01",
+            endDate: "2026-10-31",
+            enabled: true,
+            ended: false,
+            revision: 1,
+            blockedReason: null,
+            occurrences: [
+              {
+                id: "occurrence",
+                localDate: "2026-10-05",
+                localTime: "09:00",
+                timezone: "UTC",
+                scheduledAt: "2026-10-05T09:00:00.000Z",
+                offsetMinutes: 0,
+                state: removed ? "skipped" : "planned",
+                reason: removed ? "manual_skip" : null,
+                runId: null,
+              },
+            ],
+          },
+        ]);
       if (url.includes("/api/calendar/slots"))
         return jsonResponse(
           removed
@@ -782,7 +814,14 @@ describe("brand calendar", () => {
     await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
     await screen.findByText("Recurring draft");
     expect(screen.getByText("Weekly plan: Weekly update · Planned")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: en.Calendar.edit })).not.toBeInTheDocument();
+    expect(
+      within(document.getElementById("calendar-slot-slot-recurring") as HTMLElement).queryByRole(
+        "button",
+        { name: en.Calendar.edit },
+      ),
+    ).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText(en.CalendarRecurring.name), "Unsaved next plan");
+    await user.type(screen.getByLabelText(en.CalendarRecurring.brief), "Keep my input");
     expect(screen.getByRole("link", { name: en.CalendarRecurring.manage })).toHaveAttribute(
       "href",
       "#recurring-plans",
@@ -794,6 +833,11 @@ describe("brand calendar", () => {
       within(screen.getByRole("dialog")).getByRole("button", { name: en.CalendarRecurring.skip }),
     );
     await waitFor(() => expect(screen.queryByText("Recurring draft")).not.toBeInTheDocument());
+    expect(
+      await screen.findByText(en.CalendarRecurring.reason.manual_skip, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(en.CalendarRecurring.name)).toHaveValue("Unsaved next plan");
+    expect(screen.getByLabelText(en.CalendarRecurring.brief)).toHaveValue("Keep my input");
     expect(requests.find((request) => request.method === "DELETE")?.url).toBe(
       "/api/calendar/slots/slot-recurring?brandId=brand-1",
     );
