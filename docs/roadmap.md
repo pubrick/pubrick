@@ -156,6 +156,11 @@ observed usage and SaaS demand:
   import/edit/revoke and native queued generation; main integration is complete.
 - Recurring editorial plans and evergreen reuse before speculative best-time
   claims; collect evidence before suggesting optimal publication times.
+  Finite weekly plans have passed local integration and built-browser acceptance
+  in the feature candidate; their main release is pending. See the
+  [design](specs/0011-recurring-editorial-plans.md) and
+  [verification](reviews/2026-10-01-recurring-editorial-plans.md).
+  Manual evergreen draft reuse is the next separate implementation slice.
 - Telegram decisions only after account binding, authorization, snapshot checks,
   and callback replay protection are designed.
 - Controlled prompt experiments, useful outcome attribution and retrieval

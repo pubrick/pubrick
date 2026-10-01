@@ -30,8 +30,11 @@ the final PR head instead of pushing every intermediate commit to trigger CI.
 
 ### Native database checks
 
-Set `TEST_DATABASE_URL` to a disposable PostgreSQL 16 database. Billing
-persistence also requires a separate `BILLING_TEST_DATABASE_URL` and
+Set both `TEST_DATABASE_URL` and `DATABASE_URL` to the same loopback disposable
+PostgreSQL 16 database named `pubrick_*_test`. The explicit runtime URL also
+supports suites that import the validated server environment before their
+fixture setup; the guarded database name prevents using a developer database.
+Billing persistence also requires a separate `BILLING_TEST_DATABASE_URL` and
 `PUBRICK_BILLING_DISPOSABLE=1`. Without these settings, a passing unit run does
 not establish database acceptance. Use synthetic `BETTER_AUTH_SECRET` and
 `APP_ENCRYPTION_KEY` values; the test database role must be able to create and

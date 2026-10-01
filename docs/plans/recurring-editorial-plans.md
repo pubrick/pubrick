@@ -2,7 +2,8 @@
 
 Status: calendar prerequisite, shared contracts/calculator, transactional
 persistence, API/worker integration and Calendar UI landed in the feature branch;
-isolated built-browser acceptance passed; integrated local gate in progress.
+isolated built-browser and integrated local acceptance passed, including the
+final affected API/web build. Main release remains pending.
 Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
@@ -44,8 +45,8 @@ boundary correction at `ebe637e0`. Focused verification of the final
 contracts passed 20 DTO tests and 22 calculator tests, shared/db typechecks,
 scoped lint and the shared package build. Response round trips include opaque
 authentication actor IDs and historical fractional-minute IANA offsets.
-API, dispatch and UI acceptance remain pending; these unit checks
-do not establish a working recurring-plan user journey.
+At that milestone API, dispatch and UI acceptance remained pending; these unit
+checks alone do not establish a working recurring-plan user journey.
 
 ### 2. Schema, migration and transactional repositories
 
@@ -84,7 +85,7 @@ would invert occurrence/slot lock order. Existing calendar API and worker paths
 still require step 3 integration; this persistence milestone alone does not
 enable scheduled generation. Subsequent independent persistence guard mutations
 are recorded in the [occurrence state proof](../reviews/2026-10-01-editorial-occurrence-state-proof.md).
-Full feature acceptance remains pending.
+Full feature acceptance was still pending at this persistence milestone.
 
 ### 3. Session API and worker dispatch integration
 
@@ -129,7 +130,7 @@ access and required hosted verification, matching the canonical identity policy.
 The author's test storage was removed. Independent API/worker source review passed.
 Selected dispatch guard proofs and their deliberately narrow scope are recorded
 in the [native guard review](../reviews/2026-10-01-recurring-dispatch-guards.md).
-The integrated full gate remains pending; the built-browser journey is recorded below.
+The integrated gate and built-browser journey are recorded below.
 
 ### 4. Calendar UI and documentation
 
@@ -169,7 +170,11 @@ not refresh after asynchronous Resume. Both fixes preserve unsaved input and
 have RED regressions, green focused tiers and independent source reviews. The
 final built journey passed on mobile with keyboard consent and without a manual
 reload; see the [acceptance record](../reviews/2026-10-01-recurring-browser-acceptance.md).
-Whole-project build, typecheck and lint passed; the final test tier is in progress.
+Whole-project build, typecheck and lint passed. Composite package acceptance
+covers 4,951 distinct passing cases and 12 explicit skips, plus 42 script passes
+and three opt-in skips. Original failures, affected rechecks, fixture isolation
+and independent reviews are recorded in the
+[integration review](../reviews/2026-10-01-recurring-editorial-plans.md).
 
 ## Integrated acceptance
 
