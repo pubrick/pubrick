@@ -2821,7 +2821,7 @@
     "enableBody": "This enables the current brief and schedule through its end date. Several provider calls may be charged for each draft. Existing hosted limits still apply. Nothing is approved or published.",
     "consent": "I authorize paid generation with my saved provider credentials for this plan.",
     "editTitle": "Save changes?",
-    "editBody": "Saving disables this plan and suspends unstarted dates. Already admitted runs keep their original brief and consent. Re-enable with fresh paid consent after saving; skipped and dispatched dates never regenerate.",
+    "editBody": "Saving disables this plan and suspends unstarted dates. Already admitted runs keep their saved brief and consent. Re-enable with fresh paid consent after saving; skipped and dispatched dates never regenerate.",
     "removeTitle": "Remove weekly plan?",
     "removeBody": "This permanently removes the plan from management and cancels unstarted dates. Already admitted runs continue; cancel them in Runs. Occurrence history is retained to prevent duplicate generation.",
     "close": "Close",
@@ -2863,7 +2863,7 @@
     },
     "removedEdit": "This plan was removed. Your unsaved text is preserved; cancel editing to start a new plan.",
     "channelLabel": "Weekly plan channel: {channel}",
-    "unavailableChannels": "Some selected channels are no longer available. Remove them from this edit and select active channels. The saved plan changes only after Save; started drafts keep their original destinations.",
+    "unavailableChannels": "Some selected channels are no longer available. Remove them from this edit and select active channels. The saved plan changes only after Save; started drafts keep the destinations selected when generation started.",
     "removeUnavailableChannels": "Remove unavailable channels"
   }
 }
