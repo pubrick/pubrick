@@ -76,7 +76,15 @@ test("saved master, canceled consent, one paid reuse and independent human-edite
         new URL(response.url()).pathname === "/api/brands",
     );
     await page.getByRole("button", { name: "Create brand", exact: true }).click();
-    const brand: { id: string; orgId: string } = await (await brandResponse).json();
+    const brand: { id: string } = await (await brandResponse).json();
+    // Public brand responses omit tenant identity. Resolve the accepted brand
+    // in this disposable database so NULL cannot make audit assertions vacuous.
+    const tenants = await rows<{ org_id: string }>("SELECT org_id FROM brands WHERE id=$1", [
+      brand.id,
+    ]);
+    expect(tenants).toHaveLength(1);
+    const orgId = tenants[0]?.org_id;
+    if (!orgId) throw new Error("Accepted brand tenant missing");
     await page.getByRole("link", { name: "Add a channel", exact: true }).click();
     await page.getByLabel("Platform", { exact: true }).selectOption("t_j");
     await page.getByLabel("Channel name", { exact: true }).fill("Evergreen manual");
@@ -161,7 +169,7 @@ test("saved master, canceled consent, one paid reuse and independent human-edite
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     expect(
-      await rows("SELECT id FROM content_reuse_operations WHERE org_id=$1", [brand.orgId]),
+      await rows("SELECT id FROM content_reuse_operations WHERE org_id=$1", [orgId]),
     ).toHaveLength(0);
     expect(await rows("SELECT id FROM pipeline_runs WHERE brand_id=$1", [brand.id])).toHaveLength(
       0,
@@ -233,7 +241,7 @@ test("saved master, canceled consent, one paid reuse and independent human-edite
       idempotency_key: string;
     }>(
       "SELECT result_run_id, root_source_id, root_source_revision, idempotency_key FROM content_reuse_operations WHERE org_id=$1",
-      [brand.orgId],
+      [orgId],
     );
     expect(operations).toHaveLength(1);
     expect(operations[0]).toEqual({
@@ -247,7 +255,7 @@ test("saved master, canceled consent, one paid reuse and independent human-edite
       [],
     );
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.data).toEqual({ runId: result.id, orgId: brand.orgId });
+    expect(jobs[0]?.data).toEqual({ runId: result.id, orgId });
     expect(
       await rows(
         "SELECT derived_run_id FROM run_source_lineage WHERE derived_run_id=$1 AND source_content_id=$2",
@@ -330,7 +338,7 @@ test("saved master, canceled consent, one paid reuse and independent human-edite
     expect(await rows("SELECT id FROM calendar_slots")).toHaveLength(0);
     expect(await rows("SELECT id FROM media_assets")).toHaveLength(0);
     expect(
-      await rows("SELECT id FROM content_reuse_operations WHERE org_id=$1", [brand.orgId]),
+      await rows("SELECT id FROM content_reuse_operations WHERE org_id=$1", [orgId]),
     ).toHaveLength(1);
     expect(await latch()).toHaveLength(5);
   } finally {
