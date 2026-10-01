@@ -1,7 +1,8 @@
 # Weekly editorial plans execution
 
-Status: calendar prerequisite and shared contracts/calculator integrated in the
-feature branch; transactional persistence in progress. Updated: 2026-10-01.
+Status: calendar prerequisite, shared contracts/calculator and transactional
+persistence integrated in the feature branch; API/worker integration in progress.
+Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
 and two adversarial reads resolved pause/resume identity, finite consent,
@@ -37,11 +38,12 @@ UTC and non-hour-offset zones, inclusive end, 14 local-day horizon, past/new
 identity refusal and retained snapshot behavior. Library handles timezone/day
 arithmetic; Pubrick owns the bounded recurrence and consent semantics.
 
-Integrated in the feature branch at `1a4c23f3`. Focused verification of the final
-contracts passed 19 DTO tests and 21 calculator tests, shared/db typechecks,
+Integrated in the feature branch at `1a4c23f3`, with the PostgreSQL year-zero
+boundary correction at `ebe637e0`. Focused verification of the final
+contracts passed 20 DTO tests and 22 calculator tests, shared/db typechecks,
 scoped lint and the shared package build. Response round trips include opaque
 authentication actor IDs and historical fractional-minute IANA offsets.
-Persistence, API, dispatch and UI acceptance remain pending; these unit checks
+API, dispatch and UI acceptance remain pending; these unit checks
 do not establish a working recurring-plan user journey.
 
 ### 2. Schema, migration and transactional repositories
@@ -65,6 +67,22 @@ Tests: native concurrent creates/inserts, same-date replay, cross-tenant/brand
 link refusal, enable revision and consent, repeated action semantics, paused and
 removed tombstones, deletion of dispatched run/slot, transaction rollback. Prove
 new guards with an independent three-run mutation check after integrated review.
+
+Implemented in the feature branch at `e1412d68`. Independent precommit migration
+review approved the additive `0126` upgrade, journal ordering, composite scope
+links and UPDATE-only immutability guards. The author verified the exact source
+commit on PostgreSQL 16.15: 17 native persistence tests, 21 calculator tests and
+8 database-tier guard tests passed. The native tier exercised a populated
+pre-feature upgrade, concurrent quota admission, pause/edit/resume identity,
+transactional rollback, retained dispatch evidence and a measured parent-lock
+wait during brand deletion. Disposable test storage was removed.
+
+Slot-to-occurrence attribution uses a one-way scoped FK. Occurrence slot/run
+UUIDs are durable audit identifiers, avoiding reciprocal delete triggers that
+would invert occurrence/slot lock order. Existing calendar API and worker paths
+still require step 3 integration; this persistence milestone alone does not
+enable scheduled generation. Independent combined persistence guard mutations
+and full feature acceptance remain pending.
 
 ### 3. Session API and worker dispatch integration
 
