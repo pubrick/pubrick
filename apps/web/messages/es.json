@@ -1863,7 +1863,7 @@
     "resource_limit": "Se alcanzó el límite de recursos del espacio. Revisa la suscripción en Ajustes.",
     "unread_imported_draft": "Abre esta publicación importada en el editor antes de aprobarla.",
     "idempotency_conflict": "Esta clave de idempotencia pertenece a otra solicitud. Repite los datos originales.",
-    "public_result_gone": "El resultado original se eliminó. Esta operación no puede crearlo de nuevo.",
+    "public_result_gone": "El resultado creado se eliminó. Esta operación no puede crearlo de nuevo.",
     "public_operation_capacity": "Este espacio alcanzó su límite total de operaciones API. Contacta al operador.",
     "public_rate_limited": "Demasiadas solicitudes API. Espera y repite con la misma clave de idempotencia y los mismos datos.",
     "public_request_unavailable": "La admisión de solicitudes API no está disponible. Repite más tarde con la misma clave y los mismos datos.",

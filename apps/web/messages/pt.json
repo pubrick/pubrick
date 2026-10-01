@@ -1863,7 +1863,7 @@
     "resource_limit": "O limite de recursos do espaço foi atingido. Revise a assinatura em Configurações.",
     "unread_imported_draft": "Abra esta publicação importada no editor antes de aprová-la.",
     "idempotency_conflict": "Esta chave de idempotência pertence a outra solicitação. Repita os dados originais.",
-    "public_result_gone": "O resultado original foi excluído. Esta operação não pode criá-lo novamente.",
+    "public_result_gone": "O resultado criado foi excluído. Esta operação não pode criá-lo novamente.",
     "public_operation_capacity": "Este espaço atingiu seu limite total de operações API. Contate o operador.",
     "public_rate_limited": "Muitas solicitações API. Aguarde e repita com a mesma chave de idempotência e os mesmos dados.",
     "public_request_unavailable": "A admissão de solicitações API está indisponível. Tente mais tarde com a mesma chave e os mesmos dados.",
