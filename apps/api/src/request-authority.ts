@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ApiKeyCreate, PublicWriteOperation } from "@pubrick/shared";
+import type { ApiKeyCreate, ContentReuseOperation, PublicWriteOperation } from "@pubrick/shared";
 import type { BrandScopeMetadata } from "./org/brand-scope.decorator";
 import type { EditorialCapability } from "./org/editorial-capability.decorator";
 
@@ -14,6 +14,7 @@ export type RequestAuthority =
       mutation: boolean;
       brandId: string | undefined;
       resourceId: string | undefined;
+      sessionOperation?: Readonly<{ operation: ContentReuseOperation; key: string }>;
     }>
   | Readonly<{
       kind: "api-key";

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -9,19 +10,25 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { type RunCreate, runCreateSchema } from "@pubrick/shared";
+import { contentReuseRetrySchema, type RunCreate, runCreateSchema } from "@pubrick/shared";
+import { badRequest } from "../api-error";
+import { ContentReuseRepository } from "../content/content-reuse.repository";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { EditorialCapability } from "../org/editorial-capability.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { VisibleBrandIds } from "../org/visible-brand-ids.decorator";
+import { currentRequestAuthority } from "../request-authority";
 import { ZodValidationPipe } from "../validation.pipe";
 import { RunsRepository } from "./runs.repository";
 
 @Controller("runs")
 @UseGuards(ActiveOrgGuard)
 export class RunsController {
-  constructor(private readonly runs: RunsRepository) {}
+  constructor(
+    private readonly runs: RunsRepository,
+    private readonly reuse: ContentReuseRepository,
+  ) {}
 
   /**
    * `state` is taken as a raw string and validated in the repository, exactly
@@ -53,18 +60,36 @@ export class RunsController {
   }
 
   /**
-   * The retry carries NO body: what the run was asked for is read back out of
-   * the row, org-scoped, and re-admitted through the same path `create` uses.
-   * The queue screen therefore never has to hold the pasted article it would
-   * otherwise have to post back — see `RunsRepository.retry`.
-   *
-   * 201, like `POST /api/runs`, and for the same reason: what it answers IS a
-   * newly created run.
+   * Ordinary retry remains bodyless. Internal saved-source runs require a new
+   * explicit paid confirmation and durable operation key; their frozen input
+   * and lineage are read from the server, never submitted by the caller.
+   * Both paths return 201 because their first admission creates a new run.
    */
   @Post(":id/retry")
   @EditorialCapability("author")
-  @BrandScope({ kind: "resource", resource: "run" })
-  retry(@OrgId() orgId: string, @Param("id", ParseUUIDPipe) id: string) {
+  @BrandScope({ kind: "resource", resource: "run", sessionOperation: "reuse-retry" })
+  retry(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Headers("idempotency-key") key: string | undefined,
+    @Body() body: unknown,
+  ) {
+    const actor = currentRequestAuthority();
+    if (actor?.kind === "session" && actor.sessionOperation?.operation === "reuse-retry") {
+      const parsed = contentReuseRetrySchema.safeParse(body);
+      if (!parsed.success || !key)
+        throw badRequest(
+          "invalid_request",
+          "Explicit paid confirmation is required to retry reused content",
+        );
+      return this.reuse.retry(orgId, id, key, parsed.data);
+    }
+    if (
+      body !== undefined &&
+      body !== null &&
+      !(typeof body === "object" && !Array.isArray(body) && Object.keys(body).length === 0)
+    )
+      throw badRequest("invalid_request", "An ordinary retry does not accept a request body");
     return this.runs.retry(orgId, id);
   }
 

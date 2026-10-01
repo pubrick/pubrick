@@ -1,4 +1,5 @@
 import { SetMetadata } from "@nestjs/common";
+import type { ContentReuseOperation } from "@pubrick/shared";
 
 export const BRAND_SCOPE_KEY = "pubrick:brand-scope";
 
@@ -29,6 +30,8 @@ export type BrandScopeMetadata =
   | {
       kind: "resource";
       resource: BrandResource;
+      /** Fixed session operation lookup precedes resource existence for durable replay. */
+      sessionOperation?: ContentReuseOperation;
       source?: "param" | "query" | "body";
       key?: string;
       roles?: "member" | "manager";

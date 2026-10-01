@@ -7,6 +7,7 @@ import {
   type PublicWriteOperation,
 } from "@pubrick/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { resolveContentReuseTarget } from "./content/content-reuse-target";
 import { identity } from "./env";
 import { brandIdForResource } from "./org/brand-resource";
 import { currentRequestAuthority } from "./request-authority";
@@ -134,11 +135,28 @@ export async function authorizeRequestActor(
     .for("key share");
   if (!brand) return false;
   if (scope.kind === "resource") {
-    if (
-      !actor.resourceId ||
+    if (!actor.resourceId) return false;
+    if (actor.sessionOperation) {
+      if (
+        scope.sessionOperation !== actor.sessionOperation.operation ||
+        (scope.sessionOperation === "reuse" && scope.resource !== "content") ||
+        (scope.sessionOperation === "reuse-retry" && scope.resource !== "run")
+      )
+        return false;
+      const target = await resolveContentReuseTarget(
+        orgId,
+        actor.sessionOperation.operation,
+        actor.resourceId,
+        actor.sessionOperation.key,
+        tx,
+      );
+      if (!target?.internalReuse || target.targetMismatch || target.brandId !== brandId)
+        return false;
+    } else if (
       (await brandIdForResource(orgId, scope.resource, actor.resourceId, tx)) !== brandId
-    )
+    ) {
       return false;
+    }
   }
   if (!(await sessionCurrent())) return false;
   if (manager) return true;

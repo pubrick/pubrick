@@ -8,14 +8,16 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { schema } from "@pubrick/db";
-import type { ApiErrorCode } from "@pubrick/shared";
+import type { ApiErrorCode, ContentReuseOperation } from "@pubrick/shared";
 import { hasOrganizationRole, isOrganizationManager, ORGANIZATION_ROLES } from "@pubrick/shared";
 import { fromNodeHeaders } from "better-auth/node";
 import { and, eq } from "drizzle-orm";
-import { forbidden, notFound } from "../api-error";
+import { conflict, forbidden, notFound } from "../api-error";
 import { auth } from "../auth";
 import { BrandAccessRepository } from "../brand-access/brand-access.repository";
+import { resolveContentReuseTarget } from "../content/content-reuse-target";
 import { db } from "../db";
+import { publicIdempotencyKey } from "../public-api/public-request-hash";
 import { type AuthorityRequest, REQUEST_AUTHORITY } from "../request-authority";
 import { brandIdForResource } from "./brand-resource";
 import {
@@ -36,6 +38,7 @@ type AuthSession = Awaited<ReturnType<typeof auth.api.getSession>>;
 type ScopedRequest = AuthorityRequest & {
   session?: AuthSession;
   headers: Record<string, string | string[] | undefined>;
+  rawHeaders?: string[];
   params?: Record<string, unknown>;
   query?: Record<string, unknown>;
   body?: Record<string, unknown>;
@@ -76,7 +79,7 @@ function scopedId(request: ScopedRequest, source: "param" | "query" | "body", ke
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
     throw new BadRequestException(`Invalid ${key}`);
   }
-  return value;
+  return value.toLowerCase();
 }
 
 /** Requires an authenticated session with an active organization the user is a member of. */
@@ -136,6 +139,7 @@ export class ActiveOrgGuard implements CanActivate {
     if (!scope) throw new ForbiddenException("Brand scope is required for this route");
     // Legacy duplicate rows represent one scoped account, not independent roles.
     const role = membership.map((row) => row.role).join(",");
+    let sessionOperation: Readonly<{ operation: ContentReuseOperation; key: string }> | undefined;
     const approve = () => {
       request[REQUEST_AUTHORITY] = Object.freeze({
         kind: "session" as const,
@@ -154,6 +158,7 @@ export class ActiveOrgGuard implements CanActivate {
         ),
         mutation: !["GET", "HEAD"].includes(request.method ?? ""),
         brandId: request.brandId,
+        ...(sessionOperation && { sessionOperation }),
         resourceId:
           scope.kind === "resource"
             ? scopedId(request, scope.source ?? "param", scope.key ?? "id")
@@ -210,15 +215,46 @@ export class ActiveOrgGuard implements CanActivate {
       }
       return approve();
     }
+    let operationTarget:
+      | { brandId: string; internalReuse: boolean; targetMismatch?: boolean }
+      | null
+      | undefined;
+    if (scope.kind === "resource" && scope.sessionOperation) {
+      if (
+        (scope.sessionOperation === "reuse" && scope.resource !== "content") ||
+        (scope.sessionOperation === "reuse-retry" && scope.resource !== "run")
+      )
+        throw new ForbiddenException("Invalid session operation scope");
+      const header = request.headers["idempotency-key"];
+      const key =
+        header !== undefined || scope.sessionOperation === "reuse"
+          ? publicIdempotencyKey(header, request.rawHeaders ?? [])
+          : undefined;
+      operationTarget = await resolveContentReuseTarget(
+        orgId,
+        scope.sessionOperation,
+        scopedId(request, scope.source ?? "param", scope.key ?? "id"),
+        key,
+        db,
+      );
+      if (operationTarget?.internalReuse) {
+        sessionOperation = Object.freeze({
+          operation: scope.sessionOperation,
+          key: key ?? publicIdempotencyKey(undefined, []),
+        });
+      }
+    }
     const brandId =
       scope.kind === "brand"
         ? scopedId(request, scope.source, scope.key ?? "brandId")
-        : await brandIdForResource(
-            orgId,
-            scope.resource,
-            scopedId(request, scope.source ?? "param", scope.key ?? "id"),
-            db,
-          );
+        : operationTarget !== undefined
+          ? (operationTarget?.brandId ?? null)
+          : await brandIdForResource(
+              orgId,
+              scope.resource,
+              scopedId(request, scope.source ?? "param", scope.key ?? "id"),
+              db,
+            );
     if (!brandId) {
       const code = scope.kind === "resource" ? RESOURCE_NOT_FOUND_CODES[scope.resource] : undefined;
       const message =
@@ -241,6 +277,8 @@ export class ActiveOrgGuard implements CanActivate {
           : "Brand not found";
       throw notFound(code ?? "brand_not_found", message);
     }
+    if (operationTarget?.targetMismatch)
+      throw conflict("idempotency_conflict", "The operation key belongs to a different target");
     request.brandId = brandId;
     if (scope.roles === "manager" && !manager) {
       throw new ForbiddenException("Organization owner or admin required");

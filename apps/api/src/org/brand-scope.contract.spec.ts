@@ -41,7 +41,13 @@ function guardApplied(node: ts.Node): boolean {
   );
 }
 
-type Scope = { kind: string; source?: string; key?: string };
+type Scope = {
+  kind: string;
+  source?: string;
+  key?: string;
+  resource?: string;
+  sessionOperation?: string;
+};
 
 function scopeOn(node: ts.Node): Scope | undefined {
   const call = calledDecorator(node, "BrandScope");
@@ -119,5 +125,36 @@ describe("brand scope on guarded routes", () => {
     }
     expect(guardedRoutes).toBeGreaterThanOrEqual(40);
     expect(problems).toEqual([]);
+  });
+  it("limits durable session operation metadata to the two author-only fixed POST resource routes", () => {
+    const operations: string[] = [];
+    for (const file of controllerFiles(root)) {
+      const source = ts.createSourceFile(
+        file,
+        readFileSync(file, "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      for (const statement of source.statements) {
+        if (!ts.isClassDeclaration(statement)) continue;
+        for (const member of statement.members) {
+          if (!ts.isMethodDeclaration(member)) continue;
+          const scope = scopeOn(member);
+          if (!scope?.sessionOperation) continue;
+          const operation = scope.sessionOperation;
+          expect(["reuse", "reuse-retry"]).toContain(operation);
+          expect(scope.kind).toBe("resource");
+          expect(scope.resource).toBe(operation === "reuse" ? "content" : "run");
+          expect(scope.source ?? "param").toBe("param");
+          expect(scope.key ?? "id").toBe("id");
+          expect(calledDecorator(member, "Post")).toBeDefined();
+          expect(
+            calledDecorator(member, "EditorialCapability")?.arguments[0]?.getText(source),
+          ).toBe('"author"');
+          operations.push(operation);
+        }
+      }
+    }
+    expect(operations.sort()).toEqual(["reuse", "reuse-retry"]);
   });
 });
