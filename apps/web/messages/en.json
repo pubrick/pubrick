@@ -2972,7 +2972,7 @@
       "section3Title": "Make the call",
       "section3Body": "Read, edit and compare versions. Use client review links when another person needs a say. Schedule only after human approval, and inspect delivery status in the workspace.",
       "asideTitle": "Useful automation, with boundaries",
-      "asideBody": "Autopilot and recurring plans prepare drafts for review. Claim checking identifies claims to investigate; it does not independently verify facts. Native delivery is available for supported channels; other destinations use explicit manual handoffs.",
+      "asideBody": "Autopilot and recurring plans prepare drafts for review. Claim checking lists questions for you to investigate; it makes no claim of factual accuracy. Native delivery is available for supported channels; other destinations use explicit manual handoffs.",
       "ctaTitle": "See where it fits your work",
       "ctaBody": "A personal publishing practice and a team editorial desk can share the same clear workflow."
     },
