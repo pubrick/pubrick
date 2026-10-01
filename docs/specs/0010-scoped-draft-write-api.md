@@ -35,7 +35,10 @@ scope through an update or through request fields.
   number is a spending cap. Model/provider configuration stays server-owned.
 - `GET /api/v2/runs/:id`, scope `generation:create`: narrow organization-scoped
   status projection with state, nullable result content ID, closed error code
-  and known/unknown metered cost. A null-priced or unrecorded physical call makes
+  and known/unknown metered cost. A known total includes `estimated: true` when
+  any priced call uses the local price table, and `estimated: false` when all
+  priced calls use provider-reported amounts. Neither is a spending cap or an
+  invoice reconciliation. A null-priced or unrecorded physical call makes
   the aggregate unknown; SQL sum must not turn it into zero. Never return briefs, intermediate steps,
   credential identities, internal errors or provider payloads. Reading the
   resulting draft uses the existing separately issued content-read capability.

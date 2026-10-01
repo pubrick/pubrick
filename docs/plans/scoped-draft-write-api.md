@@ -1,6 +1,6 @@
 # Scoped draft write API execution plan
 
-Status: foundation integrated; backend and client slices in progress.
+Status: all implementation slices integrated and locally verified; release pending.
 Date: 2026-10-01.
 Design: [0010](../specs/0010-scoped-draft-write-api.md).
 
@@ -13,8 +13,11 @@ cursor format and closed origin enum.
 Foundation landed as `b9385c8a` on 2026-10-01. Focused shared, database, API,
 web and worker checks passed, including real PostgreSQL authority/constraint
 fixtures, imported-review and v1 HTTP tests, and every historical migration.
-Migration 0125 received independent review. Public write endpoints and MCP write
-tools remain unavailable until the following slices pass assembled acceptance.
+Migration 0125 received independent review. Backend, client and MCP slices now
+pass assembled local acceptance, including the real browser import/edit/revoke
+journey and committed queued generation with the scripted model. See the
+[verification record](../reviews/2026-10-01-scoped-draft-writes.md).
+These changes are on the feature branch and are not yet released on main.
 
 ## Sequence and ownership
 

@@ -58,6 +58,17 @@ Failure screenshots and traces live under `.data/browser-tests` (gitignored).
 Open a trace using `pnpm exec playwright show-trace <trace.zip>`. These artifacts
 contain disposable account/session data; do not upload them from a real instance.
 
+The scoped-write journey creates a separate account, workspace and manual
+channel, then issues read and import keys through Settings. A cookie-free
+Playwright request context exercises concurrent import replay, read/write scope
+separation, v1 exclusion of imported drafts, changed-payload conflicts and key
+revocation. The owner opens the imported draft through the editor, sees its
+intake history, edits the body and reloads it. Replaying the original import
+returns the original acknowledgement without replacing those edits. The journey
+does not approve, publish, run a worker or call an LLM. Actual queued generation
+and metering are covered by the native public-write integration tier with the
+existing scripted model, independently of this browser journey.
+
 Playwright is the maintained browser automation library (Apache-2.0); the suite
 uses its assertions and runner instead of a custom polling/browser harness.
 
@@ -82,3 +93,15 @@ seat limits, expired growth refusal, and retained read/export/deletion access.
 Each mode skips the other mode's journey. Neither runner accepts an external
 application URL or reuses the normal developer stack. All fixture listeners and
 database/media resources are closed on normal completion or startup failure.
+
+## Docker context isolation
+
+```sh
+PUBRICK_DOCKER_CONTEXT_TEST=1 node --test scripts/docker-context.test.mjs
+```
+
+This opt-in probe uses the maintained Docker builder with a synthetic context
+and a `FROM scratch` image. It verifies that the repository's `.dockerignore`
+excludes root and nested environment secrets and local data while retaining
+`.env.example` files. It never copies the operator checkout or configuration,
+requires no downloaded base image, and removes its temporary fixture afterward.

@@ -150,9 +150,11 @@ observed usage and SaaS demand:
 
 - Scoped write API/MCP for draft creation and generation; retain human delivery
   approval, explicit consent, idempotency, and auditable costs. Implementation
-  started from the reviewed [v2 design](specs/0010-scoped-draft-write-api.md)
-  and [execution plan](plans/scoped-draft-write-api.md); write endpoints are not
-  available yet.
+  and local acceptance are complete on the feature branch, following the
+  reviewed [v2 design](specs/0010-scoped-draft-write-api.md) and
+  [execution plan](plans/scoped-draft-write-api.md).
+  [Verification](reviews/2026-10-01-scoped-draft-writes.md) includes browser
+  import/edit/revoke and native queued generation; main release is pending.
 - Recurring editorial plans and evergreen reuse before speculative best-time
   claims; collect evidence before suggesting optimal publication times.
 - Telegram decisions only after account binding, authorization, snapshot checks,
