@@ -9,7 +9,9 @@ All 57 cases in `packages/db/src/migrate.test.ts` passed in 84.57 seconds.
 The historical matrix checked every one of the journal's 127 cutpoints,
 including the empty starting database, in 47.685 seconds. The existing
 30-second case limit and 480-second matrix limit were unchanged. No historical
-version, assertion, or production migration was removed or altered.
+version, assertion, or production migration was removed or altered. The matrix
+asserts the exact timestamp-with-time-zone column inventory after each upgrade;
+it does not assert arbitrary full schema or data equivalence.
 
 The previous macOS Node 26 execution completed with 44 passes and 13 timeouts;
 the fixture optimization alone did not resolve that run. The successful run
@@ -49,7 +51,26 @@ that runtime and the helper's callers; direct prefix inspection checked exact
 journal/SQL bytes at empty, intermediate, and latest cutpoints. The successful
 native run exercises every historical prefix using the optimized helper.
 
-This receipt closes the historical migration timeout investigation for this
-Linux configuration. It does not certify the remaining database files, other
-workspace packages, browser workflow, release images, or hosted payment setup.
-Those remain separate acceptance evidence.
+The remaining 29 database files were then run separately, excluding the already
+passed migration file: all 206 cases passed in 52.22 seconds. Together these
+executions cover all 263 database cases, without counting duplicate cases.
+
+## Separate Google proxy fixture closure
+
+The next serialized package gate passed mail (23 cases) and reported AI as
+433 passes and one failure. The unchanged proxy test reproduced independently
+with nine passes and one failure. A minimal same-runtime server/fetch diagnostic
+showed `localhost` binding `::1` while fetch attempted `127.0.0.1`, causing
+`ECONNREFUSED` before a proxy handshake.
+
+The affected test now binds an explicit IPv4 loopback and uses that same address
+in its synthetic proxy URL and expected CONNECT Host. Production transport is
+unchanged. The real CONNECT socket, upstream target, exact Basic authentication,
+response body, and proxy-specific Host assertions remain. All ten affected cases
+passed; scoped lint and independent affected review passed. This is composite
+AI acceptance (433 unaffected passes plus the corrected case), not a fresh
+whole-AI rerun or a live Google connection test.
+
+This receipt closes the historical migration and proxy fixture investigations
+for this Linux configuration. Other workspace packages, browser workflow,
+release images, and hosted payment setup remain separate acceptance evidence.

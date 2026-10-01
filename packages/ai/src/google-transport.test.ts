@@ -141,19 +141,21 @@ describe("Google proxy transport", () => {
         socket.end("HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nthrough-proxy");
       });
     });
-    server.listen(0, "localhost");
+    // Bind one explicit address family. In Linux Node 22, localhost can bind
+    // ::1 while fetch connects to 127.0.0.1, refusing before the proxy handshake.
+    server.listen(0, "127.0.0.1");
     await once(server, "listening");
     try {
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("expected TCP address");
-      process.env.GOOGLE_API_PROXY = `http://user:pass@localhost:${address.port}`;
+      process.env.GOOGLE_API_PROXY = `http://user:pass@127.0.0.1:${address.port}`;
       const response = await googleProxyFetch("http://upstream.invalid/v1beta/models");
       expect(await response.text()).toBe("through-proxy");
       expect(seenUrl).toMatch(/upstream\.invalid/);
       expect(seenAuth).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
       // Undici's proxy Client supplies its own Host after we remove the
       // target Host. The Atools proxy hangs when CONNECT carries the target.
-      expect(seenConnectHost).toBe(`localhost:${address.port}`);
+      expect(seenConnectHost).toBe(`127.0.0.1:${address.port}`);
     } finally {
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();
