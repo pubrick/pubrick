@@ -27,6 +27,7 @@ export * from "./notifications.js";
 export * from "./paid-reply-analysis.js";
 export * from "./prompt-decisions.js";
 export * from "./prompts.js";
+export * from "./public-api-operations.js";
 export * from "./publication-comments.js";
 export * from "./publication-metrics.js";
 export * from "./readapt.js";

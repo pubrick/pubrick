@@ -5,9 +5,10 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import type { ApiKeyCreate } from "@pubrick/shared";
+import type { ApiKeyCreate, PublicWriteOperation } from "@pubrick/shared";
 import { type AuthorityRequest, REQUEST_AUTHORITY } from "../request-authority";
 import { ApiKeysRepository } from "./api-keys.repository";
+import { REQUIRED_API_KEY_OPERATION } from "./required-api-key-operation.decorator";
 import { REQUIRED_API_KEY_SCOPE } from "./required-api-key-scope.decorator";
 
 /** No cookie/session fallback: the public API has its own explicit credential. */
@@ -30,6 +31,12 @@ export class ApiKeyGuard implements CanActivate {
       context.getClass(),
     ]);
     if (!scope) throw new UnauthorizedException("Invalid API key");
+    const operation = this.reflector.getAllAndOverride<PublicWriteOperation>(
+      REQUIRED_API_KEY_OPERATION,
+      [context.getHandler(), context.getClass()],
+    );
+    if (operation !== undefined && operation !== scope)
+      throw new UnauthorizedException("Invalid API key");
     const header = request.headers.authorization;
     const match = typeof header === "string" ? /^Bearer (\S+)$/.exec(header) : null;
     const identity = match?.[1] ? await this.keys.authenticateIdentity(match[1], scope) : null;
@@ -40,6 +47,7 @@ export class ApiKeyGuard implements CanActivate {
       orgId: identity.orgId,
       keyId: identity.keyId,
       scope,
+      ...(operation === undefined ? {} : { operation }),
     });
     return true;
   }

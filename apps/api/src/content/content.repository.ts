@@ -5136,6 +5136,7 @@ export class ContentRepository {
         body: schema.contentItems.body,
         origin: schema.contentItems.origin,
         firstOpenedAt: schema.contentItems.firstOpenedAt,
+        requiresImportedReview: schema.contentItems.requiresImportedReview,
       })
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -5145,6 +5146,13 @@ export class ContentRepository {
     // `requireItem` already 404'd a missing row; a delete racing this read is
     // harmless (the writes below it match nothing).
     if (!item) return;
+
+    // Imported intake is an immutable opening obligation, even after origin-changing AI/editor work.
+    if (item.requiresImportedReview && !item.firstOpenedAt)
+      throw conflict(
+        "unread_imported_draft",
+        "Open this imported draft in the editor before approving it",
+      );
 
     // The `ai` version rows are the provenance evidence. Filtered on origin
     // because increment 2 appends human versions to the same table — a version

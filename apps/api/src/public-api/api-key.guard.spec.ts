@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { REQUEST_AUTHORITY } from "../request-authority";
 import { ApiKeyGuard } from "./api-key.guard";
 import type { ApiKeysRepository } from "./api-keys.repository";
+import { REQUIRED_API_KEY_OPERATION } from "./required-api-key-operation.decorator";
 import { REQUIRED_API_KEY_SCOPE } from "./required-api-key-scope.decorator";
 
 vi.mock("./api-keys.repository", () => ({ ApiKeysRepository: class {} }));
@@ -57,4 +58,32 @@ describe("ApiKeyGuard", () => {
     await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
     expect(authenticate).not.toHaveBeenCalled();
   });
+});
+
+it("derives immutable operation from route metadata, never JSON intent", async () => {
+  const authenticateIdentity = vi.fn().mockResolvedValue({ orgId: "trusted", keyId: "key" });
+  class Writer {
+    handler() {}
+  }
+  Reflect.defineMetadata(REQUIRED_API_KEY_SCOPE, "content:create", Writer.prototype.handler);
+  Reflect.defineMetadata(REQUIRED_API_KEY_OPERATION, "content:create", Writer.prototype.handler);
+  const request = {
+    headers: { authorization: "Bearer secret" },
+    body: { operation: "generation:create" },
+  };
+  const guard = new ApiKeyGuard(
+    { authenticateIdentity } as unknown as ApiKeysRepository,
+    new Reflector(),
+  );
+  const context = {
+    getHandler: () => Writer.prototype.handler,
+    getClass: () => Writer,
+    switchToHttp: () => ({ getRequest: () => request }),
+  } as unknown as ExecutionContext;
+  expect(await guard.canActivate(context)).toBe(true);
+  expect(Reflect.get(request, REQUEST_AUTHORITY).operation).toBe("content:create");
+  expect(Object.isFrozen(Reflect.get(request, REQUEST_AUTHORITY))).toBe(true);
+  Reflect.defineMetadata(REQUIRED_API_KEY_OPERATION, "generation:create", Writer.prototype.handler);
+  await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+  expect(authenticateIdentity).toHaveBeenCalledOnce();
 });

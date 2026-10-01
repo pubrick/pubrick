@@ -198,8 +198,11 @@ Pattern reference for new features: `docs/ux-patterns.md`.
   return a stranger's sentence word for word, and it is then, correctly, a
   sentence the model wrote — in the first `ai` row, dimmed by the lens, captioned
   *AI-drafted*. The badge and the lens answer **who typed this**, never **where
-  it came from before that**, and there is no third provenance state; do not
-  invent one. So **no string in the UI, the docs or the changelog may say or
+  it came from before that**. Sentence masks retain exactly the AI/human
+  distinction. Externally supplied API draft text has a separate `external`
+  intake marker: its authorship is unknown, and its immutable opening obligation
+  survives later origin changes. This does not add a third sentence-mask state
+  or apply an imported marker to actual AI-generated runs. So **no string in the UI, the docs or the changelog may say or
   imply that a draft is original, or that anything checked it** — and a
   similarity check is not a small addition but a new promise, where a weak one
   that misses is worse than none. That is the argument the fact-check label

@@ -695,7 +695,8 @@
       "ai": "Redactado por IA",
       "humanEdited": "Editado por una persona",
       "aiAdapted": "Adaptado por IA",
-      "human": "Escrito por una persona"
+      "human": "Escrito por una persona",
+      "external": "Importado"
     },
     "unknownOutcome": "Se envió a {channel}, pero la plataforma nunca lo confirmó. Revisa ese canal antes de aprobarlo otra vez: aprobarlo envía otra copia.",
     "partialOutcome": "La foto de portada está publicada en {channel}, pero la respuesta sigue sin resolverse. Abre la publicación para recuperarla antes de volver a enviarla.",
@@ -1043,7 +1044,8 @@
     "recordManualPublication": "Registrar publicación",
     "manualAssertionHint": "Al registrar esta URL, afirmas que publicaste el contenido. Pubrick no pide confirmación a {platform}.",
     "manualPublicationAsserted": "Registrado por {name} el {date}; dato facilitado por la persona, sin consulta a {platform}.",
-    "manualPublicationAssertedRemoved": "Registrado por un miembro eliminado el {date}; dato facilitado por la persona, sin consulta a {platform}."
+    "manualPublicationAssertedRemoved": "Registrado por un miembro eliminado el {date}; dato facilitado por la persona, sin consulta a {platform}.",
+    "versionExternal": "Texto importado"
   },
   "Prompts": {
     "title": "Guía de generación",
@@ -1852,7 +1854,8 @@
     "not_found": "No se encontró el elemento del espacio. Actualiza e inténtalo de nuevo.",
     "subscription_required": "Se requiere una suscripción activa. Abre Ajustes para configurar la suscripción del espacio.",
     "billing_identity_mismatch": "La cuenta de facturación guardada no corresponde a esta instancia. Contacta con el administrador.",
-    "resource_limit": "Se alcanzó el límite de recursos del espacio. Revisa la suscripción en Ajustes."
+    "resource_limit": "Se alcanzó el límite de recursos del espacio. Revisa la suscripción en Ajustes.",
+    "unread_imported_draft": "Abre esta publicación importada en el editor antes de aprobarla."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",

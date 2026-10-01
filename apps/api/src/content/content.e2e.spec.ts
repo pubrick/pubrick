@@ -4435,6 +4435,37 @@ describe.skipIf(!url)("content e2e", () => {
       );
     });
 
+    it("requires opening imported intake after edits and origin changes", async () => {
+      const agent = await orgAgent();
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const { itemId } = await aiDraft(agent, brandId, [channelId]);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { db, pool } = createDb(url as string);
+      try {
+        await db
+          .update(schema.contentItems)
+          .set({ origin: "external", requiresImportedReview: true })
+          .where(eq(schema.contentItems.id, itemId));
+        await agent
+          .patch(`/api/content/${itemId}`)
+          .send({ body: "An editor replaced this entire draft." })
+          .expect(200);
+        // A later origin-changing workflow cannot erase the imported opening obligation.
+        await db
+          .update(schema.contentItems)
+          .set({ origin: "human" })
+          .where(eq(schema.contentItems.id, itemId));
+        await agent.get(`/api/content/${itemId}`).expect(200);
+        const denied = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
+        expect(denied.body.code).toBe("unread_imported_draft");
+        expect(await firstOpenedAt(itemId)).toBeNull();
+        await agent.post(`/api/content/${itemId}/opened`).send({}).expect(204);
+        await agent.post(`/api/content/${itemId}/approve`).send({}).expect(200);
+      } finally {
+        await pool.end();
+      }
+    });
+
     it("a GET does not stamp the read receipt — the public API and the MCP server issue GETs", async () => {
       const agent = await orgAgent();
       const { brandId, channelId } = await brandWithChannel(agent);

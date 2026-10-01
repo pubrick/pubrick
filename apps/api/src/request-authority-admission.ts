@@ -1,17 +1,39 @@
 import { type BillingTransaction, schema } from "@pubrick/db";
-import { hasOrganizationRole, isOrganizationManager, ORGANIZATION_ROLES } from "@pubrick/shared";
+import {
+  hasOrganizationRole,
+  isOrganizationManager,
+  ORGANIZATION_ROLES,
+  PUBLIC_WRITE_OPERATIONS,
+  type PublicWriteOperation,
+} from "@pubrick/shared";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { brandIdForResource } from "./org/brand-resource";
 import { currentRequestAuthority } from "./request-authority";
+
+export type ExpectedApiOperation = Readonly<{
+  operation: PublicWriteOperation;
+  brandId: string;
+  channelIds: readonly string[];
+}>;
 
 /** Call only after admission advisory -> tenant lock. Never reads caller-controlled actor fields. */
 export async function authorizeRequestActor(
   tx: BillingTransaction,
   orgId: string,
+  expected?: ExpectedApiOperation,
 ): Promise<boolean> {
   const actor = currentRequestAuthority();
   if (!actor || actor.orgId !== orgId) return false;
   if (actor.kind === "api-key") {
+    if (
+      !expected ||
+      !(PUBLIC_WRITE_OPERATIONS as readonly string[]).includes(expected.operation) ||
+      actor.operation !== expected.operation ||
+      actor.scope !== expected.operation ||
+      !expected.channelIds.length ||
+      new Set(expected.channelIds).size !== expected.channelIds.length
+    )
+      return false;
     const [key] = await tx
       .select({ id: schema.organizationApiKeys.id })
       .from(schema.organizationApiKeys)
@@ -24,9 +46,25 @@ export async function authorizeRequestActor(
         ),
       )
       .for("share");
-    // Current public credentials have read-only scopes. An authenticated read
-    // key must never authorize a paid dispatch/resource write if a route drifts.
-    return Boolean(key) && !["content:read", "publications:read"].includes(actor.scope);
+    if (!key) return false;
+    const [brand] = await tx
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, expected.brandId)))
+      .for("key share");
+    if (!brand) return false;
+    const targets = await tx
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.orgId, orgId),
+          eq(schema.channels.brandId, expected.brandId),
+          inArray(schema.channels.id, [...expected.channelIds]),
+        ),
+      )
+      .for("key share");
+    return targets.length === expected.channelIds.length;
   }
   const [session] = await tx
     .select({ id: schema.session.id })

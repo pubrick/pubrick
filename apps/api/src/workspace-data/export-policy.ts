@@ -261,6 +261,7 @@ export const WORKSPACE_EXPORT_TABLES = [
       "archivedFromStatus",
       "isSafeToDelete",
       "origin",
+      "requiresImportedReview",
       "linkPolicyWebsite",
       "firstOpenedAt",
       "createdAt",
@@ -751,10 +752,27 @@ export const WORKSPACE_EXPORT_TABLES = [
       "revokedAt",
     ],
   },
+  {
+    key: "publicApiOperations",
+    table: schema.publicApiOperations,
+    fields: [
+      "id",
+      "orgId",
+      "operation",
+      "keyId",
+      "idempotencyKey",
+      "requestHash",
+      "hashVersion",
+      "resultId",
+      "consentVersion",
+      "createdAt",
+    ],
+  },
 ] as const;
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  apiRequestLimits: "Shared transient API request rate counters",
   hostedAiCallLeases: "Operational physical model dispatch leases",
   mediaCleanupWork: "Durable physical media deletion obligations",
   hostedAccountCreationClaims: "Account-scoped creation abuse prevention audit",

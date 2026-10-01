@@ -105,6 +105,36 @@ describe.skipIf(!url)("organization API keys and public content API", () => {
     expect(stored?.hash).not.toContain(created.body.key);
   });
 
+  it("filters unsupported imported origins before v1 pagination and refuses their detail", async () => {
+    const mine = await orgAgent();
+    const humanId = await draft(mine.agent, "Visible human draft");
+    const importedId = await draft(mine.agent, "Newer imported draft");
+    await db
+      .update(schema.contentItems)
+      .set({ origin: "external", requiresImportedReview: true })
+      .where(eq(schema.contentItems.id, importedId));
+    const key = await mine.agent
+      .post("/api/api-keys")
+      .send({ name: "Legacy reader", scope: "content:read" })
+      .expect(201);
+    const target = request(app.getHttpServer());
+    const page = await target
+      .get("/api/v1/content?limit=1")
+      .set("Authorization", `Bearer ${key.body.key}`)
+      .expect(200);
+    expect(page.body.map((row: { id: string }) => row.id)).toEqual([humanId]);
+    expect(page.headers[NEXT_CURSOR_HEADER.toLowerCase()]).toBeUndefined();
+    await target
+      .get(`/api/v1/content/${importedId}`)
+      .set("Authorization", `Bearer ${key.body.key}`)
+      .expect(404);
+    const [stored] = await db
+      .select({ opened: schema.contentItems.firstOpenedAt })
+      .from(schema.contentItems)
+      .where(eq(schema.contentItems.id, importedId));
+    expect(stored?.opened).toBeNull();
+  });
+
   it("accepts only scoped bearer keys, isolates tenants, paginates, and never stamps opened", async () => {
     const mine = await orgAgent();
     const other = await orgAgent();

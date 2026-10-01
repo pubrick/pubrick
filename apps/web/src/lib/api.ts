@@ -197,6 +197,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   approval_retraction_delivery_started: "approval_retraction_delivery_started",
   content_partially_published: "content_partially_published",
   content_no_channels_left: "content_no_channels_left",
+  unread_imported_draft: "unread_imported_draft",
   unread_ai_draft: "unread_ai_draft",
   unread_ai_draft_open_only: "unread_ai_draft_open_only",
   delivery_outcome_unknown: "delivery_outcome_unknown",

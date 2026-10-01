@@ -191,3 +191,22 @@ describe("VersionHistory", () => {
     expect(onRestored).not.toHaveBeenCalled();
   });
 });
+
+it("labels externally supplied history without asserting human authorship", async () => {
+  mockApiPage.mockResolvedValue({ rows: [{ ...version, origin: "external" }], nextCursor: null });
+  render(
+    <VersionHistory
+      itemId="22222222-2222-4222-8222-222222222222"
+      currentBody="Current."
+      draftBody="Current."
+      currentBodyRevision={0}
+      currentRichBody={null}
+      editable
+      onRestored={vi.fn()}
+      onRichRestored={vi.fn()}
+    />,
+  );
+  await userEvent.setup().click(screen.getByText("Version history"));
+  expect(await screen.findByText(/Imported text/)).toBeVisible();
+  expect(screen.queryByText(/Human edit/)).not.toBeInTheDocument();
+});

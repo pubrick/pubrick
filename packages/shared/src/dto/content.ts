@@ -277,7 +277,7 @@ export type PublishFailureReason = (typeof PUBLISH_FAILURE_REASONS)[number];
  * Who wrote the text — `content_items.origin`, `adaptations.origin` and
  * `content_versions.origin`.
  */
-export const CONTENT_ORIGINS = ["ai", "human"] as const;
+export const CONTENT_ORIGINS = ["ai", "human", "external"] as const;
 export type ContentOrigin = (typeof CONTENT_ORIGINS)[number];
 
 /**

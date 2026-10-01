@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { ApiKeyCreate } from "@pubrick/shared";
+import type { ApiKeyCreate, PublicWriteOperation } from "@pubrick/shared";
 import type { BrandScopeMetadata } from "./org/brand-scope.decorator";
 import type { EditorialCapability } from "./org/editorial-capability.decorator";
 
@@ -15,7 +15,13 @@ export type RequestAuthority =
       brandId: string | undefined;
       resourceId: string | undefined;
     }>
-  | Readonly<{ kind: "api-key"; orgId: string; keyId: string; scope: ApiKeyCreate["scope"] }>;
+  | Readonly<{
+      kind: "api-key";
+      orgId: string;
+      keyId: string;
+      scope: ApiKeyCreate["scope"];
+      operation?: PublicWriteOperation;
+    }>;
 
 // A symbol cannot be supplied by JSON/headers. Only successful guards attach it.
 export const REQUEST_AUTHORITY = Symbol("pubrick:verified-request-authority");

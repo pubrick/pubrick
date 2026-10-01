@@ -72,6 +72,8 @@ export const contentItems = pgTable(
     isSafeToDelete: boolean("is_safe_to_delete").notNull().default(true),
     /** Defaults to `human`, which is what every row written before AI existed is. */
     origin: text("origin", { enum: CONTENT_ORIGINS }).notNull().default("human"),
+    /** Permanent opening requirement for externally supplied text, independent of mutable origin. */
+    requiresImportedReview: boolean("requires_imported_review").notNull().default(false),
     /** Website used by the generation-time link policy; null means none ran. */
     linkPolicyWebsite: text("link_policy_website"),
     /**
@@ -88,6 +90,10 @@ export const contentItems = pgTable(
       .notNull(),
   },
   (t) => [
+    check(
+      "content_items_external_review_check",
+      sql`${t.origin} <> 'external' OR ${t.requiresImportedReview}`,
+    ),
     check("content_items_body_revision_check", sql`${t.bodyRevision} >= 0`),
     check(
       "content_items_quality_score_check",

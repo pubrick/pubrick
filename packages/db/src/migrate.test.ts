@@ -232,6 +232,7 @@ const ZONED_COLUMNS = [
   "prompt_decision_template_revisions.decided_at",
   "prompt_decisions.created_at",
   "prompt_revisions.created_at",
+  "public_api_operations.created_at",
   "publication_comment_analyses.created_at",
   "publication_comment_analyses.sample_checked_at",
   "publication_comment_collection_configs.last_scanned_at",
@@ -341,6 +342,12 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  "public_api_operations_operation_check",
+  "public_api_operations_idempotency_key_check",
+  "public_api_operations_request_hash_check",
+  "public_api_operations_hash_version_check",
+  "public_api_operations_consent_check",
+  "content_items_external_review_check",
   // The historical seed has no news row to update here; schema-invariants.test.ts
   // compares this enum CHECK to the migration SQL instead.
   "news_items_dismissed_previous_signal_check",
@@ -770,6 +777,10 @@ function expectNoRowRewritten(
           // 0060 intentionally makes historical items ineligible for deletion:
           // an orphaned receipt may already have lost its item link.
           if (table === "content_items" && key === "is_safe_to_delete") {
+            return afterRow[key] !== false;
+          }
+          // 0125 marks only new API-imported drafts; historical content keeps no opening obligation.
+          if (table === "content_items" && key === "requires_imported_review") {
             return afterRow[key] !== false;
           }
           // 0094 adds a metadata-only constant default for optimistic body edits.

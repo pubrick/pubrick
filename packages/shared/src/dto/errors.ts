@@ -204,6 +204,7 @@ export const API_ERROR_CODES = [
    * The publish gate: nobody has read this AI-written draft, and editing the
    * body WOULD clear the refusal.
    */
+  "unread_imported_draft",
   "unread_ai_draft",
   /**
    * The same gate where editing cannot clear it, because no complete AI version

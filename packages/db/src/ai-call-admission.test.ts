@@ -110,3 +110,27 @@ describe("physical call scope contracts", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 });
+
+it("self-hosted trusted authority refuses before physical dispatch without a billing lease", async () => {
+  const tx = {
+    execute: vi.fn(async () => {}),
+    select: () => ({ from: () => ({ where: () => ({ for: async () => [{ id: "org" }] }) }) }),
+  };
+  const db = {
+    transaction: async <T>(action: (tx: unknown) => Promise<T>) => action(tx),
+  } as unknown as Database;
+  const dispatch = vi.fn(),
+    authorizeActor = vi.fn(async () => false);
+  await expect(
+    withHostedAiCall(
+      "org",
+      db,
+      { mode: "self-hosted", authorizeActor },
+      "text",
+      undefined,
+      dispatch,
+    ),
+  ).rejects.toMatchObject({ code: "authority_revoked" });
+  expect(authorizeActor).toHaveBeenCalledOnce();
+  expect(dispatch).not.toHaveBeenCalled();
+});

@@ -695,7 +695,8 @@
       "ai": "AI-drafted",
       "humanEdited": "Human-edited",
       "aiAdapted": "AI-adapted",
-      "human": "Human-written"
+      "human": "Human-written",
+      "external": "Imported"
     },
     "unknownOutcome": "Sent to {channel}, but the platform never confirmed it. Check that channel before approving again — approving sends another copy.",
     "partialOutcome": "The cover photo is live in {channel}, but the reply is unresolved. Open the post to recover it before sending again.",
@@ -1043,7 +1044,8 @@
     "recordManualPublication": "Record publication",
     "manualAssertionHint": "Recording this URL states that you published the post yourself. Pubrick does not ask {platform} to confirm it.",
     "manualPublicationAsserted": "Recorded by {name} on {date} — self reported; Pubrick did not ask {platform}.",
-    "manualPublicationAssertedRemoved": "Recorded by a removed member on {date} — self reported; Pubrick did not ask {platform}."
+    "manualPublicationAssertedRemoved": "Recorded by a removed member on {date} — self reported; Pubrick did not ask {platform}.",
+    "versionExternal": "Imported text"
   },
   "Prompts": {
     "title": "Generation guidance",
@@ -1852,7 +1854,8 @@
     "not_found": "The requested workspace item was not found. Refresh and try again.",
     "subscription_required": "An active subscription is required. Open Settings to configure the workspace subscription.",
     "billing_identity_mismatch": "The saved billing account does not match this instance. Contact the administrator.",
-    "resource_limit": "The workspace resource limit has been reached. Review your subscription in Settings."
+    "resource_limit": "The workspace resource limit has been reached. Review your subscription in Settings.",
+    "unread_imported_draft": "Open this imported post in the editor before approving it."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

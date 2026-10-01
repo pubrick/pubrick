@@ -1,5 +1,5 @@
 /**
- * Who wrote the text on a content item — derived, never stored (generation-engine spec §6).
+ * Text intake and authorship labels on a content item — derived, never stored (generation-engine spec §6).
  *
  * Three of the four badges need nothing but the `origin` columns:
  *
@@ -54,16 +54,17 @@
  * and reads "AI-drafted" while most sentences stay undimmed. That one is
  * missing evidence rather than a claim, and it is not paperable-over here.
  *
- * Everything unknown still resolves to the AI badge. An older payload with no
+ * Explicit external intake has unknown authorship and its own neutral label.
+ * Missing AI edit evidence still resolves to the AI badge. An older payload with no
  * `bodyIsAiVerbatim` at all means no evidence of an edit, and no evidence of an
  * edit is not evidence of one: answering `humanEdited` there would over-claim
  * human authorship on a body nobody touched. Under-claiming is the direction
  * `@pubrick/shared`'s provenance functions are written and mutation-tested
  * against, and this follows them.
  */
-export type ContentOrigin = "ai" | "human";
+export type ContentOrigin = "ai" | "human" | "external";
 
-export type OriginBadgeKind = "ai" | "aiAdapted" | "human" | "humanEdited";
+export type OriginBadgeKind = "ai" | "aiAdapted" | "human" | "humanEdited" | "external";
 
 /**
  * The `ai` version bodies for one item: the master body's, and each
@@ -85,6 +86,7 @@ export function deriveOrigin(item: {
    */
   bodyIsAiVerbatim?: boolean;
 }): OriginBadgeKind {
+  if (item.origin === "external") return "external";
   if (item.origin !== "ai") {
     return item.adaptations.some((a) => a.origin === "ai") ? "aiAdapted" : "human";
   }

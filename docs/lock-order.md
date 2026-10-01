@@ -778,3 +778,21 @@ never waits for SMTP. Better Auth owns account/token/invitation commits;
 mail callbacks read them before entering this queue-only lock. Other queue
 producers do not take this lock. Consumers use authoritative read-only
 ownership transactions with a five-second statement timeout.
+
+
+## Public write authority and replay records
+
+The public owning transaction takes the run-admission advisory lock, then tenant
+SHARE (generation also uses the selector's compatible SHARE lock), then verifies
+the original API key with SHARE and locks tenant-owned brand/channel targets with
+KEY SHARE. It passes an explicit `ExpectedApiOperation` to `authorizeRequestActor`.
+A scope alone never authorizes a generic resource writer or physical SDK call,
+including self-hosted mode. Replay checks follow fresh authority and precede
+capacity, selector and queue work. Background actorless self-hosted jobs retain
+existing admission behavior.
+
+`public_api_operations` stores immutable audit UUIDs without result/key foreign
+keys. Removing a result or key cannot free its lifetime replay slot. Organization
+removal cascades the tenant audit. `api_request_limits` is shared transient
+operational infrastructure, has no tenant row or content and is omitted from
+workspace exports. Its three-column order is a pinned adapter contract.

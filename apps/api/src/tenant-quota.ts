@@ -6,12 +6,17 @@ import {
   type TenantResourceQuotaMode,
 } from "@pubrick/db";
 
+import { currentRequestAuthority } from "./request-authority";
 import { authorizeRequestActor } from "./request-authority-admission";
 
 /** Operator environment only; no request/header/tenant setting selects deployment policy. */
 export function tenantQuotaMode(): TenantResourceQuotaMode {
   const mode = resolveTenantQuotaMode(process.env, process.env.NODE_ENV);
-  return mode.mode === "hosted" ? { ...mode, authorizeActor: authorizeRequestActor } : mode;
+  return mode.mode === "hosted"
+    ? { ...mode, authorizeActor: authorizeRequestActor }
+    : currentRequestAuthority()?.kind === "api-key"
+      ? { ...mode, authorizeActor: authorizeRequestActor }
+      : mode;
 }
 
 /** Keep the same closed refusal shape on every resource writer. */

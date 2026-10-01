@@ -182,7 +182,13 @@ export function VersionHistory({
                   timeStyle: "short",
                 }).format(new Date(version.createdAt))}
                 {" · "}
-                {t(version.origin === "ai" ? "versionAi" : "versionHuman")}
+                {t(
+                  version.origin === "ai"
+                    ? "versionAi"
+                    : version.origin === "external"
+                      ? "versionExternal"
+                      : "versionHuman",
+                )}
               </span>
               <Button variant="secondary" size="sm" onClick={() => setSelected(version)}>
                 {t("versionPreview")}

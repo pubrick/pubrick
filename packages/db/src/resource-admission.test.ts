@@ -237,3 +237,47 @@ describe("authoritative resource admission", () => {
     expect(f.calls.at(-1)).toBe("rollback");
   });
 });
+
+describe("self-hosted operation authority", () => {
+  it("takes the owning lock prefix and refuses an actor before insertion without enabling billing", async () => {
+    const f = fixture([]),
+      insert = vi.fn();
+    const authorizeActor = vi.fn(async () => false);
+    await expect(
+      withTenantResourceAdmission(
+        "org",
+        f.db,
+        { mode: "self-hosted", authorizeActor },
+        { resource: "brands", additional: 1 },
+        insert,
+      ),
+    ).rejects.toThrow("authority_revoked");
+    expect(f.calls).toEqual(["advisory", "tenant:key share", "rollback"]);
+    expect(insert).not.toHaveBeenCalled();
+    expect(authorizeBillingGrowth).not.toHaveBeenCalled();
+  });
+  it("preserves actorless self-hosted insertion and checks held-lock actor callbacks", async () => {
+    const f = fixture([]),
+      insert = vi.fn(async () => "created");
+    await expect(
+      withTenantResourceAdmission(
+        "org",
+        f.db,
+        { mode: "self-hosted" },
+        { resource: "brands", additional: 1 },
+        insert,
+      ),
+    ).resolves.toBe("created");
+    expect(f.calls).toEqual(["commit"]);
+    await expect(
+      withTenantResourceAdmissionWithHeldLocks(
+        "org",
+        f.tx,
+        { mode: "self-hosted", authorizeActor: async () => false },
+        { resource: "brands", additional: 1 },
+        insert,
+      ),
+    ).rejects.toThrow("authority_revoked");
+    expect(insert).toHaveBeenCalledTimes(1);
+  });
+});

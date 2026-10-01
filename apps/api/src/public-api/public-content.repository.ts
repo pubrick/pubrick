@@ -7,7 +7,7 @@ import {
   encodeContentCursor,
   MAX_CONTENT_PAGE_SIZE,
 } from "@pubrick/shared";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../db";
 
 /** Public wire projections. Never spread a row from the internal editor DTO. */
@@ -44,6 +44,7 @@ export class PublicContentRepository {
       .where(
         and(
           eq(schema.contentItems.orgId, orgId),
+          inArray(schema.contentItems.origin, ["ai", "human"]),
           status
             ? eq(schema.contentItems.status, status as (typeof CONTENT_STATUSES)[number])
             : undefined,
@@ -69,7 +70,13 @@ export class PublicContentRepository {
     const [item] = await db
       .select(DETAIL_COLUMNS)
       .from(schema.contentItems)
-      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .where(
+        and(
+          eq(schema.contentItems.orgId, orgId),
+          eq(schema.contentItems.id, id),
+          inArray(schema.contentItems.origin, ["ai", "human"]),
+        ),
+      )
       .limit(1);
     if (!item) throw new NotFoundException("Content item not found");
     return item;

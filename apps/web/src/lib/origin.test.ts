@@ -99,3 +99,9 @@ describe("deriveOrigin — human-edited (authorship-per-sentence design §2, pro
     ).toBe("human");
   });
 });
+
+it("reports imported intake neutrally even when channel text was adapted by AI", () => {
+  expect(
+    deriveOrigin({ origin: "external", adaptations: [{ origin: "ai" }], bodyIsAiVerbatim: false }),
+  ).toBe("external");
+});

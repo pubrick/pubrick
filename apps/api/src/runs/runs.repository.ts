@@ -375,7 +375,7 @@ export class RunsRepository {
     await tx.execute(
       sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
     );
-    if (mode.mode === "hosted") {
+    if (mode.mode === "hosted" || mode.authorizeActor) {
       const [org] = await tx
         .select({ id: schema.organization.id })
         .from(schema.organization)
@@ -384,7 +384,10 @@ export class RunsRepository {
       if (!org)
         throw forbidden("no_active_organization", "The active workspace is no longer available");
     }
-    if (mode.mode === "hosted" && (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId))))
+    if (
+      (mode.mode === "hosted" || mode.authorizeActor) &&
+      (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId)))
+    )
       throw new ForbiddenException("Workspace authority changed; sign in and retry");
     const rows = await tx
       .select({ count: sql<number>`count(*)::int` })
@@ -476,7 +479,7 @@ export class RunsRepository {
     const id = await withQuotaErrors(() =>
       db.transaction(async (tx) => {
         // Hosted billing locks precede selector credential/settings and topic/brand child locks.
-        if (mode.mode === "hosted")
+        if (mode.mode === "hosted" || mode.authorizeActor)
           await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
         const aiState = await lockAiTextSelection(orgId, tx);
         if (!aiState) throw notFound("ai_credential_not_found", "Organization not found");
@@ -494,7 +497,7 @@ export class RunsRepository {
             "ai_default_key_missing",
             "Add an AI key in Settings before generating text.",
           );
-        if (mode.mode === "self-hosted")
+        if (mode.mode === "self-hosted" && !mode.authorizeActor)
           await this.admit(tx, orgId, mode, data.generateCover, data.generateInlineImages);
         // A topic id can only come from a server-side check under this same
         // transaction. The public RunCreate body has no topicId field.
@@ -527,7 +530,7 @@ export class RunsRepository {
             }))
           : undefined;
         if (
-          mode.mode === "hosted" &&
+          (mode.mode === "hosted" || mode.authorizeActor) &&
           (!mode.authorizeActor || !(await mode.authorizeActor(tx, orgId)))
         )
           throw new ForbiddenException("Workspace authority changed; sign in and retry");

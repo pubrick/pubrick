@@ -35,6 +35,7 @@
     "p-limit": "^7.3.3",
     "pg-boss": "^12.28.0",
     "pg-query-stream": "^4.17.0",
+    "rate-limiter-flexible": "11.2.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "sanitize-html": "^2.17.7",

@@ -695,7 +695,8 @@
       "ai": "Rascunho de IA",
       "humanEdited": "Editado por uma pessoa",
       "aiAdapted": "Adaptado por IA",
-      "human": "Escrito por uma pessoa"
+      "human": "Escrito por uma pessoa",
+      "external": "Importado"
     },
     "unknownOutcome": "Foi enviado para {channel}, mas a plataforma nunca confirmou. Verifique esse canal antes de aprovar de novo: aprovar envia outra cópia.",
     "partialOutcome": "A foto de capa está publicada em {channel}, mas a resposta ainda não foi resolvida. Abra a publicação para recuperá-la antes de enviar novamente.",
@@ -1043,7 +1044,8 @@
     "recordManualPublication": "Registar publicação",
     "manualAssertionHint": "Ao registar este URL, afirma que publicou o conteúdo. O Pubrick não pede confirmação a {platform}.",
     "manualPublicationAsserted": "Registado por {name} em {date}; informação fornecida pela pessoa, sem consulta a {platform}.",
-    "manualPublicationAssertedRemoved": "Registado por um membro removido em {date}; informação fornecida pela pessoa, sem consulta a {platform}."
+    "manualPublicationAssertedRemoved": "Registado por um membro removido em {date}; informação fornecida pela pessoa, sem consulta a {platform}.",
+    "versionExternal": "Texto importado"
   },
   "Prompts": {
     "title": "Orientações de geração",
@@ -1852,7 +1854,8 @@
     "not_found": "O item do espaço não foi encontrado. Atualize e tente novamente.",
     "subscription_required": "É necessária uma assinatura ativa. Abra Configurações para definir a assinatura do espaço.",
     "billing_identity_mismatch": "A conta de cobrança salva não corresponde a esta instância. Contate o administrador.",
-    "resource_limit": "O limite de recursos do espaço foi atingido. Revise a assinatura em Configurações."
+    "resource_limit": "O limite de recursos do espaço foi atingido. Revise a assinatura em Configurações.",
+    "unread_imported_draft": "Abra esta publicação importada no editor antes de aprová-la."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",

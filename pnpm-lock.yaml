@@ -101,6 +101,9 @@ importers:
       pg-query-stream:
         specifier: ^4.17.0
         version: 4.17.0(pg@8.23.0)
+      rate-limiter-flexible:
+        specifier: 11.2.1
+        version: 11.2.1
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
@@ -204,7 +207,7 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
   apps/web:
     dependencies:
@@ -460,7 +463,7 @@ importers:
         version: 8.5.1(@swc/core@1.16.1(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(typescript@5.9.3)
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
+        version: 4.1.11(@types/node@22.20.1)(jsdom@30.1.1(@noble/hashes@2.3.0))(vite@8.2.2(@types/node@22.20.1)(esbuild@0.27.7)(jiti@2.7.0)(terser@5.50.0)(tsx@4.23.12))
 
   packages/db:
     dependencies:
@@ -5245,6 +5248,9 @@ packages:
   range-parser@1.3.0:
     resolution: {integrity: sha512-hek2mFQpPuI4E1BBKrSto+BU3e3x4xuarsbiwr3+lf7p44juvFMV0XFWQAP3xUyqXA4RrXLIoaSUGbSt056ZMw==}
     engines: {node: '>= 0.6'}
+
+  rate-limiter-flexible@11.2.1:
+    resolution: {integrity: sha512-JAaz01HZ893zAw+Hx5MdM1z3lLAkyVvNpqR+GNp0k3kjuQB8gY91fXhf5C0osWs+A7iKgFv585qzwmjS3aBHlA==}
 
   raw-body@3.0.2:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
@@ -10289,6 +10295,8 @@ snapshots:
   quick-format-unescaped@4.0.4: {}
 
   range-parser@1.3.0: {}
+
+  rate-limiter-flexible@11.2.1: {}
 
   raw-body@3.0.2:
     dependencies:

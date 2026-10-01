@@ -10,7 +10,10 @@ import { mediaAssets } from "./schema/media.js";
 
 type Database = ReturnType<typeof createDb>["db"];
 export type TenantResourceQuotaMode =
-  | { mode: "self-hosted" }
+  | {
+      mode: "self-hosted";
+      authorizeActor?: (tx: BillingTransaction, orgId: string) => Promise<boolean>;
+    }
   | {
       mode: "hosted";
       identity: BillingGrowthIdentity;
@@ -97,12 +100,11 @@ export async function withTenantResourceAdmissionWithHeldLocks<T>(
   insert: (tx: BillingTransaction) => Promise<T>,
 ): Promise<T> {
   validateGrowth(input);
-  // Self-hosted installations keep their existing insertion/locking behavior.
-  if (mode.mode === "self-hosted") return insert(tx);
   // API callers supply trusted actor revalidation; worker callers deliberately omit it
   // for durable system-owned jobs, never deriving actor identity from job payloads.
   if (mode.authorizeActor && !(await mode.authorizeActor(tx, orgId)))
     throw new ResourceAdmissionError("authority_revoked", input.resource);
+  if (mode.mode === "self-hosted") return insert(tx);
   let occupied: number;
   let growthBaseline: number;
   try {
@@ -149,7 +151,7 @@ export async function withTenantResourceAdmission<T>(
 ): Promise<T> {
   validateGrowth(input);
   return db.transaction(async (tx) => {
-    if (mode.mode === "self-hosted") return insert(tx);
+    if (mode.mode === "self-hosted" && !mode.authorizeActor) return insert(tx);
     await tx.execute(
       sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${orgId}))`,
     );

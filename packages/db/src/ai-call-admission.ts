@@ -14,7 +14,10 @@ import { hostedAiCallLeases } from "./schema/hosted-ai-call-leases.js";
 type Database = ReturnType<typeof createDb>["db"];
 export type AiCallKind = "text" | "image" | "embedding" | "probe";
 export type AiCallAdmissionMode =
-  | { mode: "self-hosted" }
+  | {
+      mode: "self-hosted";
+      authorizeActor?: (tx: BillingTransaction, orgId: string) => Promise<boolean>;
+    }
   | {
       mode: "hosted";
       identity: BillingGrowthIdentity;
@@ -65,7 +68,25 @@ export async function acquireHostedAiCall(
 ): Promise<HostedAiCallLease | null> {
   checkSignal(signal);
   const budget = aiCallDispatchBudget(kind);
-  if (mode.mode === "self-hosted") return null;
+  if (mode.mode === "self-hosted") {
+    const authorizeActor = mode.authorizeActor;
+    if (!authorizeActor) return null;
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`set local statement_timeout = '5s'`);
+      await tx.execute(sql`set local lock_timeout = '5s'`);
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE}, hashtext(${orgId}))`,
+      );
+      const [tenant] = await tx
+        .select({ id: organization.id })
+        .from(organization)
+        .where(eq(organization.id, orgId))
+        .for("key share");
+      if (!tenant) throw new AiCallAdmissionError("organization_unavailable");
+      if (!(await authorizeActor(tx, orgId))) throw new AiCallAdmissionError("authority_revoked");
+    });
+    return null;
+  }
   let lease: HostedAiCallLease;
   try {
     lease = await db.transaction(async (tx) => {

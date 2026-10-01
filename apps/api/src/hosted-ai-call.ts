@@ -14,7 +14,7 @@ export function hostedAiCallScope(
   kind: AiCallKind = "text",
 ): AiCallScope | undefined {
   const mode = tenantQuotaMode();
-  if (mode.mode === "self-hosted") return undefined;
+  if (mode.mode === "self-hosted" && !mode.authorizeActor) return undefined;
   return async (execute, incoming) => {
     try {
       return await withHostedAiCall(

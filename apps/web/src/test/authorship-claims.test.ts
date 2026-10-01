@@ -60,3 +60,12 @@ describe("no message claims a draft is original or that anything verified it", (
     expect(CLAIM_WORDS.en.test(en.Runs.step.factcheck)).toBe(true);
   });
 });
+
+it("keeps imported intake labels neutral in every locale", () => {
+  for (const messages of [en, es, pt, ru]) {
+    expect(messages.Content.origin.external).toBeTruthy();
+    expect(messages.Content.origin.external).not.toBe(messages.Content.origin.human);
+    expect(messages.Content.origin.external).not.toBe(messages.Content.origin.ai);
+    expect(messages.Publish.versionExternal).toBeTruthy();
+  }
+});
