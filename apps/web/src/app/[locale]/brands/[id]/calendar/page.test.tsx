@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/auth-client";
 import { signedInSession } from "@/test/auth-client.stub";
-import { fireEvent, renderAsync, screen, waitFor } from "@/test/render";
+import { fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import CalendarPage from "./page";
 
@@ -627,6 +627,7 @@ describe("brand calendar", () => {
 
   it("explains a due slot delayed by the generation cap", async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).includes("/api/calendar/editorial-plans")) return jsonResponse([]);
       if (String(input).includes("/api/calendar/memorable-dates"))
         return jsonResponse({ timezone: "UTC", dates: [] });
       if (String(input).includes("/api/channels"))
@@ -735,6 +736,66 @@ describe("brand calendar", () => {
             call.url.includes("/api/calendar/memorable-dates/date-1?brandId="),
         ),
       ).toBe(true),
+    );
+  });
+  it("attributes recurring slots and confirms a permanent skip without exposing direct edit", async () => {
+    const user = userEvent.setup();
+    let removed = false;
+    const requests: { url: string; method: string }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push({ url, method });
+      if (method === "DELETE") {
+        removed = true;
+        return jsonResponse({ deleted: true });
+      }
+      if (url.includes("/api/calendar/memorable-dates"))
+        return jsonResponse({ timezone: "UTC", dates: [] });
+      if (url.includes("/api/calendar/slots"))
+        return jsonResponse(
+          removed
+            ? []
+            : [
+                {
+                  id: "slot-recurring",
+                  scheduledAt: new Date().toISOString(),
+                  brief: "Recurring draft",
+                  seoKeywords: [],
+                  topicId: null,
+                  topicTitle: null,
+                  channelIds: [],
+                  generateCover: false,
+                  notes: null,
+                  runId: null,
+                  errorCode: null,
+                  retryAfter: null,
+                  recurringOccurrenceId: "occurrence",
+                  recurringPlanId: "plan",
+                  recurringPlanName: "Weekly update",
+                  recurringOccurrenceState: "planned",
+                },
+              ],
+        );
+      return jsonResponse([]);
+    });
+    await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
+    await screen.findByText("Recurring draft");
+    expect(screen.getByText("Weekly plan: Weekly update · Planned")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Calendar.edit })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: en.CalendarRecurring.manage })).toHaveAttribute(
+      "href",
+      "#recurring-plans",
+    );
+    await user.click(screen.getByRole("button", { name: en.CalendarRecurring.skip }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(en.CalendarRecurring.skipBody);
+    expect(requests.some((request) => request.method === "DELETE")).toBe(false);
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: en.CalendarRecurring.skip }),
+    );
+    await waitFor(() => expect(screen.queryByText("Recurring draft")).not.toBeInTheDocument());
+    expect(requests.find((request) => request.method === "DELETE")?.url).toBe(
+      "/api/calendar/slots/slot-recurring?brandId=brand-1",
     );
   });
 });

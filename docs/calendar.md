@@ -170,3 +170,76 @@ and writes by organization and brand and returns only explicit public columns.
 
 These routes also require an active organization. All four methods check both
 organization and brand; a foreign brand/date returns 404.
+
+## Weekly plans
+
+Manage repeating social-post briefs in **Brand → Calendar → Weekly plans**.
+Choose a name, brief, channels, weekdays, generation time, IANA timezone and
+inclusive start/end dates. **Save** creates a disabled plan; **Preview** is free
+and shows the next fourteen local days, including UTC instants and offsets.
+Enable recalculates against server time, so a preview is not a delivery promise.
+
+**Enable** requires explicit consent for paid calls using the saved text
+provider/model. Each occurrence may make several calls. Unknown costs remain
+unknown; Autopilot's daily spending limit does not cover these plans. Hosted
+admission limits still apply. Plans generate drafts without automatic images;
+no plan approves a draft, counts it as read, or publishes it.
+
+The required end date bounds consent and can be at most 366 days after the
+start. Past dates are not caught up. An already planned generation more than
+one hour late is skipped. A nonexistent DST local time is skipped; a repeated
+time uses the earlier UTC instant once. The interface shows these reasons.
+
+**Pause** suspends dates that have not started. **Edit** requires confirmation,
+disables the plan and clears active consent. Enable again to resume future
+matching dates with the new brief and fresh consent. Skipped and dispatched
+dates never regenerate. An ended plan needs an edited end date and new consent.
+Already admitted runs keep their original snapshots; cancel those in Runs.
+
+Recurring slots show their plan name and state. **Manage plan** leads to the
+same management section; a recurring slot cannot be edited independently.
+**Skip** permanently skips that local date while leaving the rest of the plan
+intact. **Remove** hides the plan permanently and cancels unstarted dates;
+history remains to prevent duplicate generation. **History** pages through
+retained snapshots and run identifiers, which may outlive deleted runs.
+
+A stale revision refuses with a conflict. **Reload** refreshes the saved
+revision while preserving unsaved form input; review it before saving again.
+If another editor removed the plan, saving stays disabled and your text remains
+available until you cancel editing. Missing channels require editing and enabling
+again; missing provider configuration can be repaired in Settings.
+
+There are at most five nonremoved plans and 10,000 retained occurrences per
+brand. These are workload bounds, not monetary spending caps. Removing a plan
+frees a plan slot but does not erase replay history or free retained-occurrence
+capacity. Contact the operator if history capacity is exhausted.
+
+### Session API for weekly plans
+
+These routes require a signed-in user session, an active organization and access
+to the brand. Mutations and preview additionally require editorial capability;
+public API/MCP credentials do not grant access to weekly plans.
+
+- `GET /api/calendar/editorial-plans?brandId=<uuid>`: list active management
+  entries with state, revision, blocked reason and upcoming occurrences.
+- `POST /api/calendar/editorial-plans`: create disabled; body includes `brandId`,
+  `name`, `brief`, `channelIds`, `weekdays` (Monday=1, Sunday=7), `localTime`
+  (`HH:mm`), `timezone`, `startDate` and `endDate` (`YYYY-MM-DD`).
+- `POST /api/calendar/editorial-plans/preview?brandId=<uuid>`: schedule fields
+  only; returns calculated local dates, UTC instants, offsets and skip reasons.
+- `PATCH /api/calendar/editorial-plans/:id?brandId=<uuid>`: full replacement
+  without `brandId`, plus `expectedRevision`; disables and clears active consent.
+- `POST /api/calendar/editorial-plans/:id/enable?brandId=<uuid>`:
+  `expectedRevision`, `allowPaidGeneration: true`, and
+  `consentVersion: "byok-paid-generation-v1"`.
+- `POST /api/calendar/editorial-plans/:id/pause?brandId=<uuid>` and
+  `DELETE /api/calendar/editorial-plans/:id?brandId=<uuid>`:
+  JSON body with `expectedRevision`.
+- `GET /api/calendar/editorial-plans/:id/occurrences?brandId=<uuid>&limit=30`:
+  paginated retained history; pass the returned `nextCursor` as `cursor`.
+
+Calendar slot responses include recurring occurrence/plan identifiers, plan
+name and occurrence state. Direct recurring slot updates refuse with
+`calendar_recurring_slot`; deleting an unstarted recurring slot permanently
+marks its occurrence skipped. Mutation conflicts use
+`editorial_plan_revision_conflict` (409).
