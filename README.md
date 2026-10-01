@@ -62,12 +62,15 @@ Telegram video posts and optional Gemini covers generated with a new draft.
 Editors can also place [images inside articles](docs/article-images.md), with
 escaped previews and immutable image snapshots in the opt-in public RSS feed.
 Organization owners and admins can issue one-time
-[public read API](docs/public-api.md) keys for tenant-scoped content reads and
+[public API](docs/public-api.md) keys for tenant-scoped content reads and
 [assign per-brand access](docs/brand-access.md) to authors, editors and regular
 members. Authors can prepare drafts; editors can approve and publish for their
 assigned brands. The
 [OpenAPI contract](docs/openapi-v1.json) describes that limited surface, and an
-[optional MCP server](docs/mcp.md) exposes the same reads to local AI tools. Other
+[optional MCP server](docs/mcp.md) exposes the same reads to local AI tools.
+Explicit [v2](docs/openapi-v2.json) additionally supports draft import and queued
+BYOK generation with dedicated write keys, paid consent and safe request replay.
+Human review and approval remain in the editor. Other
 platforms remain unavailable until a safe publishing workflow is implemented.
 Features land phase by phase — see the current [development roadmap](docs/roadmap.md)
 and the original [product design](docs/specs/0001-product-design.md).
