@@ -2,7 +2,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import { editorialPlanEnableSchema } from "../../packages/shared/src/dto/editorial-plans.js";
+import {
+  editorialPlanEnableSchema,
+  editorialPlanScheduleSchema,
+} from "../../packages/shared/src/dto/editorial-plans.js";
 
 // Observation only: all user mutations happen through the actual browser UI.
 const dbRequire = createRequire(resolve("packages/db/package.json"));
@@ -28,7 +31,7 @@ type Occurrence = {
   state: string;
   run_id: string | null;
   slot_id: string | null;
-  local_date: string;
+  local_date: string | Date;
   reason: string | null;
   [field: string]: unknown;
 };
@@ -339,11 +342,22 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
       ])
     )[0];
     if (!future?.slot_id) throw new Error("Future occurrence missing after resume");
+    // pg's raw DATE parser may use the host timezone. Preserve the database's
+    // civil date as text, then validate it with the public schedule contract.
+    const futureDateRow = (
+      await rows<{ local_date: unknown }>(
+        "SELECT local_date::text AS local_date FROM editorial_plan_occurrences WHERE id=$1",
+        [future.id],
+      )
+    )[0];
+    const futureLocalDate = editorialPlanScheduleSchema.shape.startDate.parse(
+      futureDateRow?.local_date,
+    );
     // The visible summary must catch up after worker completion without reload.
     await expect(
       card
         .getByRole("listitem")
-        .filter({ hasText: future.local_date })
+        .filter({ hasText: futureLocalDate })
         .getByText("Planned", { exact: true }),
     ).toBeVisible({ timeout: Math.min(15_000, postActionDeadline - Date.now()) });
     // Observe UI selection of the future date, then the actual Skip confirmation.
