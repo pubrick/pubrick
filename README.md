@@ -72,6 +72,9 @@ Explicit [v2](docs/openapi-v2.json) additionally supports draft import and queue
 BYOK generation with dedicated write keys, paid consent and safe request replay.
 Human review and approval remain in the editor. Other
 platforms remain unavailable until a safe publishing workflow is implemented.
+Editors can [reuse a saved master as a source](docs/evergreen-draft-reuse.md)
+for a separately confirmed new draft in the same brand. The original stays
+unchanged; approval, scheduling, publication and media are not inherited.
 Features land phase by phase — see the current [development roadmap](docs/roadmap.md)
 and the original [product design](docs/specs/0001-product-design.md).
 Versioned image deployment and publication are described in [Releases](docs/releases.md).

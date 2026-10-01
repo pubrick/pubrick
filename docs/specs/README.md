@@ -20,7 +20,7 @@ and some older document prefixes are shared.
 | [0009](0009-queue-paging-design.md) | Queue paging | Bounded list pages, batched adaptation queries and cursor semantics | queue paging design |
 | [0010](0010-scoped-draft-write-api.md) | Scoped draft writes | Paid BYOK consent, scoped API/MCP operations, durable replay and imported-draft review | scoped draft write design |
 | [0011](0011-recurring-editorial-plans.md) | Weekly editorial plans | Finite weekly generation, preview, paid enablement, dispatch and occurrence evidence | recurring plan design; feature release tracked in the roadmap |
-| [0012](0012-evergreen-draft-reuse.md) | Evergreen draft reuse | Manually confirmed saved-master generation, lineage, replay and source erasure | evergreen reuse design; implementation tracked in its execution plan |
+| [0012](0012-evergreen-draft-reuse.md) | Evergreen draft reuse | Manually confirmed saved-master generation, lineage, replay and source erasure | local integration and built-browser acceptance complete; main release pending |
 
 ## Additional historical design files
 

@@ -151,3 +151,31 @@ minutes. Failures retain synthetic browser traces/screenshots under
 runs remove the receipt directory. Child process groups are stopped before
 owned container volumes and media are removed; build outputs remain reusable.
 This acceptance complements native concurrency tests and does not replace them.
+
+## Saved-source reuse journey
+
+```sh
+node scripts/e2e/evergreen.run.mjs
+```
+
+This runner builds the application and owns a disposable PostgreSQL stack on
+ports 31330/31331. It never uses the normal installation's database or keys.
+The compiled worker uses a test-only Google transport intercept with a synthetic
+key, unique marker, strict endpoint/role validation and an unexpected-request
+failure latch. It does not forward requests to Google; this is not a live
+provider or whole-process network isolation test.
+
+The browser signs up, creates a workspace, brand and manual channel, saves a
+master, reviews reuse, cancels paid consent and verifies zero durable work.
+At 375 × 812 it confirms using the keyboard, creates one operation and ID-only
+generation job, observes five scripted metered role calls, opens the independent
+AI draft and saves a human edit. Assertions require an unchanged source and no
+publication, calendar slot, media or inherited approval. The operation's tenant
+comes from the accepted brand's database row; public brand DTOs omit that field.
+
+The runner records the source commit on success and removes its owned processes,
+database volumes and temporary media. Synthetic screenshots and failure traces
+live under `.data/evergreen-browser-tests`; build outputs remain reusable.
+The journey complements native concurrent replay, source-change and deletion
+proofs. See the [integration record](reviews/2026-10-01-evergreen-integration.md)
+for executed runtime/image identities and the first fixture failure.

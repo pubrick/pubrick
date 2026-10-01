@@ -160,7 +160,10 @@ observed usage and SaaS demand:
   and are integrated in main at `95065318` through PR #155. See the
   [design](specs/0011-recurring-editorial-plans.md) and
   [verification](reviews/2026-10-01-recurring-editorial-plans.md).
-  Manual evergreen draft reuse is the next separate implementation slice.
+  Manual evergreen draft reuse has passed local composite integration and
+  compiled browser acceptance; main release remains pending. See the
+  [user workflow](evergreen-draft-reuse.md) and
+  [verification](reviews/2026-10-01-evergreen-integration.md).
 - Telegram decisions only after account binding, authorization, snapshot checks,
   and callback replay protection are designed.
 - Controlled prompt experiments, useful outcome attribution and retrieval

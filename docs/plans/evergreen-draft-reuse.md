@@ -2,8 +2,8 @@
 
 Status: independently reviewed design; shared/database foundation and session
 backend verified with focused native checks and selected independent guard
-proofs. UI implementation and focused checks are complete; integrated test/browser
-acceptance and release remain pending.
+proofs. UI, composite integration checks and the compiled browser journey are
+verified locally; exact-head main approval and release remain pending.
 Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
@@ -200,6 +200,14 @@ root's release workflow. Main deployment requires the exact-head user approval
 specified by the applicable repository instructions.
 
 ## Completion evidence
+
+The compiled browser journey passed at `d5d02ac5` on 2026-10-01, including
+mobile keyboard consent, zero-cost cancellation, one durable operation/job,
+five scripted metered calls, an independent AI draft and a separate human edit.
+The composite integration gate and affected failure closures are documented in
+the [integration receipt](../reviews/2026-10-01-evergreen-integration.md).
+The first integrated executions contained retained failures; this is not a claim
+that every original command exited successfully. No main release is claimed.
 
 Delivery means source-grounded design review, native atomicity/erasure proofs,
 fresh AI/human-review provenance, built-browser journey without publication,
