@@ -239,6 +239,15 @@ test("HTTPS Telegram settings, two-phase binding, worker notification, private r
       await rows("SELECT id FROM telegram_decision_audit WHERE content_item_id=$1", [draft.itemId]),
     ).toHaveLength(1);
 
+    // Open only after proving the Telegram decision did not mark the draft as read.
+    const rejectedBody = (await item(draft.itemId))?.body;
+    if (!rejectedBody) throw new Error("Rejected draft body is missing");
+    await page.goto(`/en/content/${draft.itemId}`);
+    await expect(page.getByRole("main").getByText("Rejected", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Body", { exact: true })).toHaveValue(rejectedBody);
+    await page.reload();
+    await expect(page.getByRole("main").getByText("Rejected", { exact: true })).toBeVisible();
+
     const stale = await seed("stale");
     const staleInitial = await notification(stale.itemId, "ir");
     expect(

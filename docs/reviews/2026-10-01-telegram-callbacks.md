@@ -106,15 +106,46 @@ and a synthetic loopback Bot API. It covered signup, settings, two-phase account
 binding, an actual worker notification, private rejection, replay, a stale edit
 and mobile unlink. Three outboxes were sent in six physical messages, with no
 publication or usage-ledger rows. Its owned container and processes were cleaned
-up. The log is `telegram-compiled-browser.log`. Keyboard-driven mobile binding
-is a separate follow-up gate; the first pass does not establish it.
+up. The log is `telegram-compiled-browser.log`. A second compiled run passed at
+`e264051f0e63194041dbfdc3605507cb1a9de2b5`: mobile account connection, Refresh,
+confirmation and the unlink dialog were driven with keyboard activation.
+The linked card was captured at 375 × 812 and checked visually; no horizontal
+page overflow was observed. Its log is `telegram-compiled-browser-keyboard.log`.
+The runner again removed its owned services and database.
+
+## Additional authority and writer boundaries
+
+The integrated native run passed 28 of 29 cases. It includes actual observed
+waits for grant removal, user deletion, member removal, role downgrade, bot
+and binding revocation, master/adaptation/media changes, a publication-claim
+storage boundary, item deletion and organization deletion. Private-only expiry
+passed with a valid parent. These SQL boundaries follow the application lock
+chains; they do not invoke the complete HTTP editor, media SDK or publish queue.
+Organization-first content writers block the callback at the organization,
+whereas the publication-claim boundary blocks it at the adaptation.
+
+The failing hashtag fixture changed separate metadata without composing the
+publishable body. The actual editor stores canonical text with the shared
+`withHashtags` helper; the corrected case uses that same composition and passed its focused native
+closure (one passed, 28 intentionally skipped). The composite result covers
+all 29 distinct cases; it is not a single green 29-case run. This is a fixture correction, not a legacy hash change.
+Earlier expiry fixture failures attempted immutable timestamp updates, then
+incorrectly assumed an initial receipt did not reference the issued capability.
+The final fixture preserves that receipt, revokes the original and inserts a
+separate expired synthetic confirmation. Its timestamp relation to the parent
+is a defensive predicate fixture rather than a normal issuance timeline.
+Two focused attempts timed out in application bootstrap under concurrent static
+checks, before reaching assertions; the solo integrated run reached all cases.
+The logs retain those failures and the affected closure, including
+`telegram-callback-integrated-races-native.log` and
+`telegram-callback-hashtags-native-closure.log`.
 
 ## Remaining acceptance
 
 This is an implementation milestone, not completed Telegram feature acceptance.
-Broader native writer interleavings and keyboard-driven mobile binding remain
-required; the compiled journey and three expanded native cases above passed. The expired-private fixture also has an expired parent; it does not
-independently isolate the private expiry predicate. Reader-first channel deletion
+Broader native writer interleavings and a durable result shown in the web UI
+remain required; the compiled journey and three expanded native cases above passed. A separate private-only expiry fixture now isolates that predicate with a
+live parent. Reader-first channel deletion
 does not prove arbitrary raw channel-first deletion safe.
 
 The first integrated unit run timed out in two existing shared corpus tests under
@@ -129,3 +160,8 @@ environment defaults; the affected closure passed 13 tests with 42 database-gate
 cases explicitly skipped. The worker unit suite passed 255 cases with 406 native
 cases skipped. Logs retain the original failures and affected closures. No remote CI was dispatched and no `main`
 release or live Telegram interoperability is claimed.
+
+The actual janitor/final-callback overlap test is independently source-reviewed
+and included in this acceptance candidate. It owns a compiled API subprocess,
+synthetic provider and pools; both orders use observed native lock barriers.
+Its execution remains pending against freshly built candidate artifacts.

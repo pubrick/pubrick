@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { hashEditorialSnapshot, readEditorialSnapshot, schema } from "@pubrick/db";
-import { encryptJson } from "@pubrick/shared";
+import { encryptJson, withHashtags } from "@pubrick/shared";
 import { and, eq } from "drizzle-orm";
 import pg from "pg";
 import request from "supertest";
@@ -315,7 +315,7 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
       })
       .returning({ id: schema.telegramBindings.id });
     if (!binding) throw new Error("Missing second editor binding");
-    return { userId, bindingId: binding.id };
+    return { userId, memberId, bindingId: binding.id };
   }
   it("refuses unbound actors without consuming the shared initial, then rejects exactly once", async () => {
     const f = await fixture();
@@ -764,4 +764,489 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
       }
     }
   });
+  async function writerFirstFinal(
+    f: Fixture,
+    payload: ReturnType<typeof callback>,
+    table: string,
+    mutate: (writer: pg.Client) => Promise<void>,
+  ) {
+    const writer = await nativeClient();
+    let observer: pg.Client | undefined;
+    let committed = false;
+    let pending: Promise<request.Response> | undefined;
+    try {
+      observer = await nativeClient();
+      const activeObserver = observer;
+      const { rows } = await writer.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const writerPid = rows[0]?.pid;
+      if (!writerPid) throw new Error("Missing authority writer PID");
+      await writer.query("BEGIN");
+      await mutate(writer);
+      let settled = false;
+      pending = post(f, payload).then((response) => {
+        settled = true;
+        return response;
+      });
+      await expect
+        .poll(
+          async () => {
+            if (settled)
+              throw new Error("Final callback completed without waiting on its authority writer");
+            const blocked = await activeObserver.query<{ waiting: boolean }>(
+              `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock'
+            AND $1::int = ANY(pg_blocking_pids(pid)) AND query LIKE $2) AS waiting`,
+              [writerPid, `%${table}%`],
+            );
+            return blocked.rows[0]?.waiting;
+          },
+          { timeout: 5000, interval: 25 },
+        )
+        .toBe(true);
+      await writer.query("COMMIT");
+      committed = true;
+      return await pending;
+    } finally {
+      try {
+        if (!committed) await writer.query("ROLLBACK");
+      } finally {
+        try {
+          await pending;
+        } finally {
+          try {
+            await observer?.end();
+          } finally {
+            await writer.end();
+          }
+        }
+      }
+    }
+  }
+  it("waits on brand grant replacement and refuses the editor after the grant is removed", async () => {
+    const f = await fixture();
+    const editor = await secondEditor(f);
+    await post(f, callback(f, `ir:${f.code}`, 1, 888)).expect(200);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(1);
+    const keyboard = physical[0]?.body.reply_markup as {
+      inline_keyboard: Array<Array<{ callback_data?: string }>>;
+    };
+    const reject = keyboard.inline_keyboard[1]?.[0]?.callback_data;
+    if (!reject) throw new Error("Missing editor confirmation");
+    const response = await writerFirstFinal(
+      f,
+      callback(f, reject, 2, 888),
+      "brands",
+      async (writer) => {
+        // Grant replacement takes its brand parent before touching grant rows.
+        const parent = await writer.query(
+          "SELECT id FROM brands WHERE org_id=$1 AND id=$2 FOR UPDATE",
+          [f.orgId, f.brandId],
+        );
+        expect(parent.rowCount).toBe(1);
+        const removed = await writer.query(
+          "DELETE FROM brand_access WHERE org_id=$1 AND brand_id=$2 AND member_id=$3",
+          [f.orgId, f.brandId, editor.memberId],
+        );
+        expect(removed.rowCount).toBe(1);
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    const [cap] = await db
+      .select({ state: schema.telegramActorConfirmations.state })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.bindingId, editor.bindingId));
+    expect(cap?.state).toBe("pending");
+    const ack = answers.filter((row) => row.token === f.token).at(-1);
+    expect(ack?.body.text).toBe(
+      "This action is unavailable. Check your account connection and review the draft in Pubrick.",
+    );
+    expect(await livePublishJobs(f)).toBe(false);
+  });
+  it("waits on raw user deletion and refuses without reviving cascaded actor identity", async () => {
+    const f = await fixture();
+    const reject = await begin(f);
+    const response = await writerFirstFinal(f, callback(f, reject, 2), '"user"', async (writer) => {
+      const removed = await writer.query('DELETE FROM "user" WHERE id=$1', [f.userId]);
+      expect(removed.rowCount).toBe(1);
+    });
+    expect(response.status).toBe(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    const bindings = await db
+      .select({ id: schema.telegramBindings.id })
+      .from(schema.telegramBindings)
+      .where(eq(schema.telegramBindings.orgId, f.orgId));
+    const confirmations = await db
+      .select({ id: schema.telegramActorConfirmations.id })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(bindings).toEqual([]);
+    expect(confirmations).toEqual([]);
+    const [initial] = await db
+      .select({ state: schema.telegramInitialCapabilities.state })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    expect(initial?.state).toBe("pending");
+    const [receipt] = await db
+      .select({ outcome: schema.telegramUpdateReceipts.outcome })
+      .from(schema.telegramUpdateReceipts)
+      .where(
+        and(
+          eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+          eq(schema.telegramUpdateReceipts.updateId, "2"),
+        ),
+      );
+    expect(receipt?.outcome).toBe("refused");
+    expect(await livePublishJobs(f)).toBe(false);
+  });
+  it("refuses private-only expiry while the unchanged initial capability is still valid", async () => {
+    const f = await fixture();
+    await begin(f);
+    const expiredCode = randomBytes(32).toString("base64url");
+    const reject = `cr:${expiredCode}`;
+    const now = Date.now();
+    await db.transaction(async (tx) => {
+      // Preserve the issued capability and its immutable replay evidence. A
+      // separate expired synthetic row isolates private expiry with a live parent.
+      const c = schema.telegramActorConfirmations;
+      const [original] = await tx
+        .select({
+          id: c.id,
+          orgId: c.orgId,
+          botIdentityId: c.botIdentityId,
+          generation: c.generation,
+          contentItemId: c.contentItemId,
+          brandId: c.brandId,
+          snapshotHash: c.snapshotHash,
+          snapshotVersion: c.snapshotVersion,
+          tokenHash: c.tokenHash,
+          chatId: c.chatId,
+          messageId: c.messageId,
+          state: c.state,
+          sendState: c.sendState,
+          sendAttemptedAt: c.sendAttemptedAt,
+          terminalAt: c.terminalAt,
+          userId: c.userId,
+          bindingId: c.bindingId,
+          initialCapabilityId: c.initialCapabilityId,
+          initialExpiresAt: c.initialExpiresAt,
+        })
+        .from(c)
+        .where(eq(c.orgId, f.orgId))
+        .for("update");
+      if (!original) throw new Error("Missing pending private capability");
+      expect(original.state).toBe("pending");
+      expect(original.terminalAt).toBeNull();
+      const auditReferences = await tx
+        .select({ id: schema.telegramDecisionAudit.id })
+        .from(schema.telegramDecisionAudit)
+        .where(eq(schema.telegramDecisionAudit.capabilityId, original.id));
+      expect(auditReferences).toEqual([]);
+      await tx
+        .update(c)
+        .set({ state: "revoked", terminalAt: new Date(now) })
+        .where(and(eq(c.orgId, f.orgId), eq(c.id, original.id)));
+      await tx.insert(c).values({
+        ...original,
+        id: randomUUID(),
+        tokenHash: hash(expiredCode),
+        createdAt: new Date(now - 120000),
+        sendAttemptedAt: new Date(now - 90000),
+        expiresAt: new Date(now - 60000),
+      });
+    });
+    const [parent] = await db
+      .select({
+        expiresAt: schema.telegramInitialCapabilities.expiresAt,
+        state: schema.telegramInitialCapabilities.state,
+      })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    expect(parent?.state).toBe("pending");
+    expect(parent?.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    await post(f, callback(f, reject, 2)).expect(200);
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    const [cap] = await db
+      .select({
+        state: schema.telegramActorConfirmations.state,
+        terminalAt: schema.telegramActorConfirmations.terminalAt,
+      })
+      .from(schema.telegramActorConfirmations)
+      .where(
+        and(
+          eq(schema.telegramActorConfirmations.orgId, f.orgId),
+          eq(schema.telegramActorConfirmations.tokenHash, hash(expiredCode)),
+        ),
+      );
+    expect(cap).toEqual({ state: "pending", terminalAt: null });
+    const [receipt] = await db
+      .select({ outcome: schema.telegramUpdateReceipts.outcome })
+      .from(schema.telegramUpdateReceipts)
+      .where(
+        and(
+          eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+          eq(schema.telegramUpdateReceipts.updateId, "2"),
+        ),
+      );
+    expect(receipt?.outcome).toBe("refused");
+    expect(await livePublishJobs(f)).toBe(false);
+  });
+  const remainingWriterRaces = [
+    "member removal",
+    "role downgrade",
+    "bot disable",
+    "binding revocation",
+    "master body",
+    "master title",
+    "adaptation body",
+    "adaptation hashtags",
+    "master video media",
+    "publication claim storage",
+    "raw item deletion",
+    "organization deletion",
+  ] as const;
+  it.each(remainingWriterRaces)(
+    "observes writer-first %s and refuses the final decision after commit",
+    async (kind) => {
+      const f = await fixture();
+      const reject = await begin(f);
+      const before = await readEditorialSnapshot(db, f.orgId, f.itemId);
+      if (!before) throw new Error("Missing race snapshot");
+      // These are native writer boundaries following the production lock chain,
+      // not invocations of the HTTP editor, delivery SDK or full publish queue.
+      // API content writes hold the organization first, so that is the actual
+      // callback wait; the worker publication claim instead starts at adaptation.
+      const memberRace = kind === "member removal" || kind === "role downgrade";
+      const tenantRace =
+        kind === "bot disable" || kind === "binding revocation" || kind === "organization deletion";
+      const claimRace = kind === "publication claim storage";
+      const waitTable = memberRace ? '"member"' : claimRace ? "adaptations" : "organization";
+      const response = await writerFirstFinal(
+        f,
+        callback(f, reject, 2),
+        waitTable,
+        async (writer) => {
+          async function lockTenant(mode: "UPDATE" | "KEY SHARE") {
+            const row = await writer.query(`SELECT id FROM organization WHERE id=$1 FOR ${mode}`, [
+              f.orgId,
+            ]);
+            expect(row.rowCount).toBe(1);
+          }
+          async function lockAdaptation() {
+            const row = await writer.query(
+              "SELECT id FROM adaptations WHERE org_id=$1 AND content_item_id=$2 AND id=$3 FOR UPDATE",
+              [f.orgId, f.itemId, f.adaptationId],
+            );
+            expect(row.rowCount).toBe(1);
+          }
+          async function lockItem(mode: "UPDATE" | "SHARE" = "UPDATE") {
+            const row = await writer.query(
+              `SELECT id FROM content_items WHERE org_id=$1 AND id=$2 FOR ${mode}`,
+              [f.orgId, f.itemId],
+            );
+            expect(row.rowCount).toBe(1);
+          }
+          if (memberRace) {
+            const changed =
+              kind === "member removal"
+                ? await writer.query("DELETE FROM member WHERE organization_id=$1 AND user_id=$2", [
+                    f.orgId,
+                    f.userId,
+                  ])
+                : await writer.query(
+                    "UPDATE member SET role='author' WHERE organization_id=$1 AND user_id=$2",
+                    [f.orgId, f.userId],
+                  );
+            expect(changed.rowCount).toBe(1);
+            return;
+          }
+          if (kind === "organization deletion") {
+            const removed = await writer.query("DELETE FROM organization WHERE id=$1", [f.orgId]);
+            expect(removed.rowCount).toBe(1);
+            return;
+          }
+          if (tenantRace) {
+            await lockTenant("UPDATE");
+            // Own unlink/session authority takes the user before the registry.
+            if (kind === "binding revocation") {
+              const user = await writer.query('SELECT id FROM "user" WHERE id=$1 FOR SHARE', [
+                f.userId,
+              ]);
+              expect(user.rowCount).toBe(1);
+            }
+            const registry = await writer.query(
+              "SELECT id FROM telegram_bot_identities WHERE id=$1 FOR UPDATE",
+              [f.identityId],
+            );
+            expect(registry.rowCount).toBe(1);
+            const config = await writer.query(
+              "SELECT org_id FROM telegram_decision_configs WHERE org_id=$1 FOR UPDATE",
+              [f.orgId],
+            );
+            expect(config.rowCount).toBe(1);
+            if (kind === "bot disable") {
+              await writer.query("UPDATE telegram_bot_identities SET enabled=false WHERE id=$1", [
+                f.identityId,
+              ]);
+              await writer.query(
+                "UPDATE telegram_decision_configs SET state='disabled' WHERE org_id=$1",
+                [f.orgId],
+              );
+              await writer.query(
+                "UPDATE telegram_bindings SET state='revoked',revoked_at=clock_timestamp() WHERE org_id=$1 AND state='linked'",
+                [f.orgId],
+              );
+              await writer.query(
+                "UPDATE telegram_initial_capabilities SET state='revoked',terminal_at=clock_timestamp() WHERE org_id=$1 AND state='pending'",
+                [f.orgId],
+              );
+            } else {
+              const changed = await writer.query(
+                "UPDATE telegram_bindings SET state='revoked',revoked_at=clock_timestamp() WHERE org_id=$1 AND id=$2",
+                [f.orgId, f.bindingId],
+              );
+              expect(changed.rowCount).toBe(1);
+            }
+            const changed = await writer.query(
+              "UPDATE telegram_actor_confirmations SET state='revoked',terminal_at=clock_timestamp() WHERE org_id=$1 AND user_id=$2 AND state='pending'",
+              [f.orgId, f.userId],
+            );
+            expect(changed.rowCount).toBe(1);
+            return;
+          }
+          if (claimRace) {
+            // The native claim storage suffix matches markPublishing's
+            // adaptation UPDATE → item SHARE and incremented attempt evidence.
+            await lockAdaptation();
+            await lockItem("SHARE");
+            const changed = await writer.query(
+              "UPDATE adaptations SET status='publishing',attempt_count=attempt_count+1,failure_reason=NULL WHERE org_id=$1 AND id=$2 AND status='pending' AND scheduled_at IS NULL",
+              [f.orgId, f.adaptationId],
+            );
+            expect(changed.rowCount).toBe(1);
+            return;
+          }
+          await lockTenant("KEY SHARE");
+          if (kind === "raw item deletion") {
+            // Public permanent deletion also requires an archived unsent item.
+            // This raw SQL case proves cascade/decision safety, not that API gate.
+            const brand = await writer.query(
+              "SELECT id FROM brands WHERE org_id=$1 AND id=$2 FOR UPDATE",
+              [f.orgId, f.brandId],
+            );
+            expect(brand.rowCount).toBe(1);
+            await lockAdaptation();
+            await lockItem();
+            const removed = await writer.query(
+              "DELETE FROM content_items WHERE org_id=$1 AND id=$2",
+              [f.orgId, f.itemId],
+            );
+            expect(removed.rowCount).toBe(1);
+            return;
+          }
+          if (kind.startsWith("adaptation")) {
+            await lockAdaptation();
+            await lockItem();
+            const changed =
+              kind === "adaptation body"
+                ? await writer.query("UPDATE adaptations SET body=$1 WHERE org_id=$2 AND id=$3", [
+                    "Changed channel body",
+                    f.orgId,
+                    f.adaptationId,
+                  ])
+                : await writer.query(
+                    "UPDATE adaptations SET body=$1,hashtags=$2::text[] WHERE org_id=$3 AND id=$4",
+                    [withHashtags(before.body, ["changed"]), ["changed"], f.orgId, f.adaptationId],
+                  );
+            expect(changed.rowCount).toBe(1);
+            return;
+          }
+          await lockItem();
+          if (kind === "master video media") {
+            const mediaId = randomUUID();
+            await writer.query(
+              "INSERT INTO media_assets(id,org_id,brand_id,name,kind,mime_type,byte_size) VALUES($1,$2,$3,'Synthetic race video','video','video/mp4',1)",
+              [mediaId, f.orgId, f.brandId],
+            );
+            const changed = await writer.query(
+              "UPDATE content_items SET video_media_id=$1 WHERE org_id=$2 AND id=$3",
+              [mediaId, f.orgId, f.itemId],
+            );
+            expect(changed.rowCount).toBe(1);
+          } else {
+            const changed =
+              kind === "master body"
+                ? await writer.query("UPDATE content_items SET body=$1 WHERE org_id=$2 AND id=$3", [
+                    "Changed master body",
+                    f.orgId,
+                    f.itemId,
+                  ])
+                : await writer.query(
+                    "UPDATE content_items SET title=$1 WHERE org_id=$2 AND id=$3",
+                    ["Changed master title", f.orgId, f.itemId],
+                  );
+            expect(changed.rowCount).toBe(1);
+          }
+        },
+      );
+      expect(response.status).toBe(200);
+      const deletedTenant = kind === "organization deletion";
+      const deletedItem = kind === "raw item deletion";
+      expect(await status(f)).toEqual({
+        status: deletedTenant || deletedItem ? undefined : "draft",
+        audit: [],
+      });
+      const caps = await db
+        .select({
+          state: schema.telegramActorConfirmations.state,
+          terminalAt: schema.telegramActorConfirmations.terminalAt,
+        })
+        .from(schema.telegramActorConfirmations)
+        .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+      if (deletedTenant) expect(caps).toEqual([]);
+      else if (kind === "bot disable" || kind === "binding revocation") {
+        expect(caps).toHaveLength(1);
+        expect(caps[0]?.state).toBe("revoked");
+        expect(caps[0]?.terminalAt).toBeInstanceOf(Date);
+      } else expect(caps).toEqual([{ state: "pending", terminalAt: null }]);
+      const receipts = await db
+        .select({ outcome: schema.telegramUpdateReceipts.outcome })
+        .from(schema.telegramUpdateReceipts)
+        .where(
+          and(
+            eq(schema.telegramUpdateReceipts.orgId, f.orgId),
+            eq(schema.telegramUpdateReceipts.updateId, "2"),
+          ),
+        );
+      if (deletedTenant || kind === "bot disable") expect(receipts).toEqual([]);
+      else expect(receipts).toEqual([{ outcome: "refused" }]);
+      if (kind.startsWith("master") || kind.startsWith("adaptation")) {
+        const after = await readEditorialSnapshot(db, f.orgId, f.itemId);
+        expect(after && hashEditorialSnapshot(after)).not.toBe(hashEditorialSnapshot(before));
+      }
+      if (claimRace) {
+        const [adaptation] = await db
+          .select({
+            status: schema.adaptations.status,
+            attemptCount: schema.adaptations.attemptCount,
+          })
+          .from(schema.adaptations)
+          .where(eq(schema.adaptations.id, f.adaptationId));
+        expect(adaptation).toEqual({ status: "publishing", attemptCount: 1 });
+      }
+      if (deletedTenant) {
+        const [registry] = await db
+          .select({
+            ownerOrgId: schema.telegramBotIdentities.ownerOrgId,
+            enabled: schema.telegramBotIdentities.enabled,
+            quarantined: schema.telegramBotIdentities.quarantined,
+          })
+          .from(schema.telegramBotIdentities)
+          .where(eq(schema.telegramBotIdentities.id, f.identityId));
+        expect(registry).toEqual({ ownerOrgId: null, enabled: false, quarantined: true });
+      }
+      expect(await livePublishJobs(f)).toBe(false);
+    },
+  );
 });

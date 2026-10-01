@@ -83,3 +83,13 @@ rejection, stale snapshot, domain deletion, janitor/decision/revocation races,
 unknown-send reconciliation and browser/API/worker acceptance remain required.
 Local initial and closure logs are retained under
 `/Users/admin/.codex/backups/pubrick-validation-20261001/`.
+
+## Compiled settings acceptance (2026-10-02)
+
+The scripted HTTPS API/worker/web journey passed at `e264051f`, including mobile
+keyboard account connection, refresh, explicit web confirmation and confirmed
+unlink. The linked account card was captured at 375 × 812 and inspected; the
+page had no horizontal overflow. The fixture sent six synthetic messages and
+checked zero publications or model usage. No live Telegram interoperability is
+claimed. See the [callback receipt](2026-10-01-telegram-callbacks.md) for source
+provenance and remaining native concurrency gates.
