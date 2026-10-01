@@ -2,8 +2,8 @@ import { notificationSettingsUpdateSchema, notificationSummarySchema } from "@pu
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
-import { signedInSession } from "@/test/auth-client.stub";
-import { render, screen, waitFor } from "@/test/render";
+import { signedInOrganization, signedInSession } from "@/test/auth-client.stub";
+import { act, render, screen, waitFor } from "@/test/render";
 import NotificationsPage from "./page";
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -12,6 +12,10 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 }));
 
 const request = vi.mocked(api);
+vi.mock("@/components/settings/telegram-settings", () => ({
+  TelegramAccountSettings: () => <h2>Your Telegram account</h2>,
+  TelegramBotSettings: () => <h2>Workspace Telegram bot</h2>,
+}));
 const emptySummary = (days: 7 | 30) => ({
   days,
   windowStart: "2030-01-24T12:00:00.000Z",
@@ -34,6 +38,7 @@ const emptySummary = (days: 7 | 30) => ({
 describe("notifications settings", () => {
   beforeEach(() => {
     signedInSession();
+    signedInOrganization("Test Org", "owner");
     request.mockReset();
     request.mockImplementation(async (path, init) => {
       if (path === "/api/notifications/summary?days=7") return emptySummary(7);
@@ -58,6 +63,67 @@ describe("notifications settings", () => {
       if (path === "/api/notifications/events") return { events: [], nextCursor: null };
       throw new Error("unexpected request");
     });
+  });
+
+  it("exposes only own binding for editors without loading manager notification APIs", async () => {
+    signedInOrganization("Test Org", "author");
+    render(<NotificationsPage />);
+    expect(await screen.findByRole("heading", { name: "Your Telegram account" })).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "Workspace Telegram bot" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("clears unsaved credentials and reloads manager settings when the workspace changes", async () => {
+    const user = userEvent.setup();
+    const view = render(<NotificationsPage />);
+    await user.type(await screen.findByLabelText("Bot token"), "123:unsaved-secret");
+    await user.type(screen.getByLabelText("Destination chat ID"), "-10042");
+    const second = signedInOrganization("Second Org", "owner");
+    if (!second.data) throw new Error("Missing workspace fixture");
+    second.data.id = "second-org";
+    view.rerender(<NotificationsPage />);
+    await waitFor(() => expect(screen.getByLabelText("Bot token")).toHaveValue(""));
+    expect(screen.getByLabelText("Destination chat ID")).toHaveValue("");
+    expect(
+      request.mock.calls.filter(([path, init]) => path === "/api/notifications" && !init),
+    ).toHaveLength(2);
+  });
+
+  it("ignores a pending save response after switching to another workspace", async () => {
+    const defaults = request.getMockImplementation();
+    let completeSave!: (value: unknown) => void;
+    request.mockImplementation(async (path, init) => {
+      if (path === "/api/notifications" && init?.method === "PUT")
+        return new Promise((resolve) => {
+          completeSave = resolve;
+        });
+      return defaults?.(path, init);
+    });
+    const user = userEvent.setup();
+    const view = render(<NotificationsPage />);
+    await user.type(await screen.findByLabelText("Bot token"), "123:unsaved-secret");
+    await user.type(screen.getByLabelText("Destination chat ID"), "-10042");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const second = signedInOrganization("Second Org", "owner");
+    if (!second.data) throw new Error("Missing workspace fixture");
+    second.data.id = "second-org";
+    view.rerender(<NotificationsPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+    await act(async () =>
+      completeSave({
+        enabled: true,
+        draftReady: true,
+        deliveryProblem: true,
+        hasCredentials: true,
+        digests: [],
+      }),
+    );
+    expect(screen.getByLabelText("Enable notifications")).not.toBeChecked();
+    expect(screen.getByLabelText("Bot token")).toHaveValue("");
+    expect(screen.queryByText("Saved.")).not.toBeInTheDocument();
   });
 
   it("shows a translated zero summary and switches the bounded period", async () => {

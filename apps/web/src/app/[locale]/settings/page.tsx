@@ -1066,7 +1066,7 @@ export default function SettingsPage() {
           </Card>
         )}
 
-        {canManageApiKeys && (
+        {organization && currentRole && (
           <Card padded={false}>
             <h2 className="px-4 pt-4 text-base font-semibold text-fg">{t("connectionsTitle")}</h2>
             <div className="mt-2">
@@ -1076,18 +1076,22 @@ export default function SettingsPage() {
                 meta={t("notificationsHint")}
                 metaClassName="whitespace-normal"
               />
-              <ListRow
-                href={`/${locale}/settings/api-keys`}
-                title={t("publicApiTitle")}
-                meta={t("publicApiHint")}
-                metaClassName="whitespace-normal"
-              />
-              <ListRow
-                href={`/${locale}/settings/webhooks`}
-                title={t("webhooksTitle")}
-                meta={t("webhooksHint")}
-                metaClassName="whitespace-normal"
-              />
+              {canManageApiKeys && (
+                <ListRow
+                  href={`/${locale}/settings/api-keys`}
+                  title={t("publicApiTitle")}
+                  meta={t("publicApiHint")}
+                  metaClassName="whitespace-normal"
+                />
+              )}
+              {canManageApiKeys && (
+                <ListRow
+                  href={`/${locale}/settings/webhooks`}
+                  title={t("webhooksTitle")}
+                  meta={t("webhooksHint")}
+                  metaClassName="whitespace-normal"
+                />
+              )}
             </div>
           </Card>
         )}

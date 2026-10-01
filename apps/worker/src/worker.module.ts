@@ -29,10 +29,11 @@ import { TelegramReader } from "./rss/telegram.reader";
 import { SuggestionsRepository } from "./suggestions/suggestions.repository";
 import { SuggestionsService } from "./suggestions/suggestions.service";
 import { SuggestionsScanService } from "./suggestions/suggestions-scan.service";
+import { TelegramRetentionModule } from "./telegram-decisions/telegram-retention.module";
 import { WebhooksService } from "./webhooks/webhooks.service";
 
 @Module({
-  imports: [AuthMailModule, MediaCleanupModule],
+  imports: [AuthMailModule, MediaCleanupModule, TelegramRetentionModule],
   providers: [
     AutopilotService,
     QueueService,

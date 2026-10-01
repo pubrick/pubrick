@@ -1,6 +1,6 @@
 # Telegram draft decision execution plan
 
-Status: foundation and setup/binding backend implemented; callback and UI acceptance pending.
+Status: foundation, setup/binding, settings and retention implemented; callback and compiled journey acceptance pending.
 Date: 2026-10-01. Tracking: `Ozon-tools-0mflt` (design),
 `Ozon-tools-ru3m0` (foundation), `Ozon-tools-4pvvm` (setup/binding).
 Design: [0013](../specs/0013-telegram-draft-decisions.md).
@@ -11,8 +11,9 @@ Setup/binding evidence is recorded in
 [the backend review](../reviews/2026-10-01-telegram-setup-binding.md).
 The backend exposes manager setup/disable and member-owned two-phase binding,
 with real session authority, bounded update admission and scripted Bot API
-transport. It does not enable draft callback decisions or settings controls.
-Retention workers, locked final decision authorization and UI remain required.
+transport. Settings and bounded retention now have [focused follow-up evidence](../reviews/2026-10-01-telegram-settings-retention.md).
+Draft callback decisions, locked final decision authorization and the compiled
+user journey remain required.
 Bot ownership transfer/release remains deliberately unsupported.
 
 Independent source review closed three concrete findings in the proposal:

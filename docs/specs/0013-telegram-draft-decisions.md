@@ -5,9 +5,11 @@ independently reviewed. Migrations 0128/0129 have native evidence in the
 [foundation receipt](../reviews/2026-10-01-telegram-foundation.md) and
 [setup/binding receipt](../reviews/2026-10-01-telegram-setup-binding.md).
 Manager setup/disable routes and secret-authenticated private `/start` binding
-are enabled in the feature branch. Callback decisions and settings controls
-remain unimplemented. Issuance/update admission is bounded; cleanup is currently
-opportunistic, so the unattended retention janitor remains an implementation gate.
+are enabled in the feature branch. Callback decisions remain unimplemented. Settings account/setup controls and
+bounded background retention are implemented; their scope and remaining browser
+gate are recorded in the [follow-up receipt](../reviews/2026-10-01-telegram-settings-retention.md).
+Issuance/update admission is bounded. Full atomic callback/domain concurrency
+acceptance remains open.
 Date: 2026-10-01.
 
 ## 1. First slice and existing code

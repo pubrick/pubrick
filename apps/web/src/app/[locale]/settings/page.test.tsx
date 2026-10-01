@@ -1463,8 +1463,8 @@ describe("Settings — People", () => {
       screen.queryByRole("link", { name: new RegExp(en.SettingsPage.promptsTitle) }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("link", { name: new RegExp(en.SettingsPage.notificationsTitle) }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("link", { name: new RegExp(en.SettingsPage.notificationsTitle) }),
+    ).toHaveAttribute("href", "/en/settings/notifications");
   });
 
   it("copies the link to the clipboard", async () => {
@@ -1638,6 +1638,9 @@ describe("Settings — public API management", () => {
     expect(
       screen.queryByRole("link", { name: en.SettingsPage.telegramSourcesOpen }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: new RegExp(en.SettingsPage.notificationsTitle) }),
+    ).toHaveAttribute("href", "/en/settings/notifications");
   });
 });
 
