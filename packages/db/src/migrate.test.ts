@@ -894,11 +894,24 @@ async function migrationsFolderBefore(tag: string): Promise<string> {
   const cut = journal.entries.findIndex((entry) => entry.tag === tag);
   if (cut === -1) throw new Error(`No migration tagged ${tag} in the journal`);
   const dir = await fs.mkdtemp(path.join(tmpdir(), "pubrick-migrations-"));
-  await fs.cp(source, dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, journalPath),
-    JSON.stringify({ ...journal, entries: journal.entries.slice(0, cut) }),
-  );
+  // Drizzle's runtime migrator reads only the selected SQL files and journal.
+  // Kit snapshots are generation metadata: copying them at every historical
+  // cutpoint adds gigabytes of unused I/O without testing another migration.
+  const prefix = journal.entries.slice(0, cut);
+  const requiredSql = new Set(prefix.map((entry) => `${entry.tag}.sql`));
+  await fs.cp(source, dir, {
+    recursive: true,
+    filter: (file) => {
+      const relative = path.relative(source, file);
+      return (
+        relative === "" ||
+        relative === "meta" ||
+        relative === journalPath ||
+        requiredSql.has(relative)
+      );
+    },
+  });
+  await fs.writeFile(path.join(dir, journalPath), JSON.stringify({ ...journal, entries: prefix }));
   return dir;
 }
 
