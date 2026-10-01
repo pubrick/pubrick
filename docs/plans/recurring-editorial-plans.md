@@ -1,6 +1,7 @@
 # Weekly editorial plans execution
 
-Status: reviewed specification; implementation not started. Updated: 2026-10-01.
+Status: calendar prerequisite and shared contracts/calculator integrated in the
+feature branch; transactional persistence in progress. Updated: 2026-10-01.
 
 Design: [0011](../specs/0011-recurring-editorial-plans.md). Independent discovery
 and two adversarial reads resolved pause/resume identity, finite consent,
@@ -19,6 +20,9 @@ credential revision and reproduce the prior brand-delete deadlock. Existing
 unconfigured-calendar compatibility remains explicit. Recurring implementation
 starts only with this prerequisite applied; it is not an independent worker task.
 
+Integrated and independently verified: see the
+[calendar scan review](../reviews/2026-10-01-calendar-scan-isolation.md).
+
 ### 1. DTOs and server calculator
 
 One owner: shared plan DTOs/closed reasons and server-only weekly calculator.
@@ -32,6 +36,13 @@ Tests: DST forward gap, both backward offsets selecting earlier UTC, leap dates,
 UTC and non-hour-offset zones, inclusive end, 14 local-day horizon, past/new
 identity refusal and retained snapshot behavior. Library handles timezone/day
 arithmetic; Pubrick owns the bounded recurrence and consent semantics.
+
+Integrated in the feature branch at `1a4c23f3`. Focused verification of the final
+contracts passed 19 DTO tests and 21 calculator tests, shared/db typechecks,
+scoped lint and the shared package build. Response round trips include opaque
+authentication actor IDs and historical fractional-minute IANA offsets.
+Persistence, API, dispatch and UI acceptance remain pending; these unit checks
+do not establish a working recurring-plan user journey.
 
 ### 2. Schema, migration and transactional repositories
 

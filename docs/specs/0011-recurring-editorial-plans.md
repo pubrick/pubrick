@@ -1,6 +1,7 @@
 # Weekly editorial plans
 
-Status: proposed; not implemented. Updated: 2026-10-01.
+Status: reviewed; contracts/calculator implemented in the feature branch;
+persistence, API, dispatch and UI pending. Updated: 2026-10-01.
 
 ## User outcome
 
