@@ -1,8 +1,8 @@
 # Evergreen draft reuse execution plan
 
 Status: independently reviewed design; shared/database foundation and session
-backend verified with focused native checks. UI and critical guard proofs are
-in progress; integrated build/browser acceptance and release remain pending.
+backend verified with focused native checks and selected independent guard
+proofs. UI is in progress; integrated build/browser acceptance and release remain pending.
 Operator setup is not required. No release claim.
 Date: 2026-10-01.
 Design: [0012](../specs/0012-evergreen-draft-reuse.md).
@@ -134,10 +134,13 @@ label inconclusive host failures honestly.
 
 Backend milestone `e25b88c0` includes atomic session admission, frozen-source
 retry, terminal snapshot erasure and permission-safe detail attribution.
-Focused native checks and independent source review passed; selected critical
-guard proofs and the user-facing workflow remain pending. See the
+Focused native checks, independent source review and three selected native
+guard proofs passed; the user-facing workflow remains pending. See the
 [backend receipt](../reviews/2026-10-01-evergreen-reuse-backend.md) for the
-exact scope and retained failures. This is not integrated feature acceptance.
+exact scope and retained failures, and the
+[guard receipt](../reviews/2026-10-01-evergreen-native-guards.md) for the narrow
+CAS, deletion-side brand-lock and checkpoint-erasure proofs. This is not
+integrated feature acceptance.
 
 ## 4. Existing compose/content UI and guide
 

@@ -6,9 +6,9 @@ Date: 2026-10-01. Candidate: `e25b88c0`, pushed on
 
 This record covers the session backend after the
 [shared/database foundation](2026-10-01-evergreen-reuse-foundation.md).
-UI, integrated workspace verification, selected native guard proofs and built
-browser acceptance are still pending. No main integration, provider call or
-publication is claimed.
+UI, integrated workspace verification and built browser acceptance are still
+pending. Subsequent selected native guard proofs are recorded separately below.
+No main integration, provider call or publication is claimed.
 
 ## Implemented boundary
 
@@ -76,12 +76,21 @@ The synthetic PostgreSQL container was handed to the independent proof owner;
 its eventual removal remains that owner's cleanup task. User runtime data,
 credentials and private backups were not fixture targets.
 
+Follow-up: the [independent native guard receipt](2026-10-01-evergreen-native-guards.md)
+records final CAS, deletion-side brand serialization and checkpoint erasure
+mutations killed by the same single assertion in each of three runs. A reviewed
+rich-body-only revision race was added without changing production code.
+The clean two-file native baseline passed 21 cases in each of three runs before
+and after restoring mutations. The coordinator subsequently removed the borrowed
+test container and its anonymous storage after the owner's handoff; user runtime
+data and private backups remained untouched.
+
 ## Remaining acceptance
 
 Complete the existing compose/content/receipt/queue workflow, explicit paid
 confirmation, stable replay after uncertain outcomes and unsaved-source handling.
 Run the coherent integration gate and production browser journey without
-publication. Independently verify selected critical CAS, deletion serialization
-and checkpoint-erasure guard proofs using the documented three-run protocol;
-retain inconclusive host failures honestly. Update user availability claims only
+publication. Preserve the scope of the completed independent three-run guard
+proofs; they do not establish every writer lock or every redaction field.
+Retain inconclusive host failures honestly. Update user availability claims only
 after that evidence, and obtain exact-head release authorization separately.
