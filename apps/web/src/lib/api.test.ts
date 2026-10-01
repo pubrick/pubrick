@@ -604,6 +604,7 @@ it.each([
     );
     const failure = await api("/api/v2/content").catch((error) => error);
     expect(failure).toBeInstanceOf(ApiError);
+    if (!(failure instanceof ApiError)) throw new Error("Expected a coded API refusal");
     expect(failure.code).toBe(code);
     for (const [locale, messages] of Object.entries({ en, es, ru, pt })) {
       const translator = createTranslator({
