@@ -1750,7 +1750,7 @@
     "readapt_failed": "O modelo não conseguiu adaptar o texto para este canal. Nada foi alterado. Se persistir, teste a chave em Configurações.",
     "readapt_proposal_not_found": "Essa sugestão para o canal não está mais disponível.",
     "readapt_source_changed": "O texto principal ou o do canal mudou. Peça uma nova sugestão.",
-    "refine_needs_ai_draft": "Os verbos de refinamento funcionam sobre um rascunho escrito pelo modelo, e esta publicação foi escrita à mão.",
+    "refine_needs_ai_draft": "O refinamento está disponível para rascunhos gerados por IA.",
     "refine_no_credential": "Nenhuma chave de provedor de IA foi salva ainda. Adicione uma em Configurações e tente de novo.",
     "refine_timed_out": "O modelo não respondeu a tempo. Nada foi alterado — peça novamente.",
     "refine_failed": "O modelo não conseguiu revisar esta seleção. Nada foi alterado. Se continuar acontecendo, teste sua chave de API em Configurações.",
