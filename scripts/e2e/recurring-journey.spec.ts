@@ -257,7 +257,7 @@ test("weekly plan generates one metered draft, human edit, pause/resume and perm
     const calls = await latch();
     expect(calls).toHaveLength(5);
     expect(calls.map((call) => call.role).sort()).toEqual([
-      "adapter",
+      `adapter:${channel.id}`,
       "editor",
       "factcheck",
       "researcher",
