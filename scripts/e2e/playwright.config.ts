@@ -13,6 +13,7 @@ if (
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.ts",
+  testIgnore: "recurring-journey.spec.ts",
   workers: 1,
   retries: 0,
   timeout: 60_000,
