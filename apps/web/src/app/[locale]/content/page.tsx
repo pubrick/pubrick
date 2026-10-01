@@ -1,6 +1,6 @@
 "use client";
 
-import { CONTENT_PAGE_SIZE, type PublishFailureReason } from "@pubrick/shared";
+import { CONTENT_PAGE_SIZE, type PublishFailureReason, runDetailDtoSchema } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -635,6 +635,13 @@ export default function ContentQueuePage() {
     setActionError(null);
     setRetrying(run.id);
     try {
+      const detail = runDetailDtoSchema.parse(
+        await api(`/api/runs/${run.id}`, { cache: "no-store" }),
+      );
+      if (detail.internalSource) {
+        router.push(`/${locale}/content/runs/${run.id}`);
+        return;
+      }
       const created = await api<Run>(`/api/runs/${run.id}/retry`, { method: "POST" });
       const dismissed = await api(`/api/runs/${run.id}/dismiss`, { method: "POST" })
         .then(() => true)

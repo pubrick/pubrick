@@ -1,15 +1,19 @@
 "use client";
 
+import { hasOrganizationRole } from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { type ReactNode, use, useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { ContentReuseRecoveryBoundary } from "@/components/content-reuse-recovery";
+import { SavedSourceAttribution } from "@/components/saved-source-attribution";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { usePoll } from "@/hooks/use-poll";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { isHttpUrl } from "@/lib/external-url";
 import {
   isTerminalRunStatus,
@@ -25,6 +29,7 @@ import {
   runRelatedNews,
   runStepStates,
 } from "@/lib/runs";
+import { ContentReuseRetryAction } from "./content-reuse-retry";
 
 /** Module-level so it is a stable `usePoll` dependency (see that hook's contract). */
 const isRunFinished = (run: RunDetail) => isTerminalRunStatus(run.status);
@@ -134,6 +139,14 @@ function RunField({ label, children }: { label: string; children: ReactNode }) {
  */
 export default function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  return (
+    <ContentReuseRecoveryBoundary operation="reuse-retry" targetId={id}>
+      <RunReceipt id={id} />
+    </ContentReuseRecoveryBoundary>
+  );
+}
+
+function RunReceipt({ id }: { id: string }) {
   const t = useTranslations("Runs");
   /**
    * The refusals' own namespace, and a second one on this screen rather than a
@@ -146,6 +159,17 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
   const te = useTranslations("Errors");
   const locale = useLocale();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const role = session?.user.id
+    ? organization?.members
+        ?.filter(
+          (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
+        )
+        .map((member) => member.role)
+        .join(",")
+    : undefined;
+  const canRetry = hasOrganizationRole(role, ["owner", "admin", "member", "author", "editor"]);
 
   // `no-store` for the same reason the queue's poll sets it: a cached body is
   // the one thing a poll must never be answered with.
@@ -356,6 +380,10 @@ export default function RunPage({ params }: { params: Promise<{ id: string }> })
             which means the compiler points at the new half and stays silent
             about the old one.
           */}
+          {run.internalSource && <SavedSourceAttribution source={run.internalSource} />}
+          {canRetry && isTerminalRunStatus(run.status) && run.internalSource && (
+            <ContentReuseRetryAction run={run} />
+          )}
           {run.input.kind === "redacted" ? (
             <Card className="mb-6">
               <p className="text-sm text-fg-secondary">{t("redactedReceipt")}</p>

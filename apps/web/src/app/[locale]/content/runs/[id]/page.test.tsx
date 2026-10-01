@@ -2,7 +2,7 @@ import { runDetailDtoSchema, type SourceRunInput } from "@pubrick/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POLL_INTERVAL_MS } from "@/hooks/use-poll";
 import type { RunDetail, RunStatus } from "@/lib/runs";
-import { signedInSession } from "@/test/auth-client.stub";
+import { authClient, signedInOrganization, signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, renderAsync, screen, waitFor, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 import { api } from "@/lib/api";
 
 const mockApi = vi.mocked(api);
+const originalOrganization = authClient.useActiveOrganization.getMockImplementation();
 
 const RUN_ID = "11111111-1111-4111-8111-111111111111";
 const ITEM_ID = "22222222-2222-4222-8222-222222222222";
@@ -71,8 +72,11 @@ function installHandlers(served: { current: RunDetail }, calls: Call[] = []) {
 const renderRun = () => renderAsync(<RunPage params={Promise.resolve({ id: RUN_ID })} />);
 
 beforeEach(() => {
+  if (originalOrganization)
+    authClient.useActiveOrganization.mockImplementation(originalOrganization);
   mockApi.mockReset();
   signedInSession();
+  signedInOrganization();
 });
 
 describe("the step checklist", () => {
@@ -957,4 +961,60 @@ describe("a run drafted from pasted material", () => {
     expect(screen.queryByText(en.Runs.sourceLabel)).not.toBeInTheDocument();
     expect(screen.queryByText(en.Runs.noBrief)).not.toBeInTheDocument();
   });
+});
+
+describe("internal source retry permission", () => {
+  it("unions duplicate memberships when reader precedes author", async () => {
+    const organization = signedInOrganization("Workspace", "reader");
+    if (!organization.data) throw new Error("Missing organization fixture");
+    vi.spyOn(authClient, "useActiveOrganization").mockReturnValue({
+      ...organization,
+      data: {
+        ...organization.data,
+        members: [
+          { userId: "test-user", role: "reader" },
+          { userId: "test-user", role: "author" },
+        ],
+      },
+    });
+    installHandlers({
+      current: makeRun({
+        status: "failed",
+        currentStep: null,
+        internalSource: { state: "unavailable", sourceRevision: 4 },
+      }),
+    });
+    await renderRun();
+    await screen.findByTestId("saved-source-attribution");
+    expect(screen.getByRole("button", { name: en.Reuse.retry })).toBeInTheDocument();
+  });
+
+  it.each(["author", "reader"])(
+    "shows paid retry only to a current author, not %s",
+    async (role) => {
+      signedInOrganization("Workspace", role);
+      installHandlers({
+        current: makeRun({
+          status: "failed",
+          currentStep: null,
+          input: {
+            kind: "source",
+            sourceUrl: null,
+            material: "Saved source",
+            text: "New instructions",
+            channelIds: [CHANNEL_A],
+          },
+          internalSource: { state: "unavailable", sourceRevision: 4 },
+        }),
+      });
+      await renderRun();
+      await screen.findByTestId("saved-source-attribution");
+      if (role === "author")
+        expect(screen.getByRole("button", { name: en.Reuse.retry })).toBeInTheDocument();
+      else expect(screen.queryByRole("button", { name: en.Reuse.retry })).not.toBeInTheDocument();
+      expect(mockApi.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(
+        true,
+      );
+    },
+  );
 });

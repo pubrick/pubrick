@@ -1,8 +1,10 @@
 "use client";
 
+import type { ContentReuseAttribution, StoredRunInput } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
+import { SavedSourceAttribution } from "@/components/saved-source-attribution";
 import { isHttpUrl } from "@/lib/external-url";
-import { type RunInput, sourceHost } from "@/lib/runs";
+import { sourceHost } from "@/lib/runs";
 
 /**
  * WHERE THIS DRAFT CAME FROM, on the draft itself.
@@ -23,7 +25,13 @@ import { type RunInput, sourceHost } from "@/lib/runs";
  * whole of a decision — what a draft is allowed to claim about its origin —
  * and it is tested as one.
  */
-export function SourceStrip({ input }: { input: RunInput | null }) {
+export function SourceStrip({
+  input,
+  internalSource,
+}: {
+  input: StoredRunInput | null;
+  internalSource?: ContentReuseAttribution | null;
+}) {
   /**
    * The RUN's vocabulary, from the namespace that owns it. Every string here
    * is one the receipt already says in four languages; a `Publish.*` copy of
@@ -31,6 +39,7 @@ export function SourceStrip({ input }: { input: RunInput | null }) {
    */
   const t = useTranslations("Runs");
 
+  if (internalSource) return <SavedSourceAttribution source={internalSource} />;
   if (input === null || input.kind !== "source") return null;
 
   /**

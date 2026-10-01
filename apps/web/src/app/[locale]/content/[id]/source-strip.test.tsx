@@ -1,4 +1,4 @@
-import { type RunInput, runInputSchema } from "@pubrick/shared";
+import { type RunInput, redactedRunInputSchema, runInputSchema } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@/test/render";
 import en from "../../../../../messages/en.json";
@@ -123,5 +123,51 @@ describe("the source strip on a draft", () => {
 
     expect(screen.getByText("Черновик по вставленному тексту")).toBeInTheDocument();
     expect(screen.getByText("Без брифа — черновик по вставленному тексту.")).toBeInTheDocument();
+  });
+});
+
+describe("internal saved-source attribution", () => {
+  it("renders a permission-safe source link instead of the pasted-source label", () => {
+    render(
+      <SourceStrip
+        input={sourceInput()}
+        internalSource={{
+          state: "available",
+          sourceContentId: "22222222-2222-4222-8222-222222222222",
+          sourceRevision: 4,
+          title: "Saved master",
+          origin: "human",
+        }}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Saved master" })).toHaveAttribute(
+      "href",
+      "/en/content/22222222-2222-4222-8222-222222222222",
+    );
+    expect(screen.queryByText(en.Runs.pastedLabel)).toBeNull();
+    expect(screen.queryByTestId("source-strip-material")).toBeNull();
+  });
+  it.each([null, redactedRunInputSchema.parse({ kind: "redacted" })])(
+    "retains the erased-source tombstone even without readable run input",
+    (input) => {
+      render(
+        <SourceStrip input={input} internalSource={{ state: "redacted", sourceRevision: 4 }} />,
+      );
+      expect(screen.getByText(en.Reuse.redacted)).toBeInTheDocument();
+      expect(screen.queryByRole("link")).toBeNull();
+    },
+  );
+  it("unavailable attribution exposes no source title, ID or material link", () => {
+    render(
+      <SourceStrip
+        input={sourceInput()}
+        internalSource={{ state: "unavailable", sourceRevision: 4 }}
+      />,
+    );
+    expect(screen.getByText(en.Reuse.unavailable)).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(
+      screen.queryByText("The council voted on Tuesday to fund the new library wing."),
+    ).toBeNull();
   });
 });

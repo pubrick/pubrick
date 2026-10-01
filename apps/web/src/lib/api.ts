@@ -1,5 +1,6 @@
 import {
   type ApiErrorCode,
+  contentReuseSourcePreviewSchema,
   isApiErrorCode,
   MAX_CONCURRENT_RUNS,
   MAX_REFINE_CALLS_PER_HOUR,
@@ -69,6 +70,8 @@ export class ApiError extends Error {
    * decides what a reader sees.
    */
   readonly code: string | null;
+  /** Only the bounded UUID recovery inventory from a reuse deletion refusal survives the wire. */
+  readonly runIds: readonly string[];
 
   constructor(
     readonly status: number,
@@ -86,9 +89,18 @@ export class ApiError extends Error {
      */
     readonly noActiveOrg = false,
     code: string | null = null,
+    runIds: unknown = undefined,
   ) {
     super(message);
     this.code = code ?? (noActiveOrg ? "no_active_organization" : null);
+    this.runIds =
+      status === 409 &&
+      this.code === "content_delete_reuse_active" &&
+      Array.isArray(runIds) &&
+      runIds.length <= 20 &&
+      runIds.every((id: unknown) => contentReuseSourcePreviewSchema.shape.id.safeParse(id).success)
+        ? Object.freeze([...new Set((runIds as string[]).map((id) => id.toLowerCase()))])
+        : Object.freeze([]);
   }
 }
 
@@ -387,17 +399,17 @@ export function errorMessage(err: unknown, fallback: string, t: ErrorTranslator)
  * string[]. A coded refusal adds `code` (see `refusalBody` in `@pubrick/shared`)
  * and changes nothing else, so this reads both shapes.
  */
-function serverFailure(raw: string): { message?: string; code?: string } {
+function serverFailure(raw: string): { message?: string; code?: string; runIds?: unknown } {
   try {
-    const body = JSON.parse(raw) as { message?: unknown; code?: unknown };
+    const body = JSON.parse(raw) as { message?: unknown; code?: unknown; runIds?: unknown };
     const code = typeof body.code === "string" && body.code.length > 0 ? body.code : undefined;
     if (typeof body.message === "string" && body.message.length > 0) {
-      return { message: body.message, code };
+      return { message: body.message, code, runIds: body.runIds };
     }
     if (Array.isArray(body.message) && body.message.length > 0) {
-      return { message: body.message.join(", "), code };
+      return { message: body.message.join(", "), code, runIds: body.runIds };
     }
-    return { code };
+    return { code, runIds: body.runIds };
   } catch {
     // Not JSON (proxy error page, gateway timeout) — never surface the raw body.
     return {};
@@ -432,7 +444,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   }
   if (!res.ok) {
     const raw = await res.text();
-    const { message: detail, code } = serverFailure(raw);
+    const { message: detail, code, runIds } = serverFailure(raw);
     if (res.status === 401) {
       // Deliberately NOT "your session has expired". A 401 says only that the
       // request carried no valid session — which is equally true of a session
@@ -483,6 +495,7 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       detail ?? res.statusText ?? `Request failed (${res.status})`,
       false,
       code ?? null,
+      runIds,
     );
   }
   return res;
