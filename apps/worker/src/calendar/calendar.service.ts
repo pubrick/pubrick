@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { lockAiTextSelection, schema, snapshotAiTextSelection } from "@pubrick/db";
 import {
+  AiTextSelectionChangedError,
   COVER_SUPPORTED_PLATFORMS,
   contentTypeRequiresMaterial,
   GENERATE_QUEUE,
@@ -45,6 +46,23 @@ export class CalendarService {
       try {
         await this.trigger(boss, slot.orgId, slot.id);
       } catch (error) {
+        if (error instanceof AiTextSelectionChangedError) {
+          // The admission transaction has rolled back. Defer only this pending
+          // slot so a workspace's missing key/model cannot abort other tenants.
+          await db
+            .update(schema.calendarSlots)
+            .set({ retryAfter: new Date(Date.now() + 5 * 60_000) })
+            .where(
+              and(
+                eq(schema.calendarSlots.orgId, slot.orgId),
+                eq(schema.calendarSlots.id, slot.id),
+                isNull(schema.calendarSlots.runId),
+                isNull(schema.calendarSlots.errorCode),
+              ),
+            );
+          this.logger.debug("Calendar generation deferred: configuration_changed");
+          continue;
+        }
         this.logger.error(`Calendar slot ${slot.id} could not be queued`, error);
         // A transient database/queue failure is not a permanent slot failure.
         throw error;
