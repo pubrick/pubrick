@@ -14,7 +14,7 @@ platform handoff should be described as automatic delivery.
 | P0 — foundation | Monorepo, CI, organizations, brands, channels, review queue, Docker Compose, basic publishing and documentation | Public release packaging and repeatable installation/upgrade verification |
 | P1 — generation | Five-role generation, source repurposing, reviewed revisions/history, calendar, media/video, roles, Bluesky/Mastodon | Private inbox sources and transcription are extensions of the current bounded source import |
 | P2 — inbound | Feeds, public/private Telegram monitoring, relevance, topic suggestions, hybrid knowledge retrieval, images, reviewed website-to-brand import | X integration and verified social-profile import; richer retrieval evaluation |
-| P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, scoped write API/MCP (verified feature branch, release pending), webhooks, UTM | Controlled prompt experiments, stock media, evergreen recycling, Telegram decision bot, recurring plans/channel scheduling signals, additional platform metrics |
+| P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, scoped write API/MCP (integrated at `81b346fb`), webhooks, UTM | Controlled prompt experiments, stock media, evergreen recycling, Telegram decision bot, recurring plans/channel scheduling signals, additional platform metrics |
 | P4 — hosted SaaS | Tenant isolation, usage ledger, public site, verified registration/recovery, durable mail, sandbox subscriptions, plans and resource/dispatch admission | Real payment sandbox verification, operations and support; platform-paid AI is a later extension |
 | P5 — platform breadth | Several platforms have explicit manual publication workflows | Verified native integrations and broader media formats |
 
@@ -109,8 +109,7 @@ workspace data exports are implemented. The integrated hosted browser journey
 passed against a disposable built stack with a fixture entitlement; this is not
 checkout settlement. Real payment sandbox verification and deployment operations
 remain required before a hosted beta is declared. The read-only
-[operator status command](hosted-operations.md) is implemented in the follow-up
-feature branch; it reports bounded aggregate queue, subscription, cleanup and
+[operator status command](hosted-operations.md) is implemented in `main` at `81b346fb`; it reports bounded aggregate queue, subscription, cleanup and
 physical-call facts and does not certify provider readiness.
 
 Delivery slices:
@@ -150,11 +149,11 @@ observed usage and SaaS demand:
 
 - Scoped write API/MCP for draft creation and generation; retain human delivery
   approval, explicit consent, idempotency, and auditable costs. Implementation
-  and local acceptance are complete on the feature branch, following the
+  and local acceptance are integrated in `main` at `81b346fb`, following the
   reviewed [v2 design](specs/0010-scoped-draft-write-api.md) and
   [execution plan](plans/scoped-draft-write-api.md).
   [Verification](reviews/2026-10-01-scoped-draft-writes.md) includes browser
-  import/edit/revoke and native queued generation; main release is pending.
+  import/edit/revoke and native queued generation; main integration is complete.
 - Recurring editorial plans and evergreen reuse before speculative best-time
   claims; collect evidence before suggesting optimal publication times.
 - Telegram decisions only after account binding, authorization, snapshot checks,
