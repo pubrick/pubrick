@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 
 ### Added
 
+- An English-first public product and open-source website, translated into Spanish, Russian and Portuguese, with six public pages, a local editable example, runtime SEO metadata and explicit indexing opt-in. Hosted public availability and payments remain deferred.
+
 - Optional Telegram private draft rejection: verified workspace bot ownership, two-phase editor account binding, fresh-draft confirmation and atomic audit/replay protection. Review, approval, scheduling and publication remain web decisions. Includes bounded temporary records and mobile keyboard settings; live Telegram sandbox verification remains pending.
 
 - Scoped v2 API and opt-in MCP tools for draft import and queued BYOK generation, with dedicated keys, explicit paid consent, safe request replay and metered cost status. Imported drafts retain human review before delivery; existing v1 read contracts remain supported.

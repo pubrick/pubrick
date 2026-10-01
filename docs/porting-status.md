@@ -11,7 +11,7 @@ Text generation supports Google, OpenRouter and direct OpenAI, Anthropic and
 DeepSeek keys through the maintained AI SDK adapters. See [LLM providers](llm-providers.md)
 for provider/model selection behavior, unknown-cost reporting and Google-only
 features. Vertex authentication and guarded public OpenAI-compatible endpoints
-are implemented on the integration branch; provider/model capabilities remain
+are integrated in `main` at `474e28a4`; provider/model capabilities remain
 explicit. [Hosted identity](hosted-identity.md) covers email ownership and recovery.
 The [platform integration record](reviews/2026-09-30-hosted-platform.md) describes
 sandbox subscriptions, durable mail, resource quotas and physical-call admission;

@@ -72,6 +72,10 @@ The existing Dockerfiles use moving Node base tags, so a later rebuild can produ
 different bytes even with the same application source. The published digests are
 the installation identity.
 
+The [first beta release-note candidate](releases/first-beta-candidate.md) is an
+unpublished, concise product summary. Assign its version/source identity and
+confirm its claims against the final artifacts before using it as release notes.
+
 ## Maintainer release procedure
 
 1. Integrate the coherent release candidate, run the complete local quality gate,
