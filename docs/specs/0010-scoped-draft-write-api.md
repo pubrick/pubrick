@@ -1,6 +1,6 @@
 # Scoped draft creation and generation API
 
-Status: independently reviewed design; implementation pending.
+Status: independently reviewed design; foundation integrated, operations in development.
 Date: 2026-10-01.
 
 ## Product boundary

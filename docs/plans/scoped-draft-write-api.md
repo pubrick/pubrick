@@ -1,6 +1,6 @@
 # Scoped draft write API execution plan
 
-Status: independently reviewed implementation plan; foundation pending.
+Status: foundation integrated; backend and client slices in progress.
 Date: 2026-10-01.
 Design: [0010](../specs/0010-scoped-draft-write-api.md).
 
@@ -9,6 +9,12 @@ include exact operation-bound authority, immutable imported-review obligations,
 independent request limits, lifetime replay tombstones, truthful unknown cost,
 and an explicitly versioned v2 representation. V1 retains its existing unsigned
 cursor format and closed origin enum.
+
+Foundation landed as `b9385c8a` on 2026-10-01. Focused shared, database, API,
+web and worker checks passed, including real PostgreSQL authority/constraint
+fixtures, imported-review and v1 HTTP tests, and every historical migration.
+Migration 0125 received independent review. Public write endpoints and MCP write
+tools remain unavailable until the following slices pass assembled acceptance.
 
 ## Sequence and ownership
 
