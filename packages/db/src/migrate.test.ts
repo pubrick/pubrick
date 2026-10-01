@@ -164,6 +164,7 @@ const ZONED_COLUMNS = [
   "content_items.created_at",
   "content_items.first_opened_at",
   "content_items.updated_at",
+  "content_reuse_operations.accepted_at",
   "content_versions.created_at",
   "draft_revision_proposals.created_at",
   "editorial_notes.created_at",
@@ -255,6 +256,8 @@ const ZONED_COLUMNS = [
   "refine_proposals.created_at",
   "role_template_activation_gate.updated_at",
   "role_template_revisions.created_at",
+  "run_source_lineage.accepted_at",
+  "run_source_lineage.source_redacted_at",
   "search_credentials.updated_at",
   "search_requests.completed_at",
   "search_requests.created_at",
@@ -351,6 +354,20 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // 0127 tables are absent from the historical seed; content-reuse.foundation.e2e.test.ts
+  // proves each exact constraint on independently valid populated fixtures.
+  "content_reuse_operations_operation_check",
+  "content_reuse_operations_request_target_kind_check",
+  "content_reuse_operations_target_check",
+  "content_reuse_operations_key_check",
+  "content_reuse_operations_hash_check",
+  "content_reuse_operations_revision_check",
+  "content_reuse_operations_consent_check",
+  "run_source_lineage_revision_check",
+  "run_source_lineage_digest_check",
+  "run_source_lineage_source_origin_check",
+  "run_source_lineage_redaction_check",
+
   // 0126 tables do not exist in seedEveryTable's historical pre-0009 schema.
   // The dedicated "0126 refuses each weekly-plan check" test below inserts
   // populated valid bases and proves all fourteen refusals by constraint name,

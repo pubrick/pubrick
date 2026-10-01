@@ -41,6 +41,8 @@ const OTHER_ZONE_OFFSET_MS = 9 * 60 * 60 * 1000;
  * database.
  */
 const ZONED_TABLES = [
+  "content_reuse_operations",
+  "run_source_lineage",
   "brand_feeds",
   "brands",
   "channels",
@@ -279,6 +281,7 @@ describe("timestamps carry their zone", () => {
       "content_items.created_at",
       "content_items.first_opened_at",
       "content_items.updated_at",
+      "content_reuse_operations.accepted_at",
       "content_versions.created_at",
       "feed_entries.published_at",
       "media_assets.created_at",
@@ -292,6 +295,8 @@ describe("timestamps carry their zone", () => {
       // one row again.
       "publications.asserted_at",
       "publications.created_at",
+      "run_source_lineage.accepted_at",
+      "run_source_lineage.source_redacted_at",
     ]);
     const unzoned = onThePath
       .filter((column) => !column.zoned)

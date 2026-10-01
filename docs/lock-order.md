@@ -806,3 +806,23 @@ keys. Removing a result or key cannot free its lifetime replay slot. Organizatio
 removal cascades the tenant audit. `api_request_limits` is shared transient
 operational infrastructure, has no tenant row or content and is omitted from
 workspace exports. Its three-column order is a pinned adapter contract.
+
+## Saved-content reuse foundation
+
+Design [0012](specs/0012-evergreen-draft-reuse.md) adds immutable session operation
+and run lineage tables. This schema slice adds no admission endpoint. The next
+repository integration must take admission advisory lock → organization SHARE →
+fresh session/membership/brand authority → operation lookup → admission/billing
+and AI selection locks → brand NO KEY UPDATE → selected channels KEY SHARE in
+UUID order → source content SHARE. Replay precedes new capacity or source checks
+but follows fresh authority. No source foreign key is added: lineage must not
+introduce a source-parent lock after a run lock or cascade deletion into output.
+
+Source deletion and source-linked retry share the same stronger brand lock.
+Deletion collects direct and lineage-linked runs, locks their union in ascending
+UUID order, then adaptations and source content. It refuses live reuse runs;
+terminal source erasure clears retained lineage title/digest/origin once, keeping
+immutable UUID/revision/accepted-time audit. Operation target kind/UUID, root
+source UUID and result run UUID are separate immutable audit values without
+resource FKs. Only tenant/brand deletion cleans that audit. Actual transaction
+races and raw run redaction remain step 2/3 integration work, not schema claims.

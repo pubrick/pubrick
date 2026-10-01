@@ -104,3 +104,42 @@ it("exports weekly schedules, durable consent and occurrence attribution with ex
     ).toEqual([]);
   }
 });
+
+it("exports reuse audit and erased lineage without storing duplicate source material", () => {
+  expect(
+    WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "contentReuseOperations")?.fields,
+  ).toEqual([
+    "id",
+    "orgId",
+    "brandId",
+    "operation",
+    "idempotencyKey",
+    "requestHash",
+    "hashVersion",
+    "rootSourceId",
+    "rootSourceRevision",
+    "requestTargetKind",
+    "requestTargetId",
+    "resultRunId",
+    "consentingActorId",
+    "consentVersion",
+    "acceptedAt",
+  ]);
+  expect(WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "runSourceLineage")?.fields).toEqual(
+    [
+      "derivedRunId",
+      "orgId",
+      "brandId",
+      "sourceContentId",
+      "sourceRevision",
+      "sourceTitle",
+      "sourceDigest",
+      "sourceOrigin",
+      "acceptedAt",
+      "sourceRedactedAt",
+    ],
+  );
+  const audit = getTableColumns(schema.contentReuseOperations);
+  for (const forbidden of ["body", "title", "material", "sourceDigest", "request", "result"])
+    expect(forbidden in audit).toBe(false);
+});

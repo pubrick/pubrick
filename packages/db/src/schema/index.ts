@@ -13,6 +13,7 @@ export * from "./client-review.js";
 export * from "./content.js";
 export * from "./content-images.js";
 export * from "./content-items.js";
+export * from "./content-reuse.js";
 export * from "./draft-revision.js";
 export * from "./editorial-notes.js";
 export * from "./editorial-plans.js";

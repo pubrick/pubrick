@@ -192,6 +192,7 @@ export const pipelineRuns = pgTable(
   },
   (t) => [
     index("pipeline_runs_org_id_idx").on(t.orgId),
+    uniqueIndex("pipeline_runs_scope_id_idx").on(t.orgId, t.brandId, t.id),
     index("pipeline_runs_brand_id_idx").on(t.brandId),
     index("pipeline_runs_topic_id_idx").on(t.topicId),
     /** Observational template cohorts scan only runs pinned at claim time. */
