@@ -1664,7 +1664,10 @@
     "retryChannelsGone": "Os canais desta geração não existem mais; crie uma publicação nova.",
     "retryNotRepeatable": "Esta geração não pode mais ser reenviada como estava; crie uma publicação nova.",
     "dismiss": "Dispensar",
-    "genericError": "Algo deu errado. Tente novamente."
+    "genericError": "Algo deu errado. Tente novamente.",
+    "reuseDeleteRecovery": "Algumas execuções de reutilização continuam ativas. Abra os registos para cancelar ou esperar e depois tente Remover novamente.",
+    "reuseDeleteRun": "Abrir execução relacionada {number}",
+    "reuseDeleteDisclosure": "Remover uma fonte apaga a entrada e os resultados intermédios retidos das execuções relacionadas terminadas. Os rascunhos independentes, as versões, publicações e pedidos retidos pelo fornecedor permanecem."
   },
   "Errors": {
     "client_review_role_required": "Só um proprietário ou administrador pode gerir links de revisão do cliente.",
@@ -2871,5 +2874,40 @@
     "channelLabel": "Canal do plano semanal: {channel}",
     "unavailableChannels": "Alguns canais selecionados não estão mais disponíveis. Remova-os desta edição e selecione canais ativos. O plano só muda ao salvar; rascunhos iniciados mantêm seus destinos originais.",
     "removeUnavailableChannels": "Remover canais indisponíveis"
+  },
+  "Reuse": {
+    "action": "Reutilizar como fonte",
+    "title": "Reutilizar como fonte",
+    "source": "Fonte guardada",
+    "sourceLabel": "Baseado em conteúdo guardado",
+    "revision": "Revisão {revision}",
+    "untitled": "Publicação sem título",
+    "unavailable": "Fonte guardada indisponível",
+    "redacted": "Fonte removida; os dados de origem retidos foram apagados.",
+    "backToSource": "Voltar à fonte",
+    "previewHint": "Texto principal guardado apenas para leitura. O novo rascunho fica nesta marca e precisa da sua própria revisão humana.",
+    "material": "Texto guardado",
+    "instructions": "Instruções",
+    "channelUnavailable": "Canal indisponível — remova esta seleção",
+    "loading": "A carregar a fonte guardada…",
+    "refresh": "Atualizar prévia guardada",
+    "generate": "Gerar",
+    "generating": "A gerar…",
+    "retry": "Tentar novamente",
+    "openRun": "Abrir execução",
+    "cancel": "Cancelar",
+    "confirmTitle": "Gerar um novo rascunho?",
+    "confirmBody": "Será criado um novo rascunho de IA com adaptação do texto para cada canal selecionado. As chamadas ao fornecedor, incluindo tentativas normais, podem gerar custos com a sua chave; os preços podem ser desconhecidos. Não aprova, agenda ou publica nada.",
+    "consent": "Concordo em iniciar esta geração paga com a minha chave do fornecedor.",
+    "uncertain": "O resultado do pedido é desconhecido. Tentar novamente verifica o mesmo pedido confirmado sem criar outra operação. As opções ficam bloqueadas até o resultado ser conhecido.",
+    "unsavedTitle": "Usar a fonte guardada?",
+    "unsavedBody": "Este editor tem alterações não salvas. Salve-as antes de reutilizar, ou descarte-as explicitamente e use o último texto principal salvo. Nenhuma geração começa aqui.",
+    "discard": "Descartar alterações",
+    "save": "Guardar e continuar",
+    "saving": "A guardar…",
+    "saveFailed": "As alterações não foram guardadas. Corrija o erro ou descarte-as explicitamente.",
+    "retryRedacted": "A fonte foi apagada. Uma nova tentativa não pode copiar o seu texto.",
+    "retryChannelUnavailable": "Um canal desta execução está indisponível. Restaure-o nesta marca antes de tentar novamente, ou comece uma nova reutilização de uma fonte acessível.",
+    "recovery": "O resultado de uma geração já confirmada é desconhecido. Tentar novamente envia exatamente a mesma solicitação e chave. Não é necessária uma nova prévia ou consentimento para recuperar a resposta. A recuperação é mantida durante navegação e login nesta aba; uma recarga completa a apaga."
   }
 }

@@ -1,6 +1,7 @@
 import {
   type AiCredentialPublic,
   contentCreateSchema,
+  contentReuseSourcePreviewSchema,
   MAX_BODY_LENGTH,
   MAX_CONCURRENT_RUNS,
   MAX_SOURCE_TEXT_LENGTH,
@@ -9,8 +10,8 @@ import {
 } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { signedInSession } from "@/test/auth-client.stub";
-import { routerMock } from "@/test/next-navigation.stub";
+import { signedInOrganization, signedInSession } from "@/test/auth-client.stub";
+import { navigationState, routerMock } from "@/test/next-navigation.stub";
 import { act, fireEvent, render, screen, waitFor } from "@/test/render";
 import en from "../../../../../messages/en.json";
 import NewContentPage from "./page";
@@ -118,6 +119,7 @@ beforeEach(() => {
   // block; the aliased auth-client stub defaults to signed-out, so a page
   // whose own tests don't care about that content still opts in explicitly.
   signedInSession();
+  signedInOrganization();
 });
 
 describe("selecting a brand loads its channels (Step 1)", () => {
@@ -1946,4 +1948,38 @@ it("offers channel setup for the selected brand with no channels", async () => {
     "href",
     `/en/brands/${B2}#channels`,
   );
+});
+
+describe("saved source compose route", () => {
+  it("uses only the UUID query to load the saved preview under the real compose Suspense boundary", async () => {
+    navigationState.searchParams = new URLSearchParams({ source: B1 });
+    mockApi.mockImplementation(async (path) => {
+      if (path === `/api/content/${B1}/reuse-source`)
+        return contentReuseSourcePreviewSchema.parse({
+          id: B1,
+          brandId: B2,
+          title: "Saved source title",
+          bodyRevision: 3,
+          material: "Saved master fixture",
+          origin: "external",
+          status: "draft",
+          digest: "c".repeat(64),
+        });
+      if (path === `/api/channels?brandId=${B2}`)
+        return [{ id: CH2, name: "Brand channel", platform: "vc_ru" }];
+      throw new Error(`Unexpected saved compose request ${path}`);
+    });
+    render(<NewContentPage />);
+    expect(await screen.findByTestId("reuse-source-preview")).toHaveTextContent(
+      "Saved master fixture",
+    );
+    expect(screen.getByRole("heading", { name: en.Reuse.title })).toBeInTheDocument();
+    expect(mockApi.mock.calls.map(([path]) => path)).toEqual([
+      `/api/content/${B1}/reuse-source`,
+      `/api/channels?brandId=${B2}`,
+    ]);
+    expect(mockApi.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(
+      true,
+    );
+  });
 });

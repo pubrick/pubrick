@@ -4,7 +4,7 @@ import type {
   DeliveryOutcome,
   PublishFailureReason,
 } from "@pubrick/shared";
-import { runDtoSchema, type SourceRunListInput } from "@pubrick/shared";
+import { runDetailDtoSchema, runDtoSchema, type SourceRunListInput } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -158,6 +158,20 @@ function installHandlers(
 
     if (method === "GET" && path === "/api/channels") return channelList;
     if (method === "GET" && path === "/api/runs?state=open") return runs.current;
+    if (method === "GET" && path.startsWith("/api/runs/")) {
+      const current = runs.current.find(
+        (candidate) => candidate.id === path.slice("/api/runs/".length),
+      );
+      return runDetailDtoSchema.parse({
+        ...current,
+        steps: {},
+        internalSource: null,
+        input:
+          current?.input.kind === "source"
+            ? { ...current.input, material: "Frozen source fixture" }
+            : current?.input,
+      });
+    }
     // The retry carries NO body: what the run was asked for is read back out of
     // the row by the api, which is why the list below need not carry it.
     if (method === "POST" && path.endsWith("/retry")) {
@@ -540,6 +554,39 @@ describe("run strips (Task 10)", () => {
     // everything a create body carries.
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/runs")).toBe(false);
     expect(routerMock.push).toHaveBeenCalledWith(`/en/content/runs/${NEW_RUN_ID}`);
+  });
+
+  it("internal-source Retry opens its receipt without admitting or dismissing a run", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [], noChannels, {
+      current: [run({ status: "failed", errorCode: "internal" })],
+    });
+    const previous = mockApi.getMockImplementation();
+    mockApi.mockImplementation(async (...args: unknown[]) => {
+      if (
+        args[0] === `/api/runs/${RUN_ID}` &&
+        ((args[1] as RequestInit | undefined)?.method ?? "GET") === "GET"
+      ) {
+        calls.push({ path: args[0], method: "GET" });
+        return runDetailDtoSchema.parse({
+          ...run({ status: "failed", errorCode: "internal" }),
+          steps: {},
+          input: {
+            kind: "source",
+            material: "Frozen source fixture",
+            text: null,
+            sourceUrl: null,
+            channelIds: [RUN_CHANNEL_ID],
+          },
+          internalSource: { state: "unavailable", sourceRevision: 4 },
+        });
+      }
+      return previous?.(args[0] as string, args[1] as RequestInit | undefined);
+    });
+    render(<ContentQueuePage />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: en.Runs.tryAgain }));
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith(`/en/content/runs/${RUN_ID}`));
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
   });
 
   it("Try again dismisses the run it replaces, so failures cannot stack over the live one", async () => {

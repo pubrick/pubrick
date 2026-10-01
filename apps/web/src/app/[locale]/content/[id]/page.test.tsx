@@ -5224,3 +5224,101 @@ it("retains later rich edits after a deferred save and uses the returned revisio
   });
   expect(JSON.parse(submitted[1]?.body ?? "{}").richBody).not.toEqual(firstPayload.richBody);
 });
+
+describe("saved master reuse entry", () => {
+  it("does not navigate on a failed real master save and explicitly discards without writing", async () => {
+    const source = "11111111-1111-4111-8111-111111111111";
+    const served = { current: makeItem({ id: source, body: "Saved master", bodyRevision: 2 }) };
+    const calls: Call[] = [];
+    installBaseHandlers(served, calls, (_path, method) => {
+      if (method === "PATCH")
+        throw new ApiError(
+          409,
+          "Synthetic source revision conflict",
+          false,
+          "body_revision_conflict",
+        );
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: source })} />);
+    const user = userEvent.setup();
+    const field = await screen.findByRole("textbox", { name: en.Publish.bodyLabel });
+    await user.clear(field);
+    await user.type(field, "Unsaved master");
+    await user.click(screen.getByRole("button", { name: en.Reuse.action }));
+    const dialog = screen.getByRole("dialog", { name: en.Reuse.unsavedTitle });
+    await user.click(within(dialog).getByRole("button", { name: en.Reuse.save }));
+    expect(await within(dialog).findByText(en.Reuse.saveFailed)).toBeInTheDocument();
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(1);
+    await user.click(within(dialog).getByRole("button", { name: en.Reuse.discard }));
+    expect(routerMock.push).toHaveBeenCalledWith(`/en/content/new?source=${source}`);
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(1);
+  });
+  it("a failed adaptation save keeps the editor; explicit discard adds no write", async () => {
+    const calls: Call[] = [];
+    installBaseHandlers(
+      { current: makeItem({ adaptations: [makeAdaptation()] }) },
+      calls,
+      (_path, method) => {
+        if (method === "PATCH")
+          throw new ApiError(409, "Synthetic adaptation conflict", false, "adaptation_changed");
+      },
+    );
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    const cta = await screen.findByRole("textbox", { name: en.Publish.ctaLabel });
+    await user.type(cta, "Unsaved adaptation CTA");
+    await user.click(screen.getByRole("button", { name: en.Reuse.action }));
+    const dialog = screen.getByRole("dialog", { name: en.Reuse.unsavedTitle });
+    await user.click(within(dialog).getByRole("button", { name: en.Reuse.save }));
+    expect(await within(dialog).findByText(en.Reuse.saveFailed)).toBeInTheDocument();
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(1);
+    expect(calls.find((call) => call.method === "PATCH")?.path).toBe(
+      "/api/content/c1/adaptations/a1",
+    );
+    expect(cta).toHaveValue("Unsaved adaptation CTA");
+    await user.click(within(dialog).getByRole("button", { name: en.Reuse.discard }));
+    expect(routerMock.push).toHaveBeenCalledWith("/en/content/new?source=c1");
+    expect(calls.filter((call) => call.method === "PATCH")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+  });
+  it("hides the source reuse entry from a reader", async () => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [{ role: "reader", user: { id: "test-user" } }],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    installBaseHandlers({ current: makeItem() }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await screen.findByRole("textbox", { name: en.Publish.bodyLabel });
+    expect(screen.queryByRole("button", { name: en.Reuse.action })).not.toBeInTheDocument();
+  });
+  it("links only validated related run receipts after an active-reuse deletion refusal", async () => {
+    const runId = "11111111-1111-4111-8111-111111111111";
+    installBaseHandlers(
+      { current: makeItem({ status: "archived", archivedFromStatus: "draft" }) },
+      [],
+    );
+    mockApiVoid.mockImplementation(async (_path, init) => {
+      if (init?.method === "DELETE")
+        throw new ApiError(409, "Synthetic active reuse", false, "content_delete_reuse_active", [
+          runId,
+        ]);
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.delete }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.deleteTitle });
+    expect(within(dialog).getByText(en.Runs.reuseDeleteDisclosure)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: en.Publish.delete }));
+    const link = await screen.findByRole("link", {
+      name: en.Runs.reuseDeleteRun.replace("{number}", "1"),
+    });
+    expect(link).toHaveAttribute("href", `/en/content/runs/${runId}`);
+    expect(routerMock.replace).not.toHaveBeenCalled();
+  });
+});

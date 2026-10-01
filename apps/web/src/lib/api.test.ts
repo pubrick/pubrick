@@ -620,3 +620,51 @@ it.each([
     }
   },
 );
+
+describe("bounded reuse deletion recovery", () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn());
+  });
+  it("retains validated UUIDs only for the precise coded409 refusal", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(409, {
+        code: "content_delete_reuse_active",
+        runIds: [id.toUpperCase(), id],
+        message: "Active runs",
+      }),
+    );
+    const error = await apiVoid("/api/content/source", { method: "DELETE" }).catch(
+      (error: unknown) => error,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).runIds).toEqual([id]);
+  });
+  it.each([
+    ["javascript:alert(1)"],
+    [id, "invalid"],
+    Array(21).fill(id),
+    "not-array",
+    { id },
+    null,
+  ])("discards malformed, excessive or non-array recovery values %j", async (runIds) => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(409, { code: "content_delete_reuse_active", runIds }),
+    );
+    const error = await apiVoid("/api/content/source", { method: "DELETE" }).catch(
+      (error: unknown) => error,
+    );
+    expect((error as ApiError).runIds).toEqual([]);
+  });
+  it.each([
+    [400, "content_delete_reuse_active"],
+    [409, "invalid_request"],
+    [500, "content_delete_reuse_active"],
+  ])("does not attach runIDs to unrelated refusal %s/%s", async (status, code) => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(status as number, { code, runIds: [id] }));
+    const error = await apiVoid("/api/content/source", { method: "DELETE" }).catch(
+      (error: unknown) => error,
+    );
+    expect((error as ApiError).runIds).toEqual([]);
+  });
+});

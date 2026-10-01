@@ -1664,7 +1664,10 @@
     "retryChannelsGone": "Los canales de esta generación ya no existen; crea una publicación nueva.",
     "retryNotRepeatable": "Esta generación ya no puede reenviarse tal como estaba; crea una publicación nueva.",
     "dismiss": "Descartar",
-    "genericError": "Algo salió mal. Inténtalo de nuevo."
+    "genericError": "Algo salió mal. Inténtalo de nuevo.",
+    "reuseDeleteRecovery": "Hay ejecuciones de reutilización activas. Abre sus registros para cancelarlas o esperar; después vuelve a intentar Eliminar explícitamente.",
+    "reuseDeleteRun": "Abrir ejecución relacionada {number}",
+    "reuseDeleteDisclosure": "Eliminar una fuente borra su entrada y los resultados intermedios retenidos de las ejecuciones relacionadas terminadas. Los borradores independientes, sus versiones, publicaciones y solicitudes del proveedor permanecen."
   },
   "Errors": {
     "client_review_role_required": "Solo un propietario o administrador puede gestionar enlaces de revisión del cliente.",
@@ -2871,5 +2874,40 @@
     "channelLabel": "Canal del plan semanal: {channel}",
     "unavailableChannels": "Algunos canales seleccionados ya no están disponibles. Elimínalos de esta edición y elige canales activos. El plan solo cambia al guardar; los borradores iniciados conservan sus destinos originales.",
     "removeUnavailableChannels": "Eliminar canales no disponibles"
+  },
+  "Reuse": {
+    "action": "Reutilizar como fuente",
+    "title": "Reutilizar como fuente",
+    "source": "Fuente guardada",
+    "sourceLabel": "Basado en contenido guardado",
+    "revision": "Revisión {revision}",
+    "untitled": "Publicación sin título",
+    "unavailable": "Fuente guardada no disponible",
+    "redacted": "Fuente eliminada; se borraron los datos de origen conservados.",
+    "backToSource": "Volver a la fuente",
+    "previewHint": "Texto principal guardado de solo lectura. El nuevo borrador permanece en esta marca y necesita su propia revisión humana.",
+    "material": "Texto guardado",
+    "instructions": "Instrucciones",
+    "channelUnavailable": "Canal no disponible — desmarca esta selección",
+    "loading": "Cargando la fuente guardada…",
+    "refresh": "Actualizar vista guardada",
+    "generate": "Generar",
+    "generating": "Generando…",
+    "retry": "Reintentar",
+    "openRun": "Abrir ejecución",
+    "cancel": "Cancelar",
+    "confirmTitle": "¿Generar un nuevo borrador?",
+    "confirmBody": "Se creará un nuevo borrador de IA con adaptación del texto para cada canal seleccionado. Las llamadas al proveedor, incluidos los reintentos normales, pueden generar cargos con tu clave; los precios pueden ser desconocidos. No aprueba, programa ni publica nada.",
+    "consent": "Acepto iniciar esta generación de pago con mi clave del proveedor.",
+    "uncertain": "El resultado de la solicitud es desconocido. Reintentar comprueba la misma solicitud confirmada sin crear otra operación. Las opciones permanecen bloqueadas hasta conocer el resultado.",
+    "unsavedTitle": "¿Usar la fuente guardada?",
+    "unsavedBody": "Este editor tiene cambios sin guardar. Guárdalos antes de reutilizar, o descártalos explícitamente y usa el último texto principal guardado. Aquí no comienza ninguna generación.",
+    "discard": "Descartar cambios",
+    "save": "Guardar y continuar",
+    "saving": "Guardando…",
+    "saveFailed": "Los cambios no se guardaron. Corrige el error o descártalos explícitamente.",
+    "retryRedacted": "La fuente se borró. Un nuevo reintento no puede copiar su texto.",
+    "retryChannelUnavailable": "Un canal de esta ejecución no está disponible. Restáuralo en esta marca antes de reintentar, o inicia una nueva reutilización desde una fuente accesible.",
+    "recovery": "Se desconoce el resultado de una generación ya confirmada. Reintentar envía exactamente la misma solicitud y clave. No hace falta una nueva vista previa ni consentimiento para recuperar la respuesta. La recuperación se conserva al navegar e iniciar sesión en esta pestaña; una recarga completa la borra."
   }
 }

@@ -1664,7 +1664,10 @@
     "retryChannelsGone": "This run's channels are gone; start a new post.",
     "retryNotRepeatable": "This run can no longer be re-sent as it was; start a new post.",
     "dismiss": "Dismiss",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "reuseDeleteRecovery": "Some reuse runs are still active. Open their receipts to cancel or wait, then explicitly try Delete again.",
+    "reuseDeleteRun": "Open related run {number}",
+    "reuseDeleteDisclosure": "Removing a source erases its retained input and checkpoints from related terminal runs. Independent generated drafts, their versions, publications and provider-held requests remain."
   },
   "Errors": {
     "client_review_role_required": "Only a workspace owner or admin can manage client review links.",
@@ -2871,5 +2874,40 @@
     "channelLabel": "Weekly plan channel: {channel}",
     "unavailableChannels": "Some selected channels are no longer available. Remove them from this edit and select active channels. The saved plan changes only after Save; started drafts keep the destinations selected when generation started.",
     "removeUnavailableChannels": "Remove unavailable channels"
+  },
+  "Reuse": {
+    "action": "Reuse as source",
+    "title": "Reuse as source",
+    "source": "Saved source",
+    "sourceLabel": "Reused from saved content",
+    "revision": "Revision {revision}",
+    "untitled": "Untitled post",
+    "unavailable": "Saved source unavailable",
+    "redacted": "Saved source removed; retained source evidence was erased.",
+    "backToSource": "Back to source",
+    "previewHint": "Read-only saved master. The new draft stays in this brand and needs its own human review.",
+    "material": "Saved material",
+    "instructions": "Instructions",
+    "channelUnavailable": "Channel unavailable — remove this selection",
+    "loading": "Loading saved source…",
+    "refresh": "Refresh saved preview",
+    "generate": "Generate",
+    "generating": "Generating…",
+    "retry": "Retry",
+    "openRun": "Open run",
+    "cancel": "Cancel",
+    "confirmTitle": "Generate one new draft?",
+    "confirmBody": "This creates one new AI draft with text adaptation for each selected channel. Provider calls, including ordinary retries, may incur BYOK charges; prices may be unknown. It does not approve, schedule or publish anything.",
+    "consent": "I agree to start this paid generation using my provider key.",
+    "uncertain": "The request outcome is unknown. Retry checks the same confirmed request; it does not create a new operation. Your choices are locked until the outcome is known.",
+    "unsavedTitle": "Use the saved source?",
+    "unsavedBody": "This editor has unsaved changes. Save them before reuse, or explicitly discard them and use the last saved master. No generation starts here.",
+    "discard": "Discard changes",
+    "save": "Save and continue",
+    "saving": "Saving…",
+    "saveFailed": "Changes were not saved. Stay here and correct the save error, or explicitly discard them.",
+    "retryRedacted": "This source was erased. A new retry cannot copy its material.",
+    "retryChannelUnavailable": "A channel from this run is unavailable. Restore it in this brand before retrying, or start a new reuse from an accessible source.",
+    "recovery": "A previously confirmed generation has an unknown outcome. Retry sends only that same request and key. No source preview or new consent is needed to recover its acknowledgement. This recovery is retained during navigation and sign-in within this tab; a full page reload clears it."
   }
 }

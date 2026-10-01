@@ -3,10 +3,13 @@
 import type {
   AdaptationProposal,
   ContentImagesState,
+  ContentReuseAttribution,
   DraftRevisionProposal,
   RichBody,
+  StoredRunInput,
 } from "@pubrick/shared";
 import {
+  CONTENT_REUSE_ELIGIBLE_STATUSES,
   contentUpdateSchema,
   hasOrganizationRole,
   isManualPlatform,
@@ -64,7 +67,6 @@ import {
   channelLabel as platformChannelLabel,
   platformName,
 } from "@/lib/platform";
-import type { RunInput } from "@/lib/runs";
 import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
 import { CoverRegenerate } from "./cover-regenerate";
@@ -72,6 +74,7 @@ import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
 import { InlineImages } from "./inline-images";
 import { PostCostReceipt } from "./post-cost-receipt";
+import { ReuseSourceAction } from "./reuse-source-action";
 import { RichMasterEditor } from "./rich-master-editor";
 import { hasRichApiSupport, richDocumentFromPlainText } from "./rich-master-flow";
 import { SourceStrip } from "./source-strip";
@@ -202,7 +205,8 @@ type ContentItem = {
    * for a hand-written draft. `RunInput` is the column's own schema, so this
    * screen and the api describe one shape rather than two.
    */
-  runInput: RunInput | null;
+  runInput: StoredRunInput | null;
+  internalSource?: ContentReuseAttribution | null;
 };
 
 function scheduledDeliveryFingerprint(item: ContentItem): string {
@@ -361,6 +365,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [actionError, setActionError] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [retractBusy, setRetractBusy] = useState(false);
+  const [deleteRecoveryRuns, setDeleteRecoveryRuns] = useState<readonly string[]>([]);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [blockTopicOpen, setBlockTopicOpen] = useState(false);
@@ -864,11 +869,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }, [refineBusy]);
 
   async function saveBody() {
-    if (bodySaveBusy) return;
+    if (bodySaveBusy) return false;
     setActionError(null);
     // An invalid TipTap update leaves the last valid document in state. Never
     // persist that older document as though it were the editor's visible text.
-    if (richSupported && richError !== null) return;
+    if (richSupported && richError !== null) return false;
     setBodySaveBusy(true);
     try {
       // Switching to the plain preview does not discard an unsaved rich edit.
@@ -886,7 +891,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         });
         if (!parsed.success || !parsed.data.richBody) {
           setRichError(t("richEditor.invalid"));
-          return;
+          return false;
         }
         const submittedRichBody = parsed.data.richBody;
         const saved = await api<ContentItem>(`/api/content/${id}`, {
@@ -924,8 +929,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         }
       }
       await reload();
+      return true;
     } catch (err) {
       handleError(err);
+      return false;
     } finally {
       setBodySaveBusy(false);
     }
@@ -969,7 +976,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function saveOverride(adaptationId: string) {
-    if (overrideSaveBusy[adaptationId]) return;
+    if (overrideSaveBusy[adaptationId]) return false;
     setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: true }));
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
@@ -1029,8 +1036,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       bodyBaselines.current[adaptationId] = persistedText;
       tagBaselines.current[adaptationId] = persisted.hashtags;
       ctaBaselines.current[adaptationId] = persisted.cta;
+      return true;
     } catch (err) {
       handleError(err);
+      return false;
     } finally {
       setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: false }));
     }
@@ -1316,11 +1325,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     if (!canManageDraft) return;
     setDeleteBusy(true);
     setActionError(null);
+    setDeleteRecoveryRuns([]);
     try {
       await apiVoid(`/api/content/${id}`, { method: "DELETE" });
       router.replace(`/${locale}/content`);
     } catch (err) {
-      closeDelete();
+      setDeleteOpen(false);
+      if (err instanceof ApiError) setDeleteRecoveryRuns(err.runIds);
       handleError(err);
       await reload();
     } finally {
@@ -1938,6 +1949,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
     });
 
+  const dirtyAdaptationIds = item.adaptations
+    .filter((adaptation) => {
+      const baselineBody =
+        bodyBaselines.current[adaptation.id] ??
+        (adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags));
+      const baselineTags = tagBaselines.current[adaptation.id] ?? adaptation.hashtags;
+      const baselineCta = ctaBaselines.current[adaptation.id] ?? adaptation.cta ?? "";
+      return (
+        (overrideDrafts[adaptation.id] ?? baselineBody) !== baselineBody ||
+        JSON.stringify(
+          normalizeHashtags((tagDrafts[adaptation.id] ?? baselineTags.join(", ")).split(",")),
+        ) !== JSON.stringify(baselineTags) ||
+        (ctaDrafts[adaptation.id] ?? baselineCta) !== baselineCta
+      );
+    })
+    .map((adaptation) => adaptation.id);
+
   return (
     <AppShell
       title={item.title || tc("untitled")}
@@ -2098,7 +2126,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         tabIndex={-1}
         className="mb-6 focus:outline-2 focus:outline-offset-2 focus:outline-accent"
       >
-        <SourceStrip input={item.runInput} />
+        {canManageDraft &&
+          (CONTENT_REUSE_ELIGIBLE_STATUSES as readonly string[]).includes(item.status) && (
+            <ReuseSourceAction
+              dirty={draftMoved || richDirty || dirtyAdaptationIds.length > 0}
+              busy={bodySaveBusy || Object.values(overrideSaveBusy).some(Boolean)}
+              save={async () => {
+                if ((draftMoved || richDirty) && !(await saveBody())) return false;
+                for (const adaptationId of dirtyAdaptationIds) {
+                  if (!(await saveOverride(adaptationId))) return false;
+                }
+                return true;
+              }}
+              navigate={() => router.push(`/${locale}/content/new?source=${item.id}`)}
+            />
+          )}
+        <SourceStrip input={item.runInput} internalSource={item.internalSource} />
         <PostCostReceipt contentItemId={item.id} />
         {item.linkPolicyWebsite && (
           <p className="mb-4 text-sm text-fg-secondary">
@@ -2709,6 +2752,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         button is disabled with the reason above it. Approve is untouched in
         both: it is the action that works here.
       */}
+      {deleteRecoveryRuns.length > 0 && (
+        <Card className="mb-6">
+          <p className="mb-3 text-sm text-fg-secondary">{tr("reuseDeleteRecovery")}</p>
+          <ul className="space-y-2">
+            {deleteRecoveryRuns.map((runId, index) => (
+              <li key={runId}>
+                <Link
+                  href={`/${locale}/content/runs/${runId}`}
+                  className="text-accent hover:underline"
+                >
+                  {tr("reuseDeleteRun", { number: index + 1 })}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       {canManageDraft &&
         item.topicId &&
         item.isSafeToDelete &&
@@ -2835,6 +2895,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           }
         >
           <p className="text-sm text-fg-secondary">{t("deleteBody")}</p>
+          <p className="mt-3 text-sm text-fg-secondary">{tr("reuseDeleteDisclosure")}</p>
         </Modal>
       )}
 

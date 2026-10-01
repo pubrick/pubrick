@@ -16,9 +16,9 @@ import {
   supportsInlineImages,
 } from "@pubrick/shared";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,8 @@ import {
   TranscriptImportError,
 } from "@/lib/transcript-import";
 
+import { SavedContentReuse } from "./saved-content-reuse";
+
 type Brand = { id: string; name: string };
 type Channel = { id: string; platform: string; name: string };
 type ContentItem = { id: string };
@@ -46,6 +48,23 @@ const FORM_ID = "new-content-form";
 const SOURCE_HELP_ID = "source-help";
 
 export default function NewContentPage() {
+  return (
+    <Suspense fallback={<div role="status" aria-busy="true" />}>
+      <NewContentMode />
+    </Suspense>
+  );
+}
+
+function NewContentMode() {
+  const source = useSearchParams().get("source");
+  return source !== null ? (
+    <SavedContentReuse key={source} sourceId={source} />
+  ) : (
+    <OrdinaryNewContent />
+  );
+}
+
+function OrdinaryNewContent() {
   const t = useTranslations("ContentNew");
   const tb = useTranslations("Brands");
   // See the queue screen: the api's refusal codes are read from here, which is
