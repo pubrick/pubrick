@@ -4,7 +4,9 @@ import {
   CONTENT_PAGE_SIZE,
   CONTENT_STATUSES,
   decodeContentCursor,
+  decodePublicContentCursorV2,
   encodeContentCursor,
+  encodePublicContentCursorV2,
   MAX_CONTENT_PAGE_SIZE,
 } from "@pubrick/shared";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -26,7 +28,7 @@ const CURSOR_AT = sql<string>`to_char(${schema.contentItems.createdAt} at time z
 
 @Injectable()
 export class PublicContentRepository {
-  async list(orgId: string, status?: string, rawLimit?: string, rawCursor?: string) {
+  async list(orgId: string, status?: string, rawLimit?: string, rawCursor?: string, v2 = false) {
     if (status !== undefined && !(CONTENT_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException("Invalid content status");
     }
@@ -34,7 +36,12 @@ export class PublicContentRepository {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CONTENT_PAGE_SIZE) {
       throw new BadRequestException("Invalid page limit");
     }
-    const cursor = rawCursor === undefined ? null : decodeContentCursor(rawCursor);
+    const cursor =
+      rawCursor === undefined
+        ? null
+        : v2
+          ? decodePublicContentCursorV2(rawCursor)
+          : decodeContentCursor(rawCursor);
     if (rawCursor !== undefined && cursor === null) {
       throw new BadRequestException("Invalid cursor");
     }
@@ -44,7 +51,7 @@ export class PublicContentRepository {
       .where(
         and(
           eq(schema.contentItems.orgId, orgId),
-          inArray(schema.contentItems.origin, ["ai", "human"]),
+          v2 ? undefined : inArray(schema.contentItems.origin, ["ai", "human"]),
           status
             ? eq(schema.contentItems.status, status as (typeof CONTENT_STATUSES)[number])
             : undefined,
@@ -61,12 +68,15 @@ export class PublicContentRepository {
       rows: page.map(({ cursorAt: _cursorAt, ...item }) => item),
       nextCursor:
         rows.length > limit && last
-          ? encodeContentCursor({ createdAt: last.cursorAt, id: last.id })
+          ? (v2 ? encodePublicContentCursorV2 : encodeContentCursor)({
+              createdAt: last.cursorAt,
+              id: last.id,
+            })
           : null,
     };
   }
 
-  async get(orgId: string, id: string) {
+  async get(orgId: string, id: string, v2 = false) {
     const [item] = await db
       .select(DETAIL_COLUMNS)
       .from(schema.contentItems)
@@ -74,7 +84,7 @@ export class PublicContentRepository {
         and(
           eq(schema.contentItems.orgId, orgId),
           eq(schema.contentItems.id, id),
-          inArray(schema.contentItems.origin, ["ai", "human"]),
+          v2 ? undefined : inArray(schema.contentItems.origin, ["ai", "human"]),
         ),
       )
       .limit(1);

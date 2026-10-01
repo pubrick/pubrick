@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { ContentModule } from "../content/content.module";
+import { RunsModule } from "../runs/runs.module";
 import { ApiKeyGuard } from "./api-key.guard";
 import { ApiKeysController } from "./api-keys.controller";
 import { ApiKeysRepository } from "./api-keys.repository";
@@ -7,10 +9,23 @@ import { PublicContentController } from "./public-content.controller";
 import { PublicContentRepository } from "./public-content.repository";
 import { PublicPublicationController } from "./public-publication.controller";
 import { PublicPublicationRepository } from "./public-publication.repository";
+import { PublicRateLimitGuard, PublicRateLimitService } from "./public-rate-limit.service";
+import { PublicContentV2Controller, PublicRunsV2Controller } from "./public-v2.controller";
+import { PublicWriteRepository } from "./public-write.repository";
 
 @Module({
-  controllers: [ApiKeysController, PublicContentController, PublicPublicationController],
+  imports: [ContentModule, RunsModule],
+  controllers: [
+    PublicContentV2Controller,
+    PublicRunsV2Controller,
+    ApiKeysController,
+    PublicContentController,
+    PublicPublicationController,
+  ],
   providers: [
+    PublicWriteRepository,
+    PublicRateLimitService,
+    PublicRateLimitGuard,
     ApiKeysRepository,
     ApiKeysManagerGuard,
     ApiKeyGuard,

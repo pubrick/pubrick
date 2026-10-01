@@ -9,6 +9,10 @@ export const env = parseEnv({
   PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
   ...mailEnvironmentSchema.shape,
   DATABASE_URL: z.string().min(1),
+  PUBLIC_API_MAX_OPERATION_RECORDS: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.coerce.number().int().min(1).max(1_000_000).default(100_000),
+  ),
   API_PORT: z.coerce.number().default(3001),
   BETTER_AUTH_SECRET: z.string().min(16),
   /**

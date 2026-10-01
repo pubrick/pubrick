@@ -65,6 +65,7 @@ import {
   type RefineRequest,
   type RefineVerb,
   type RichBody,
+  RUN_ADMISSION_LOCK_NAMESPACE,
   type RunInput,
   refusalBody,
   replaceHashtags,
@@ -79,13 +80,15 @@ import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "dri
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
-import { badRequest, conflict, notFound } from "../api-error";
+import { badRequest, conflict, forbidden, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
 import { MediaImageService } from "../media/media-image.service";
 import { holdOrganization } from "../organization-lock";
 import { QueueService } from "../queue/queue.service";
+import { currentRequestAuthority } from "../request-authority";
+import { authorizeRequestActor } from "../request-authority-admission";
 import { ClaimCorrectionCaller } from "./claim-correction.caller";
 import { CLAIM_CORRECTION_STEP } from "./claim-correction.step";
 import { assertImagesFitBody } from "./content-images.repository";
@@ -2112,7 +2115,41 @@ export class ContentRepository {
   }
 
   async create(orgId: string, data: ContentCreate) {
-    const channels = await db
+    const id = await db.transaction((tx) => this.createInTx(tx, orgId, data));
+    return this.get(orgId, id);
+  }
+
+  /** The public writer owns admission/replay locks and commits this result and audit together. */
+  async createInTx(tx: Tx, orgId: string, data: ContentCreate, external = false): Promise<string> {
+    if (currentRequestAuthority()?.kind === "api-key") {
+      if (!external)
+        throw forbidden("public_authority_revoked", "An explicit content operation is required");
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(${RUN_ADMISSION_LOCK_NAMESPACE},hashtext(${orgId}))`,
+      );
+      const [org] = await tx
+        .select({ id: schema.organization.id })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId))
+        .for("share");
+      if (
+        !org ||
+        !(await authorizeRequestActor(tx, orgId, {
+          operation: "content:create",
+          brandId: data.brandId,
+          channelIds: data.channelIds,
+        }))
+      )
+        throw forbidden("public_authority_revoked", "Content authority changed");
+    }
+    await holdOrganization(tx, orgId);
+    const [brand] = await tx
+      .select({ id: schema.brands.id })
+      .from(schema.brands)
+      .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, data.brandId)))
+      .for("key share");
+    if (!brand) throw notFound("brand_not_found", "Brand not found");
+    const channels = await tx
       .select({ id: schema.channels.id })
       .from(schema.channels)
       .where(
@@ -2121,26 +2158,39 @@ export class ContentRepository {
           eq(schema.channels.brandId, data.brandId),
           inArray(schema.channels.id, data.channelIds),
         ),
-      );
-    if (channels.length !== data.channelIds.length) {
+      )
+      .orderBy(asc(schema.channels.id))
+      .for("key share");
+    if (channels.length !== data.channelIds.length)
       throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
-    }
-
-    const id = await db.transaction(async (tx) => {
-      const inserted = await tx
-        .insert(schema.contentItems)
-        .values({ orgId, brandId: data.brandId, title: data.title ?? null, body: data.body })
-        .returning({ id: schema.contentItems.id });
-      const itemId = inserted[0]?.id as string;
-      await tx
-        .insert(schema.adaptations)
-        .values(
-          channels.map((channel) => ({ orgId, contentItemId: itemId, channelId: channel.id })),
-        );
-      return itemId;
-    });
-
-    return this.get(orgId, id);
+    const [item] = await tx
+      .insert(schema.contentItems)
+      .values({
+        orgId,
+        brandId: data.brandId,
+        title: data.title ?? null,
+        body: data.body,
+        ...(external ? { origin: "external" as const, requiresImportedReview: true } : {}),
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!item) throw new Error("Content insertion returned no row");
+    await tx.insert(schema.adaptations).values(
+      channels.map((channel) => ({
+        orgId,
+        contentItemId: item.id,
+        channelId: channel.id,
+        ...(external ? { origin: "external" as const } : {}),
+      })),
+    );
+    if (external)
+      await tx.insert(schema.contentVersions).values({
+        orgId,
+        contentItemId: item.id,
+        body: data.body,
+        origin: "external",
+        scope: "full",
+      });
+    return item.id;
   }
 
   /**

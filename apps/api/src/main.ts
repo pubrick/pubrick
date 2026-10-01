@@ -6,6 +6,7 @@ import { AppModule } from "./app.module";
 import { installBillingWebhookParser } from "./billing/webhook-parser";
 import { pool } from "./db";
 import { env } from "./env";
+import { installPublicWriteParser } from "./public-api/public-write-parser";
 import { closeApi } from "./shutdown";
 
 async function bootstrap(): Promise<void> {
@@ -15,6 +16,7 @@ async function bootstrap(): Promise<void> {
     rawBody: true,
   });
   installBillingWebhookParser(app);
+  installPublicWriteParser(app);
   app.setGlobalPrefix("api");
   await app.listen(env.API_PORT);
   console.log(`api listening on :${env.API_PORT}`);
