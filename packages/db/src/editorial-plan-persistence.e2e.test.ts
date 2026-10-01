@@ -738,6 +738,93 @@ describe.skipIf(!url)("transactional weekly editorial persistence", () => {
       replannedCount: 0,
     });
   });
+  it("refuses a suspended occurrence with otherwise valid consent and dispatch links", async () => {
+    const f = await enabledFixture();
+    const first = (await occurrences(f))[0];
+    if (!first?.slotId) throw new Error("Missing slot");
+    const slotId = first.slotId;
+    expect(await getPlan(f)).toMatchObject({
+      enabled: true,
+      removedAt: null,
+      revision: 2,
+      consentedRevision: 2,
+      consentVersion: PAID_GENERATION_CONSENT_VERSION,
+    });
+    expect(first).toMatchObject({
+      state: "planned",
+      reason: null,
+      planRevision: 2,
+      consentedRevision: 2,
+      consentVersion: PAID_GENERATION_CONSENT_VERSION,
+      dispatchedAt: null,
+      runId: null,
+    });
+    const [run] = await connection.db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: f.orgId,
+        brandId: f.brandId,
+        input: { kind: "brief", text: first.brief, channelIds: first.channelIds },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!run) throw new Error("Missing run");
+    // Only the state is wrong: leave the enabled plan, consent, live slot and owned run intact.
+    await connection.db
+      .update(schema.editorialPlanOccurrences)
+      .set({ state: "suspended" })
+      .where(
+        and(
+          eq(schema.editorialPlanOccurrences.orgId, f.orgId),
+          eq(schema.editorialPlanOccurrences.brandId, f.brandId),
+          eq(schema.editorialPlanOccurrences.planId, f.plan.id),
+          eq(schema.editorialPlanOccurrences.id, first.id),
+        ),
+      );
+    const suspended = (await occurrences(f))[0];
+    expect(suspended).toEqual({ ...first, state: "suspended" });
+    const slotBefore = await connection.pool.query(
+      "select org_id,brand_id,recurring_occurrence_id,run_id from calendar_slots where id=$1",
+      [slotId],
+    );
+    expect(slotBefore.rows[0]).toEqual({
+      org_id: f.orgId,
+      brand_id: f.brandId,
+      recurring_occurrence_id: first.id,
+      run_id: null,
+    });
+    await expect(
+      connection.db.transaction(async (tx) => {
+        await lockEditorialPlanParents(f.orgId, tx, f.brandId);
+        await recordEditorialPlanDispatch(
+          f.orgId,
+          tx,
+          f.brandId,
+          f.plan.id,
+          first.id,
+          slotId,
+          run.id,
+          clock,
+        );
+      }),
+    ).rejects.toMatchObject({ code: "not_dispatchable" });
+    expect((await occurrences(f))[0]).toEqual(suspended);
+    expect(
+      (
+        await connection.pool.query(
+          "select org_id,brand_id,recurring_occurrence_id,run_id from calendar_slots where id=$1",
+          [slotId],
+        )
+      ).rows,
+    ).toEqual(slotBefore.rows);
+    expect(
+      (
+        await connection.pool.query(
+          "select org_id,brand_id,status from pipeline_runs where id=$1",
+          [run.id],
+        )
+      ).rows,
+    ).toEqual([{ org_id: f.orgId, brand_id: f.brandId, status: "queued" }]);
+  });
   it("refuses a run owned by another brand before durable dispatch attribution", async () => {
     const f = await enabledFixture();
     const other = await fixture();
