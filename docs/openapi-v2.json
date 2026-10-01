@@ -1,0 +1,2224 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Pubrick scoped draft write API",
+    "version": "2.0.0",
+    "description": "Draft intake and explicitly consented BYOK generation. Human review remains required before publication. JSON Schema cannot express every refinement; shared DTOs and docs/public-api.md define cross-field rules.",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "url": "https://github.com/pubrick/pubrick/blob/main/LICENSE"
+    }
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "organizationKey": []
+    }
+  ],
+  "paths": {
+    "/api/v2/content": {
+      "post": {
+        "operationId": "createDraft",
+        "description": "Requires content:create. One MiB JSON limit before parsing. Stable key and identical normalized payload replay ORIGINAL acceptance even if current result state changed. Writes limited to 30/min/key and60/min/organization including replays; paid consent required for generation. No publication or editor-open side effect.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Public projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "const": 401
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["statusCode", "message"]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Original result deleted; operation tombstone retained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is bounded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listContentV2",
+        "description": "Requires content:read. External origins included; cursor audience is v2.content. Reading is not editorial review.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "approved",
+                "partially_published",
+                "rejected",
+                "published",
+                "failed",
+                "archived"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "const": 401
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["statusCode", "message"]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Original result deleted; operation tombstone retained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is bounded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/runs": {
+      "post": {
+        "operationId": "createGeneration",
+        "description": "Requires generation:create. One MiB JSON limit before parsing. Stable key and identical normalized payload replay ORIGINAL acceptance even if current result state changed. Writes limited to 30/min/key and60/min/organization including replays; paid consent required for generation. No publication or editor-open side effect.",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Public projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "const": 401
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["statusCode", "message"]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Original result deleted; operation tombstone retained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is bounded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/content/{id}": {
+      "get": {
+        "operationId": "getContentV2",
+        "description": "Requires content:read. No private inputs, credentials or provider failures. Run polling limited to60/min/key and120/min/organization. Null-priced or unrecorded calls make aggregate cost unknown.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "const": 401
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["statusCode", "message"]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Original result deleted; operation tombstone retained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is bounded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/runs/{id}": {
+      "get": {
+        "operationId": "getGeneration",
+        "description": "Requires generation:create. No private inputs, credentials or provider failures. Run polling limited to60/min/key and120/min/organization. Null-priced or unrecorded calls make aggregate cost unknown.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bearer key is missing, revoked or has the wrong exact scope. Existing key guard returns a sanitized Nest authentication refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer",
+                      "const": 401
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["statusCode", "message"]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Original result deleted; operation tombstone retained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited; Retry-After is bounded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Closed sanitized refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "invalid_request",
+                        "forbidden",
+                        "not_found",
+                        "idempotency_conflict",
+                        "public_result_gone",
+                        "public_operation_capacity",
+                        "public_rate_limited",
+                        "public_request_unavailable",
+                        "subscription_required",
+                        "billing_identity_mismatch",
+                        "resource_limit",
+                        "ai_default_key_missing",
+                        "ai_credential_not_found",
+                        "channels_not_in_brand",
+                        "run_limit_reached",
+                        "media_generation_limit"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "organizationKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "One exact organization-wide scope per key; no scope hierarchy."
+      }
+    },
+    "schemas": {
+      "DraftCreate": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "body": {
+            "type": "string"
+          },
+          "channelIds": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        },
+        "required": ["brandId", "body", "channelIds"],
+        "additionalProperties": false
+      },
+      "DraftAccepted": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "const": "draft"
+          },
+          "origin": {
+            "type": "string",
+            "const": "external"
+          },
+          "requiresReview": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": ["id", "status", "origin", "requiresReview"],
+        "additionalProperties": false
+      },
+      "RunCreate": {
+        "type": "object",
+        "properties": {
+          "brandId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "social_post",
+              "news_digest",
+              "repost",
+              "product_update",
+              "expert_article",
+              "comparison",
+              "case_study",
+              "educational"
+            ]
+          },
+          "generateCover": {
+            "type": "boolean"
+          },
+          "generateInlineImages": {
+            "type": "boolean"
+          },
+          "useEditorialFeedback": {
+            "type": "boolean"
+          },
+          "seoKeywords": {
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 60
+            }
+          },
+          "brief": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "material": {
+            "type": "string"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "channelIds": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "allowPaidGeneration": {
+            "type": "boolean",
+            "const": true
+          },
+          "consentVersion": {
+            "type": "string",
+            "const": "byok-paid-generation-v1"
+          }
+        },
+        "required": ["brandId", "channelIds", "allowPaidGeneration", "consentVersion"],
+        "additionalProperties": false
+      },
+      "RunAccepted": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued"
+          }
+        },
+        "required": ["id", "status"],
+        "additionalProperties": false
+      },
+      "RunStatus": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed", "cancelled"]
+          },
+          "contentItemId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["generation_failed", "cancelled"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "known"
+                  },
+                  "amountUsd": {
+                    "type": "string",
+                    "pattern": "^\\d+(?:\\.\\d+)?$"
+                  }
+                },
+                "required": ["status", "amountUsd"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "unknown"
+                  }
+                },
+                "required": ["status"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["id", "status", "contentItemId", "error", "cost"],
+        "additionalProperties": false
+      },
+      "ContentSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "approved",
+              "partially_published",
+              "rejected",
+              "published",
+              "failed",
+              "archived"
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["ai", "human", "external"]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          }
+        },
+        "required": ["id", "brandId", "title", "status", "origin", "createdAt", "updatedAt"],
+        "additionalProperties": false
+      },
+      "ContentDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "brandId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "approved",
+              "partially_published",
+              "rejected",
+              "published",
+              "failed",
+              "archived"
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "enum": ["ai", "human", "external"]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "brandId",
+          "title",
+          "status",
+          "origin",
+          "createdAt",
+          "updatedAt",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "ContentList": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "brandId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "title": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "approved",
+                    "partially_published",
+                    "rejected",
+                    "published",
+                    "failed",
+                    "archived"
+                  ]
+                },
+                "origin": {
+                  "type": "string",
+                  "enum": ["ai", "human", "external"]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                }
+              },
+              "required": ["id", "brandId", "title", "status", "origin", "createdAt", "updatedAt"],
+              "additionalProperties": false
+            }
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["rows", "nextCursor"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

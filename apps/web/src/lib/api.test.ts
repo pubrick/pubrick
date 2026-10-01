@@ -587,3 +587,34 @@ it("retains hosted subscription refusal codes at the 403 transport boundary", as
   if (!(failure instanceof ApiError)) throw new Error("Expected a coded API refusal");
   expect(failure.code).toBe("subscription_required");
 });
+
+it.each([
+  [409, "idempotency_conflict"],
+  [410, "public_result_gone"],
+  [409, "public_operation_capacity"],
+  [429, "public_rate_limited"],
+  [503, "public_request_unavailable"],
+] as const)(
+  "localizes public write refusal %s/%s instead of server prose",
+  async (status, code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(status, { code, message: "Operator prose" })),
+    );
+    const failure = await api("/api/v2/content").catch((error) => error);
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure.code).toBe(code);
+    for (const [locale, messages] of Object.entries({ en, es, ru, pt })) {
+      const translator = createTranslator({
+        locale,
+        messages,
+        namespace: "Errors",
+      }) as unknown as ErrorTranslator;
+      const text = errorMessage(failure, "fallback", translator);
+      expect(text).not.toBe("Operator prose");
+      expect(text).not.toBe("fallback");
+      expect(text).not.toMatch(/^Errors\./);
+      if (locale !== "en") expect(text).not.toBe(errorMessage(failure, "fallback", english));
+    }
+  },
+);

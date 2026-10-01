@@ -3,7 +3,7 @@
   "info": {
     "title": "Pubrick public read API",
     "version": "1.0.0",
-    "description": "Organization-scoped content and publication reads. A human review remains required before publication. See docs/public-api.md for key management and pagination.",
+    "description": "Organization-scoped content and publication reads. A human review remains required before publication. See docs/public-api.md for key management and pagination. V1 supports ai/human representations only; externally supplied drafts are omitted from lists and return 404 on detail reads. Use v2 for imported drafts; publication reads remain v1.",
     "license": {
       "name": "AGPL-3.0-only",
       "url": "https://github.com/pubrick/pubrick/blob/main/LICENSE"

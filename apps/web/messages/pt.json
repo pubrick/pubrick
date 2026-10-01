@@ -1350,7 +1350,7 @@
     "searchHint": "Ligue uma chave Yandex Search API para que os editores consultem fontes web sobre afirmações atuais.",
     "searchOpen": "Gerenciar chave de pesquisa",
     "publicApiTitle": "API pública",
-    "publicApiHint": "Crie chaves somente de leitura para suas ferramentas e integrações.",
+    "publicApiHint": "Crie chaves com permissões para ler, importar rascunhos ou gerar com consentimento explícito.",
     "publicApiOpen": "Gerenciar chaves de API",
     "webhooksTitle": "Webhooks de saída",
     "webhooksHint": "Envie resultados de publicação para suas ferramentas.",
@@ -1523,7 +1523,7 @@
   "ApiKeys": {
     "title": "Chaves de API",
     "back": "Voltar às configurações",
-    "hint": "Escolha uma permissão de leitura para cada chave da API pública. Só proprietários e administradores podem gerenciá-las.",
+    "hint": "Escolha uma permissão para todo o espaço por chave. Somente proprietários e administradores podem gerenciar chaves.",
     "limit": "{count} de {max} chaves ativas",
     "add": "Adicionar",
     "retry": "Tentar novamente",
@@ -1538,7 +1538,7 @@
     "scope": "Permissão",
     "contentRead": "Ler conteúdo",
     "publicationsRead": "Ler publicações",
-    "scopeHint": "Esta chave não pode publicar, editar ou aprovar conteúdo.",
+    "scopeHint": "Cada chave tem uma permissão para todo o espaço, incluindo todas as marcas. Somente proprietários e administradores podem emitir chaves. As chaves não podem aprovar nem publicar.",
     "invalidName": "Digite um nome com 1 a 80 caracteres.",
     "oneTimeHint": "Copie esta chave agora. O Pubrick não a mostrará novamente após fechar esta janela.",
     "secretLabel": "Nova chave de API",
@@ -1550,7 +1550,13 @@
     "cancel": "Cancelar",
     "revokeTitle": "Revogar esta chave de API?",
     "revokeHint": "As ferramentas que usam esta chave perderão o acesso imediatamente. Esta ação não pode ser desfeita.",
-    "genericError": "Não foi possível carregar ou alterar as chaves de API. Tente novamente."
+    "genericError": "Não foi possível carregar ou alterar as chaves de API. Tente novamente.",
+    "contentCreate": "Criar rascunhos",
+    "generationCreate": "Iniciar geração",
+    "readScopeHint": "Acesso somente para leitura. Ler pela API não conta como revisão editorial.",
+    "contentCreateHint": "Permite importar rascunhos. Um editor precisa abrir cada rascunho importado antes de aprovar. Use outra chave content:read para ler os resultados.",
+    "generationCreateHint": "Permite geração BYOK paga e consulta de status. O custo do provedor pode ser desconhecido; uma estimativa não limita os gastos. Cada solicitação exige consentimento explícito de pagamento. Use outra chave content:read para ler os resultados.",
+    "queuedRunsHint": "Revogar uma chave bloqueia futuras solicitações; não cancela a geração já na fila."
   },
   "Language": {
     "title": "Idioma",
@@ -1855,7 +1861,12 @@
     "subscription_required": "É necessária uma assinatura ativa. Abra Configurações para definir a assinatura do espaço.",
     "billing_identity_mismatch": "A conta de cobrança salva não corresponde a esta instância. Contate o administrador.",
     "resource_limit": "O limite de recursos do espaço foi atingido. Revise a assinatura em Configurações.",
-    "unread_imported_draft": "Abra esta publicação importada no editor antes de aprová-la."
+    "unread_imported_draft": "Abra esta publicação importada no editor antes de aprová-la.",
+    "idempotency_conflict": "Esta chave de idempotência pertence a outra solicitação. Repita os dados originais.",
+    "public_result_gone": "O resultado original foi excluído. Esta operação não pode criá-lo novamente.",
+    "public_operation_capacity": "Este espaço atingiu seu limite total de operações API. Contate o operador.",
+    "public_rate_limited": "Muitas solicitações API. Aguarde e repita com a mesma chave de idempotência e os mesmos dados.",
+    "public_request_unavailable": "A admissão de solicitações API está indisponível. Tente mais tarde com a mesma chave e os mesmos dados."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",

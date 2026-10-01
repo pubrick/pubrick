@@ -257,8 +257,19 @@ export default function ApiKeysPage() {
             >
               <option value="content:read">{t("contentRead")}</option>
               <option value="publications:read">{t("publicationsRead")}</option>
+              <option value="content:create">{t("contentCreate")}</option>
+              <option value="generation:create">{t("generationCreate")}</option>
             </Select>
             <p className="text-sm text-fg-tertiary">{t("scopeHint")}</p>
+            <p className="text-sm text-fg-secondary" role="status">
+              {t(
+                scope === "generation:create"
+                  ? "generationCreateHint"
+                  : scope === "content:create"
+                    ? "contentCreateHint"
+                    : "readScopeHint",
+              )}
+            </p>
           </form>
         )}
       </Modal>
@@ -278,6 +289,7 @@ export default function ApiKeysPage() {
         }
       >
         <p className="text-sm text-fg-secondary">{t("revokeHint")}</p>
+        <p className="mt-3 text-sm text-fg-secondary">{t("queuedRunsHint")}</p>
       </Modal>
     </AppShell>
   );

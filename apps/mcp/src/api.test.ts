@@ -169,6 +169,7 @@ describe("configuration", () => {
     expect(loadConfig(env)).toEqual({
       baseUrl: validateBaseUrl(env.PUBRICK_API_BASE_URL),
       apiKey: key,
+      apiVersion: "v1",
     });
     expect(
       loadConfig({ ...env, PUBRICK_PUBLICATIONS_API_KEY: publicationKey }).publicationApiKey,

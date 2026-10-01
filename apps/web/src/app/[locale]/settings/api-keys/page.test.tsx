@@ -102,4 +102,43 @@ describe("API key settings", () => {
       scope: "publications:read",
     });
   });
+  it.each(["content:create", "generation:create"] as const)(
+    "issues an explicit %s scope and explains its consequences",
+    async (scope) => {
+      const user = userEvent.setup();
+      request.mockImplementation(async (path, init) => {
+        if (path === "/api/api-keys" && !init) return [];
+        if (init?.method === "POST")
+          return {
+            id: keyId,
+            name: "Writer",
+            prefix: "fixture",
+            scope,
+            key,
+            createdAt: "2026-10-01T00:00:00.000Z",
+            revokedAt: null,
+          };
+        throw new Error("Unexpected request");
+      });
+      render(<ApiKeysPage />);
+      await screen.findByText("No API keys yet");
+      await user.click(screen.getByRole("button", { name: "Add" }));
+      const dialog = screen.getByRole("dialog", { name: "Add API key" });
+      await user.type(within(dialog).getByLabelText("Name"), "Writer");
+      await user.selectOptions(within(dialog).getByLabelText("Scope"), scope);
+      expect(within(dialog).getByRole("status")).toHaveTextContent(
+        scope === "generation:create"
+          ? "Each request requires explicit paid consent"
+          : "A human editor must open",
+      );
+      expect(within(dialog).getByText(/entire workspace/)).toBeInTheDocument();
+      await user.click(within(dialog).getByRole("button", { name: "Add" }));
+      const payload = JSON.parse(
+        String(request.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body),
+      );
+      expect(payload).toEqual({ name: "Writer", scope });
+      expect(apiKeyCreateSchema.parse(payload)).toEqual(payload);
+      expect(await screen.findByText(key)).toBeInTheDocument();
+    },
+  );
 });

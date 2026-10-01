@@ -28,6 +28,9 @@ describe("stdio MCP entry", () => {
   it("fails closed without a key and writes no non-protocol stdout", async () => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      PUBRICK_API_VERSION: "v1",
+      PUBRICK_CONTENT_CREATE_API_KEY: undefined,
+      PUBRICK_GENERATION_API_KEY: undefined,
       PUBRICK_API_BASE_URL: "https://pubrick.example",
     };
     delete env.PUBRICK_API_KEY;
@@ -81,6 +84,9 @@ describe("stdio MCP entry", () => {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          PUBRICK_API_VERSION: "v1",
+          PUBRICK_CONTENT_CREATE_API_KEY: undefined,
+          PUBRICK_GENERATION_API_KEY: undefined,
           PUBRICK_API_BASE_URL: `http://127.0.0.1:${address.port}`,
           PUBRICK_API_KEY: key,
           PUBRICK_PUBLICATIONS_API_KEY: undefined,
@@ -196,6 +202,9 @@ describe("stdio MCP entry", () => {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          PUBRICK_API_VERSION: "v1",
+          PUBRICK_CONTENT_CREATE_API_KEY: undefined,
+          PUBRICK_GENERATION_API_KEY: undefined,
           PUBRICK_API_BASE_URL: `http://127.0.0.1:${address.port}`,
           PUBRICK_API_KEY: key,
           PUBRICK_PUBLICATIONS_API_KEY: publicationKey,
@@ -287,6 +296,9 @@ describe("stdio MCP entry", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        PUBRICK_API_VERSION: "v1",
+        PUBRICK_CONTENT_CREATE_API_KEY: undefined,
+        PUBRICK_GENERATION_API_KEY: undefined,
         PUBRICK_API_BASE_URL: "https://pubrick.example",
         PUBRICK_API_KEY: key,
         PUBRICK_PUBLICATIONS_API_KEY: badKey,

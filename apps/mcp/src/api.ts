@@ -1,9 +1,22 @@
 import {
   CONTENT_STATUSES,
+  idempotencyKeySchema,
   PUBLICATION_OPERATION_FILTERS,
   type PublicationOperationFilter,
+  type PublicContentDetailV2,
+  type PublicContentSummaryV2,
+  type PublicDraftCreate,
   type PublicPublication,
+  type PublicRunCreate,
+  publicContentDetailV2Schema,
+  publicContentListQuerySchema,
+  publicContentListV2Schema,
+  publicDraftCreateResultSchema,
+  publicDraftCreateSchema,
   publicPublicationSchema,
+  publicRunCreateResultSchema,
+  publicRunCreateSchema,
+  publicRunStatusSchema,
 } from "@pubrick/shared";
 import { z } from "zod";
 
@@ -75,6 +88,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
   baseUrl: URL;
   apiKey: string;
   publicationApiKey?: string;
+  apiVersion: "v1" | "v2";
+  contentCreateApiKey?: string;
+  generationApiKey?: string;
 } {
   if (!env.PUBRICK_API_BASE_URL) {
     throw new PublicApiError("PUBRICK_API_BASE_URL is required.");
@@ -88,7 +104,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
   if (publicationApiKey !== undefined && !/^[A-Za-z0-9._~-]+$/.test(publicationApiKey)) {
     throw new PublicApiError("PUBRICK_PUBLICATIONS_API_KEY must be a single-line Bearer key.");
   }
-  return { baseUrl, apiKey, ...(publicationApiKey === undefined ? {} : { publicationApiKey }) };
+  const apiVersion = env.PUBRICK_API_VERSION ?? "v1";
+  if (apiVersion !== "v1" && apiVersion !== "v2")
+    throw new PublicApiError("PUBRICK_API_VERSION must be v1 or v2.");
+  const contentCreateApiKey = env.PUBRICK_CONTENT_CREATE_API_KEY;
+  const generationApiKey = env.PUBRICK_GENERATION_API_KEY;
+  for (const [name, value] of [
+    ["PUBRICK_CONTENT_CREATE_API_KEY", contentCreateApiKey],
+    ["PUBRICK_GENERATION_API_KEY", generationApiKey],
+  ]) {
+    if (value !== undefined && !/^[A-Za-z0-9._~-]+$/.test(value))
+      throw new PublicApiError(`${name} must be a single-line Bearer key.`);
+    if (value !== undefined && apiVersion !== "v2")
+      throw new PublicApiError("Write keys require explicit PUBRICK_API_VERSION=v2.");
+  }
+  return {
+    baseUrl,
+    apiKey,
+    apiVersion,
+    ...(publicationApiKey === undefined ? {} : { publicationApiKey }),
+    ...(contentCreateApiKey === undefined ? {} : { contentCreateApiKey }),
+    ...(generationApiKey === undefined ? {} : { generationApiKey }),
+  };
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
@@ -189,25 +226,44 @@ function nextCursor(response: Response): string | null {
 }
 
 export function createPublicContentClient(
-  config: { baseUrl: URL; apiKey: string },
+  config: { baseUrl: URL; apiKey: string; apiVersion?: "v1" | "v2" },
   fetcher: typeof fetch = fetch,
 ) {
+  const version = config.apiVersion ?? "v1";
   return {
-    async list(options: ListOptions = {}): Promise<ListPage> {
+    async list(
+      options: ListOptions = {},
+    ): Promise<{ items: (ContentSummary | PublicContentSummaryV2)[]; nextCursor: string | null }> {
       const query = new URLSearchParams();
       if (options.status) query.set("status", options.status);
       if (options.limit !== undefined) query.set("limit", String(options.limit));
       if (options.cursor) query.set("cursor", options.cursor);
-      const response = await request(config, fetcher, "api/v1/content", query);
+      if (version === "v2" && !publicContentListQuerySchema.safeParse(options).success)
+        throw new PublicApiError("Invalid content list options.");
+      const response = await request(config, fetcher, `api/${version}/content`, query);
       const raw = await parseResponse(response);
+      if (version === "v2") {
+        const result = publicContentListV2Schema.safeParse(raw);
+        if (
+          !result.success ||
+          result.data.rows.length > 200 ||
+          (result.data.nextCursor?.length ?? 0) > 512
+        )
+          throw new PublicApiError("Pubrick returned an invalid content list.");
+        return { items: result.data.rows, nextCursor: result.data.nextCursor };
+      }
       const parsed = z.array(summarySchema).max(200).safeParse(raw);
       if (!parsed.success) throw new PublicApiError("Pubrick returned an invalid content list.");
       return { items: parsed.data, nextCursor: nextCursor(response) };
     },
-    async get(id: string): Promise<ContentDetail> {
-      const response = await request(config, fetcher, `api/v1/content/${encodeURIComponent(id)}`);
+    async get(id: string): Promise<ContentDetail | PublicContentDetailV2> {
+      const response = await request(
+        config,
+        fetcher,
+        `api/${version}/content/${encodeURIComponent(id)}`,
+      );
       const raw = await parseResponse(response);
-      const parsed = detailSchema.safeParse(raw);
+      const parsed = (version === "v2" ? publicContentDetailV2Schema : detailSchema).safeParse(raw);
       if (!parsed.success) throw new PublicApiError("Pubrick returned an invalid content item.");
       return parsed.data;
     },
@@ -235,6 +291,135 @@ export function createPublicPublicationClient(
       if (!parsed.success)
         throw new PublicApiError("Pubrick returned an invalid publication list.");
       return { items: parsed.data, nextCursor: nextCursor(response) };
+    },
+  };
+}
+
+const UNKNOWN_OUTCOME =
+  "The write outcome is unknown. Replay the exact same payload with the SAME idempotency key; do not create a new key.";
+type ClientConfig = { baseUrl: URL; apiKey: string };
+const WRITE_REFUSALS: Record<string, string> = {
+  idempotency_conflict:
+    "This idempotency key was used for a different payload. Restore the original payload.",
+  public_result_gone:
+    "The original result was deleted. This operation cannot create another result.",
+  public_operation_capacity:
+    "This workspace has reached its lifetime operation capacity. Contact the operator.",
+};
+async function writeRequest<T>(
+  config: ClientConfig,
+  fetcher: typeof fetch,
+  path: string,
+  body: unknown,
+  key: string,
+  schema: z.ZodType<T>,
+): Promise<T> {
+  if (!idempotencyKeySchema.safeParse(key).success)
+    throw new PublicApiError(
+      "Invalid idempotency key; use 8–128 ASCII letters, digits, periods, underscores or hyphens.",
+    );
+  const encoded = JSON.stringify(body);
+  if (Buffer.byteLength(encoded, "utf8") > 1024 * 1024)
+    throw new PublicApiError("Request exceeds the 1 MiB JSON limit.");
+  let response: Response;
+  try {
+    response = await fetcher(new URL(path, config.baseUrl), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: encoded,
+      redirect: "error",
+      credentials: "omit",
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    throw new PublicApiError(UNKNOWN_OUTCOME);
+  }
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403)
+      throw new PublicApiError(
+        "Pubrick denied the dedicated write key or operation. Check its scope and workspace.",
+      );
+    if (response.status === 429)
+      throw new PublicApiError(
+        "Pubrick is rate limiting requests. Retry later with the SAME idempotency key and payload.",
+      );
+    let raw: unknown;
+    try {
+      raw = await readBoundedJson(response);
+    } catch {
+      throw new PublicApiError(UNKNOWN_OUTCOME);
+    }
+    const code = raw && typeof raw === "object" && "code" in raw ? raw.code : undefined;
+    if (typeof code === "string" && WRITE_REFUSALS[code])
+      throw new PublicApiError(WRITE_REFUSALS[code]);
+    if (
+      response.status === 400 ||
+      response.status === 404 ||
+      response.status === 402 ||
+      response.status === 409
+    )
+      throw new PublicApiError(
+        "Pubrick refused the request. Check the input, targets, AI settings and workspace subscription before retrying with the SAME key and payload.",
+      );
+    throw new PublicApiError(UNKNOWN_OUTCOME);
+  }
+  try {
+    const parsed = schema.safeParse(await readBoundedJson(response));
+    if (!parsed.success) throw new PublicApiError(UNKNOWN_OUTCOME);
+    return parsed.data;
+  } catch {
+    throw new PublicApiError(UNKNOWN_OUTCOME);
+  }
+}
+export function createPublicDraftWriteClient(config: ClientConfig, fetcher: typeof fetch = fetch) {
+  return {
+    create(data: PublicDraftCreate, idempotencyKey: string) {
+      const parsed = publicDraftCreateSchema.safeParse(data);
+      if (!parsed.success) throw new PublicApiError("Invalid draft input.");
+      return writeRequest(
+        config,
+        fetcher,
+        "api/v2/content",
+        parsed.data,
+        idempotencyKey,
+        publicDraftCreateResultSchema,
+      );
+    },
+  };
+}
+export function createPublicGenerationClient(config: ClientConfig, fetcher: typeof fetch = fetch) {
+  return {
+    create(data: PublicRunCreate, idempotencyKey: string) {
+      const parsed = publicRunCreateSchema.safeParse(data);
+      if (!parsed.success)
+        throw new PublicApiError("Invalid generation input or explicit paid consent.");
+      return writeRequest(
+        config,
+        fetcher,
+        "api/v2/runs",
+        parsed.data,
+        idempotencyKey,
+        publicRunCreateResultSchema,
+      );
+    },
+    async get(id: string) {
+      if (!z.uuid().safeParse(id).success) throw new PublicApiError("Invalid run UUID.");
+      const response = await request(config, fetcher, `api/v2/runs/${encodeURIComponent(id)}`);
+      if (response.status === 401 || response.status === 403)
+        throw new PublicApiError(
+          "Pubrick denied the generation key. Check its generation:create scope.",
+        );
+      if (response.status === 404)
+        throw new PublicApiError("Run was not found in this key's organization.");
+      const parsed = publicRunStatusSchema.safeParse(await parseResponse(response));
+      if (!parsed.success) throw new PublicApiError("Pubrick returned an invalid run status.");
+      return parsed.data;
     },
   };
 }

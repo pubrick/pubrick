@@ -1350,7 +1350,7 @@
     "searchHint": "Connect a Yandex Search API key so editors can inspect web evidence for time-sensitive claims.",
     "searchOpen": "Manage search key",
     "publicApiTitle": "Public API",
-    "publicApiHint": "Create read-only keys for your own tools and integrations.",
+    "publicApiHint": "Create scoped keys for reads, draft intake or consented generation.",
     "publicApiOpen": "Manage API keys",
     "webhooksTitle": "Outgoing webhooks",
     "webhooksHint": "Send publication outcomes to your own tools.",
@@ -1523,7 +1523,7 @@
   "ApiKeys": {
     "title": "API keys",
     "back": "Back to settings",
-    "hint": "Choose a read scope for each public API key. Only owners and admins can manage keys.",
+    "hint": "Choose one workspace-wide scope per key. Only owners and administrators can manage keys.",
     "limit": "{count} of {max} active keys",
     "add": "Add",
     "retry": "Retry",
@@ -1538,7 +1538,7 @@
     "scope": "Scope",
     "contentRead": "Read content",
     "publicationsRead": "Read publications",
-    "scopeHint": "This key cannot publish, edit, or approve content.",
+    "scopeHint": "Each key has one scope for the entire workspace, including every brand. Only owners and administrators can issue keys. Keys cannot approve or publish.",
     "invalidName": "Enter a name between 1 and 80 characters.",
     "oneTimeHint": "Copy this key now. Pubrick will not show it again after you close this dialog.",
     "secretLabel": "New API key",
@@ -1550,7 +1550,13 @@
     "cancel": "Cancel",
     "revokeTitle": "Revoke this API key?",
     "revokeHint": "Tools using this key will immediately lose access. This cannot be undone.",
-    "genericError": "API keys could not be loaded or changed. Try again."
+    "genericError": "API keys could not be loaded or changed. Try again.",
+    "contentCreate": "Create drafts",
+    "generationCreate": "Queue generation",
+    "readScopeHint": "Read-only access. Reading through the API does not count as editorial review.",
+    "contentCreateHint": "Allows externally supplied drafts. A human editor must open each imported draft before approval. Use a separate content:read key to read results.",
+    "generationCreateHint": "Allows paid BYOK generation and run polling. Provider charges may be unknown; an estimate is not a spending cap. Each request requires explicit paid consent. Use a separate content:read key to read results.",
+    "queuedRunsHint": "Revoking a key blocks future requests; it does not cancel generation already queued."
   },
   "Language": {
     "title": "Language",
@@ -1855,7 +1861,12 @@
     "subscription_required": "An active subscription is required. Open Settings to configure the workspace subscription.",
     "billing_identity_mismatch": "The saved billing account does not match this instance. Contact the administrator.",
     "resource_limit": "The workspace resource limit has been reached. Review your subscription in Settings.",
-    "unread_imported_draft": "Open this imported post in the editor before approving it."
+    "unread_imported_draft": "Open this imported post in the editor before approving it.",
+    "idempotency_conflict": "This idempotency key belongs to a different request. Retry with the original payload.",
+    "public_result_gone": "The original result was deleted. This operation cannot create it again.",
+    "public_operation_capacity": "This workspace has reached its lifetime API operation capacity. Contact the operator.",
+    "public_rate_limited": "Too many API requests. Wait, then retry with the same idempotency key and payload.",
+    "public_request_unavailable": "API request admission is unavailable. Retry later with the same idempotency key and payload."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

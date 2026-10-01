@@ -28,6 +28,11 @@ export type TransportErrorCode = (typeof TRANSPORT_ERROR_CODES)[number];
 
 /** Everything `errorMessage` can translate: the wire's codes plus the web's own. */
 const HOSTED_ERROR_CODES = [
+  "idempotency_conflict",
+  "public_result_gone",
+  "public_operation_capacity",
+  "public_rate_limited",
+  "public_request_unavailable",
   "owned_workspace_limit",
   "creation_rate_limit",
   "last_owner",
@@ -94,6 +99,11 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  idempotency_conflict: "idempotency_conflict",
+  public_result_gone: "public_result_gone",
+  public_operation_capacity: "public_operation_capacity",
+  public_rate_limited: "public_rate_limited",
+  public_request_unavailable: "public_request_unavailable",
   owned_workspace_limit: "owned_workspace_limit",
   creation_rate_limit: "creation_rate_limit",
   last_owner: "last_owner",

@@ -1350,7 +1350,7 @@
     "searchHint": "Conecta una clave de Yandex Search API para que los editores consulten fuentes web sobre afirmaciones actuales.",
     "searchOpen": "Gestionar clave de búsqueda",
     "publicApiTitle": "API pública",
-    "publicApiHint": "Crea claves de solo lectura para tus herramientas e integraciones.",
+    "publicApiHint": "Crea claves con permisos para leer, importar borradores o generar con consentimiento explícito.",
     "publicApiOpen": "Gestionar claves API",
     "webhooksTitle": "Webhooks salientes",
     "webhooksHint": "Envía resultados de publicación a tus herramientas.",
@@ -1523,7 +1523,7 @@
   "ApiKeys": {
     "title": "Claves API",
     "back": "Volver a ajustes",
-    "hint": "Elige un permiso de lectura para cada clave de la API pública. Solo los propietarios y administradores pueden gestionarlas.",
+    "hint": "Elige un permiso para todo el espacio por clave. Solo propietarios y administradores pueden gestionar claves.",
     "limit": "{count} de {max} claves activas",
     "add": "Añadir",
     "retry": "Reintentar",
@@ -1538,7 +1538,7 @@
     "scope": "Permiso",
     "contentRead": "Leer contenido",
     "publicationsRead": "Leer publicaciones",
-    "scopeHint": "Esta clave no puede publicar, editar ni aprobar contenido.",
+    "scopeHint": "Cada clave tiene un único permiso para todo el espacio, incluidas todas las marcas. Solo propietarios y administradores pueden emitir claves. Las claves no permiten aprobar ni publicar.",
     "invalidName": "Introduce un nombre de entre 1 y 80 caracteres.",
     "oneTimeHint": "Copia esta clave ahora. Pubrick no volverá a mostrarla cuando cierres este cuadro.",
     "secretLabel": "Nueva clave API",
@@ -1550,7 +1550,13 @@
     "cancel": "Cancelar",
     "revokeTitle": "¿Revocar esta clave API?",
     "revokeHint": "Las herramientas que usan esta clave perderán el acceso de inmediato. Esta acción no se puede deshacer.",
-    "genericError": "No se pudieron cargar o modificar las claves API. Inténtalo de nuevo."
+    "genericError": "No se pudieron cargar o modificar las claves API. Inténtalo de nuevo.",
+    "contentCreate": "Crear borradores",
+    "generationCreate": "Iniciar generación",
+    "readScopeHint": "Acceso de solo lectura. Leer mediante la API no cuenta como revisión editorial.",
+    "contentCreateHint": "Permite importar borradores. Un editor debe abrir cada borrador importado antes de aprobarlo. Usa otra clave content:read para leer resultados.",
+    "generationCreateHint": "Permite generación BYOK de pago y consultar su estado. El coste del proveedor puede ser desconocido; una estimación no limita el gasto. Cada solicitud exige consentimiento explícito de pago. Usa otra clave content:read para leer resultados.",
+    "queuedRunsHint": "Revocar una clave bloquea futuras solicitudes; no cancela la generación ya en cola."
   },
   "Language": {
     "title": "Idioma",
@@ -1855,7 +1861,12 @@
     "subscription_required": "Se requiere una suscripción activa. Abre Ajustes para configurar la suscripción del espacio.",
     "billing_identity_mismatch": "La cuenta de facturación guardada no corresponde a esta instancia. Contacta con el administrador.",
     "resource_limit": "Se alcanzó el límite de recursos del espacio. Revisa la suscripción en Ajustes.",
-    "unread_imported_draft": "Abre esta publicación importada en el editor antes de aprobarla."
+    "unread_imported_draft": "Abre esta publicación importada en el editor antes de aprobarla.",
+    "idempotency_conflict": "Esta clave de idempotencia pertenece a otra solicitud. Repite los datos originales.",
+    "public_result_gone": "El resultado original se eliminó. Esta operación no puede crearlo de nuevo.",
+    "public_operation_capacity": "Este espacio alcanzó su límite total de operaciones API. Contacta al operador.",
+    "public_rate_limited": "Demasiadas solicitudes API. Espera y repite con la misma clave de idempotencia y los mismos datos.",
+    "public_request_unavailable": "La admisión de solicitudes API no está disponible. Repite más tarde con la misma clave y los mismos datos."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
