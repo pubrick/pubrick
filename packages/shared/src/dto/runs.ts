@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { normalizeNewlines } from "../provenance.js";
 import { contentCreateSchema } from "./content.js";
+import { contentReuseAttributionSchema } from "./content-reuse-attribution.js";
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
 /**
@@ -749,5 +750,6 @@ export type RunDto = z.infer<typeof runDtoSchema>;
 export const runDetailDtoSchema = runDtoSchema.extend({
   input: storedRunInputSchema,
   steps: runStepsSchema,
+  internalSource: contentReuseAttributionSchema.nullable().optional(),
 });
 export type RunDetailDto = z.infer<typeof runDetailDtoSchema>;

@@ -4,6 +4,7 @@ import { projectRichBody, richBodySchema } from "../rich-body.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "../telegram-photo-parts.js";
 import type { ManualPlatformId } from "./channels.js";
 import { CONTENT_ORIGINS } from "./content-origins.js";
+import { contentReuseAttributionSchema } from "./content-reuse-attribution.js";
 
 import { hasNulByte, NO_NUL_BYTE_MESSAGE } from "./text.js";
 
@@ -977,6 +978,7 @@ export const contentDetailDtoSchema = contentListItemDtoSchema
     isSafeToDelete: z.boolean(),
     /** Server-verified topic lineage for generated drafts; absent on old and manual items. */
     topicId: z.string().uuid().nullable(),
+    internalSource: contentReuseAttributionSchema.nullable().optional(),
   })
   .catchall(z.unknown());
 export type ContentDetailDto = z.infer<typeof contentDetailDtoSchema>;

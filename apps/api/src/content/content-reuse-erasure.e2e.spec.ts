@@ -6,6 +6,11 @@ import { runWithRequestAuthority } from "../request-authority";
 import type { RunsRepository } from "../runs/runs.repository";
 import type { ContentRepository } from "./content.repository";
 
+function requiredRow<T>(rows: T[]): T {
+  const row = rows[0];
+  if (row === undefined) throw new Error("Expected the isolated test row to exist");
+  return row;
+}
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)("internal reuse source erasure", () => {
   let connection: ReturnType<typeof createDb>;
@@ -41,50 +46,55 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
     await connection.db
       .insert(schema.organization)
       .values({ id: orgId, name: "Reuse erasure", slug: orgId });
-    const [brand] = await connection.db
-      .insert(schema.brands)
-      .values({ orgId, name: "Brand" })
-      .returning();
-    const [source] = await connection.db
-      .insert(schema.contentItems)
-      .values({
-        orgId,
-        brandId: brand.id,
-        title: "Private source title",
-        body: "Private saved source",
-        status: "archived",
-        archivedFromStatus: "draft",
-        origin: "human",
-      })
-      .returning();
-    const [output] = await connection.db
-      .insert(schema.contentItems)
-      .values({ orgId, brandId: brand.id, body: "Independent generated output", origin: "ai" })
-      .returning();
-    const [run] = await connection.db
-      .insert(schema.pipelineRuns)
-      .values({
-        orgId,
-        brandId: brand.id,
-        status,
-        contentItemId: output.id,
-        input: {
-          kind: "source",
+    const brand = requiredRow(
+      await connection.db.insert(schema.brands).values({ orgId, name: "Brand" }).returning(),
+    );
+    const source = requiredRow(
+      await connection.db
+        .insert(schema.contentItems)
+        .values({
+          orgId,
+          brandId: brand.id,
           title: "Private source title",
-          material: "Private saved source",
-          text: "Frozen brief",
-          sourceUrl: null,
-          channelIds: [],
-        },
-        steps: { writer: { status: "succeeded", output: { material: "Private saved source" } } },
-        guidanceSnapshot: {
-          writer: { revisionId: randomUUID(), version: 1, text: "Private guidance" },
-        },
-        templateSnapshot: sql`'{"private":"Private template"}'::jsonb`,
-        error: "provider private material",
-        currentStep: "draft",
-      })
-      .returning();
+          body: "Private saved source",
+          status: "archived",
+          archivedFromStatus: "draft",
+          origin: "human",
+        })
+        .returning(),
+    );
+    const output = requiredRow(
+      await connection.db
+        .insert(schema.contentItems)
+        .values({ orgId, brandId: brand.id, body: "Independent generated output", origin: "ai" })
+        .returning(),
+    );
+    const run = requiredRow(
+      await connection.db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId,
+          brandId: brand.id,
+          status,
+          contentItemId: output.id,
+          input: {
+            kind: "source",
+            title: "Private source title",
+            material: "Private saved source",
+            text: "Frozen brief",
+            sourceUrl: null,
+            channelIds: [],
+          },
+          steps: { writer: { status: "succeeded", output: { material: "Private saved source" } } },
+          guidanceSnapshot: {
+            writer: { revisionId: randomUUID(), version: 1, text: "Private guidance" },
+          },
+          templateSnapshot: sql`'{"private":"Private template"}'::jsonb`,
+          error: "provider private material",
+          currentStep: "draft",
+        })
+        .returning(),
+    );
     await connection.db.insert(schema.runSourceLineage).values({
       orgId,
       brandId: brand.id,
@@ -105,30 +115,91 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
         runIds: [f.run.id],
       }),
     });
-    const [source] = await connection.db
-      .select()
-      .from(schema.contentItems)
-      .where(eq(schema.contentItems.id, f.source.id));
+    const source = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, f.source.id)),
+    );
     expect(source.body).toBe("Private saved source");
-    const [lineage] = await connection.db
-      .select()
-      .from(schema.runSourceLineage)
-      .where(eq(schema.runSourceLineage.derivedRunId, f.run.id));
+    const lineage = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.runSourceLineage)
+        .where(eq(schema.runSourceLineage.derivedRunId, f.run.id)),
+    );
     expect(lineage.sourceRedactedAt).toBeNull();
+  });
+  it("sees a reuse admitted before deletion acquires the shared brand serialization lock", async () => {
+    const f = await fixture();
+    let deletion: Promise<void> | undefined;
+    let queuedRunId = "";
+    await connection.db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.brands.id })
+        .from(schema.brands)
+        .where(eq(schema.brands.id, f.brand.id))
+        .for("no key update");
+      deletion = content.delete(f.orgId, f.source.id);
+      // Verify the deletion really waits, rather than relying on scheduling or a fixed sleep.
+      let blocked = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const result = await connection.pool.query(
+          "select exists (select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query ilike '%brands%') as blocked",
+        );
+        if (result.rows[0].blocked) {
+          blocked = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(blocked).toBe(true);
+      const run = requiredRow(
+        await tx
+          .insert(schema.pipelineRuns)
+          .values({ orgId: f.orgId, brandId: f.brand.id, status: "queued", input: f.run.input })
+          .returning({ id: schema.pipelineRuns.id }),
+      );
+      queuedRunId = run.id;
+      await tx.insert(schema.runSourceLineage).values({
+        orgId: f.orgId,
+        brandId: f.brand.id,
+        derivedRunId: run.id,
+        sourceContentId: f.source.id,
+        sourceRevision: 2,
+        sourceDigest: "a".repeat(64),
+        sourceOrigin: "human",
+      });
+    });
+    await expect(deletion).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: "content_delete_reuse_active",
+        runIds: [queuedRunId],
+      }),
+    });
+    const source = requiredRow(
+      await connection.db
+        .select({ body: schema.contentItems.body })
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, f.source.id)),
+    );
+    expect(source.body).toBe("Private saved source");
   });
   it("erases all frozen terminal run inputs and source attribution while retaining independent output", async () => {
     const f = await fixture();
-    const [retry] = await connection.db
-      .insert(schema.pipelineRuns)
-      .values({
-        orgId: f.orgId,
-        brandId: f.brand.id,
-        status: "failed",
-        input: f.run.input,
-        steps: f.run.steps,
-        error: "Private failed checkpoint",
-      })
-      .returning();
+    const retry = requiredRow(
+      await connection.db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: f.orgId,
+          brandId: f.brand.id,
+          status: "failed",
+          input: f.run.input,
+          steps: f.run.steps,
+          error: "Private failed checkpoint",
+        })
+        .returning(),
+    );
     await connection.db.insert(schema.runSourceLineage).values({
       orgId: f.orgId,
       brandId: f.brand.id,
@@ -139,49 +210,59 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
       sourceDigest: "a".repeat(64),
       sourceOrigin: "human",
     });
-    const [direct] = await connection.db
-      .insert(schema.pipelineRuns)
-      .values({
-        orgId: f.orgId,
-        brandId: f.brand.id,
-        status: "succeeded",
-        contentItemId: f.source.id,
-        input: f.run.input,
-        steps: f.run.steps,
-      })
-      .returning();
-    const [usage] = await connection.db
-      .insert(schema.usageLedger)
-      .values({
-        orgId: f.orgId,
-        runId: f.run.id,
-        step: "writer",
-        provider: "google",
-        modelId: "synthetic-model",
-        costUsd: "0.010000",
-        costSource: "provider_reported",
-        status: "ok",
-      })
-      .returning();
+    const direct = requiredRow(
+      await connection.db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: f.orgId,
+          brandId: f.brand.id,
+          status: "succeeded",
+          contentItemId: f.source.id,
+          input: f.run.input,
+          steps: f.run.steps,
+        })
+        .returning(),
+    );
+    const usage = requiredRow(
+      await connection.db
+        .insert(schema.usageLedger)
+        .values({
+          orgId: f.orgId,
+          runId: f.run.id,
+          step: "writer",
+          provider: "google",
+          modelId: "synthetic-model",
+          costUsd: "0.010000",
+          costSource: "provider_reported",
+          status: "ok",
+        })
+        .returning(),
+    );
     await content.delete(f.orgId, f.source.id);
     for (const id of [retry.id, direct.id]) {
-      const [erased] = await connection.db
-        .select()
-        .from(schema.pipelineRuns)
-        .where(eq(schema.pipelineRuns.id, id));
+      const erased = requiredRow(
+        await connection.db
+          .select()
+          .from(schema.pipelineRuns)
+          .where(eq(schema.pipelineRuns.id, id)),
+      );
       expect(erased.input).toEqual({ kind: "redacted" });
       expect(erased.steps).toEqual({});
       expect(erased.error).toBeNull();
     }
-    const [retainedUsage] = await connection.db
-      .select()
-      .from(schema.usageLedger)
-      .where(eq(schema.usageLedger.id, usage.id));
+    const retainedUsage = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.usageLedger)
+        .where(eq(schema.usageLedger.id, usage.id)),
+    );
     expect(retainedUsage).toEqual(usage);
-    const [run] = await connection.db
-      .select()
-      .from(schema.pipelineRuns)
-      .where(eq(schema.pipelineRuns.id, f.run.id));
+    const run = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.pipelineRuns)
+        .where(eq(schema.pipelineRuns.id, f.run.id)),
+    );
     expect(run).toMatchObject({
       input: { kind: "redacted" },
       steps: {},
@@ -195,10 +276,12 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
       contentItemId: f.output.id,
     });
     expect(run.updatedAt).toEqual(f.run.updatedAt);
-    const [lineage] = await connection.db
-      .select()
-      .from(schema.runSourceLineage)
-      .where(eq(schema.runSourceLineage.derivedRunId, f.run.id));
+    const lineage = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.runSourceLineage)
+        .where(eq(schema.runSourceLineage.derivedRunId, f.run.id)),
+    );
     expect(lineage).toMatchObject({
       sourceContentId: f.source.id,
       sourceRevision: 2,
@@ -246,15 +329,17 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
   it("refuses a foreign tenant lineage instead of silently erasing the source", async () => {
     const source = await fixture();
     const foreign = await fixture();
-    const [run] = await connection.db
-      .insert(schema.pipelineRuns)
-      .values({
-        orgId: foreign.orgId,
-        brandId: foreign.brand.id,
-        status: "succeeded",
-        input: foreign.run.input,
-      })
-      .returning();
+    const run = requiredRow(
+      await connection.db
+        .insert(schema.pipelineRuns)
+        .values({
+          orgId: foreign.orgId,
+          brandId: foreign.brand.id,
+          status: "succeeded",
+          input: foreign.run.input,
+        })
+        .returning(),
+    );
     await connection.db.insert(schema.runSourceLineage).values({
       orgId: foreign.orgId,
       brandId: foreign.brand.id,
@@ -267,10 +352,12 @@ describe.skipIf(!url)("internal reuse source erasure", () => {
     await expect(content.delete(source.orgId, source.source.id)).rejects.toMatchObject({
       response: expect.objectContaining({ code: "content_delete_run_tenant_mismatch" }),
     });
-    const [retained] = await connection.db
-      .select()
-      .from(schema.contentItems)
-      .where(eq(schema.contentItems.id, source.source.id));
+    const retained = requiredRow(
+      await connection.db
+        .select()
+        .from(schema.contentItems)
+        .where(eq(schema.contentItems.id, source.source.id)),
+    );
     expect(retained.body).toBe("Private saved source");
   });
   it("shows frozen attribution only to a current scoped member and removes it after membership revocation", async () => {
