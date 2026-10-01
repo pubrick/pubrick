@@ -23,7 +23,7 @@
     "/api/v2/content": {
       "post": {
         "operationId": "createDraft",
-        "description": "Requires content:create. One MiB JSON limit before parsing. Stable key and identical normalized payload replay ORIGINAL acceptance even if current result state changed. Writes limited to 30/min/key and60/min/organization including replays; paid consent required for generation. No publication or editor-open side effect.",
+        "description": "Requires content:create. One MiB JSON limit before parsing. Stable key and identical normalized payload replay original draft acceptance even if its current state changed. Writes including replays are limited to 30/minute/key and 60/minute/organization. Imported drafts require human editorial opening; no approval or publication side effect.",
         "parameters": [
           {
             "in": "header",
@@ -167,7 +167,7 @@
     "/api/v2/runs": {
       "post": {
         "operationId": "createGeneration",
-        "description": "Requires generation:create. One MiB JSON limit before parsing. Stable key and identical normalized payload replay ORIGINAL acceptance even if current result state changed. Writes limited to 30/min/key and60/min/organization including replays; paid consent required for generation. No publication or editor-open side effect.",
+        "description": "Requires generation:create and explicit versioned consent to possible BYOK provider charges. One MiB JSON limit before parsing. Stable key and identical normalized payload replay original queued acceptance even if current run state changed. Writes including replays are limited to 30/minute/key and 60/minute/organization. Provider/model settings stay server-owned; no publication side effect.",
         "parameters": [
           {
             "in": "header",
@@ -233,7 +233,7 @@
     "/api/v2/content/{id}": {
       "get": {
         "operationId": "getContentV2",
-        "description": "Requires content:read. No private inputs, credentials or provider failures. Run polling limited to60/min/key and120/min/organization. Null-priced or unrecorded calls make aggregate cost unknown.",
+        "description": "Requires content:read. Returns a closed public content projection including external origins. Reading does not satisfy editorial opening; private notes and credentials remain excluded.",
         "parameters": [
           {
             "in": "path",
@@ -289,7 +289,7 @@
     "/api/v2/runs/{id}": {
       "get": {
         "operationId": "getGeneration",
-        "description": "Requires generation:create. No private inputs, credentials or provider failures. Run polling limited to60/min/key and120/min/organization. Null-priced or unrecorded calls make aggregate cost unknown.",
+        "description": "Requires generation:create. Current state projection excludes private inputs, credentials and provider failures. Polling is limited to 60/minute/key and 120/minute/organization. Any null-priced or unrecorded call makes aggregate cost unknown.",
         "parameters": [
           {
             "in": "path",
