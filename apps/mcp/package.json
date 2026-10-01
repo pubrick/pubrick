@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --reporter=dot",
+    "test": "pnpm run build && vitest run --reporter=dot",
     "start": "node dist/cli.js"
   },
   "dependencies": {
