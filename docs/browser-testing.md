@@ -9,6 +9,12 @@ and is not part of CI by default (issue #14).
 
 Requirements: Node.js 22.12 or newer, the pinned pnpm version, Docker, and enough
 free disk space for the Chromium download and a workspace production build.
+Run from a clean, committed working tree. All four browser runners resolve and
+validate Git HEAD before creating temporary resources, use the same reviewed
+PostgreSQL digest as CI, and recheck the unchanged source before reporting success.
+Tracked modifications and nonignored untracked files require a commit first;
+ignored build outputs are allowed. A missing Git installation or developer-tools
+error refuses the run rather than producing an empty source receipt.
 
 ```sh
 pnpm install --frozen-lockfile

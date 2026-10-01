@@ -4,9 +4,16 @@ import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  BROWSER_POSTGRES_IMAGE,
+  readBrowserSource,
+  verifyBrowserSource,
+} from "./browser-provenance.mjs";
 import { readReceipts, refuseNextEnvironmentFiles } from "./evergreen-model-fixture.mjs";
 
 // Never accept a target URL or inherited app secrets: this runner owns its stack.
+// Resolve before allocating any temporary files, processes or containers.
+const source = readBrowserSource();
 const container = `pubrick-browser-evergreen-${randomUUID()}`;
 const media = await mkdtemp(join(tmpdir(), "pubrick-browser-media-"));
 const children = [];
@@ -171,7 +178,7 @@ try {
     "POSTGRES_DB=pubrick_browser",
     "-p",
     "127.0.0.1::5432",
-    "pgvector/pgvector:pg16",
+    BROWSER_POSTGRES_IMAGE,
   ]);
   const mapping = spawnSync("docker", ["port", container, "5432/tcp"], { encoding: "utf8" });
   if (mapping.status !== 0) throw new Error("Cannot discover disposable database port");
@@ -272,8 +279,9 @@ try {
   const calls = readReceipts(receipts);
   if (calls.length !== 5 || calls.some((record) => record.kind !== "call"))
     throw new Error("Expected exactly five scripted model calls");
+  verifyBrowserSource(source);
   console.info(
-    `Evergreen acceptance passed: five scripted calls; source ${spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim()}`,
+    `Evergreen acceptance passed: five scripted calls; source ${source}; database ${BROWSER_POSTGRES_IMAGE}`,
   );
 } catch (error) {
   console.error(error);

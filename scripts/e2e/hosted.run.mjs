@@ -5,7 +5,15 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  BROWSER_POSTGRES_IMAGE,
+  readBrowserSource,
+  verifyBrowserSource,
+} from "./browser-provenance.mjs";
+
 // Never accept a target URL or inherited app secrets: this runner owns its stack.
+// Resolve before allocating any temporary files, processes or containers.
+const source = readBrowserSource();
 const container = `pubrick-browser-hosted-${randomUUID()}`;
 let fixtures;
 const media = await mkdtemp(join(tmpdir(), "pubrick-browser-media-"));
@@ -163,7 +171,7 @@ try {
     "POSTGRES_DB=pubrick_browser",
     "-p",
     "127.0.0.1::5432",
-    "pgvector/pgvector:pg16",
+    BROWSER_POSTGRES_IMAGE,
   ]);
   const mapping = spawnSync("docker", ["port", container, "5432/tcp"], { encoding: "utf8" });
   if (mapping.status !== 0) throw new Error("Cannot discover disposable database port");
@@ -245,6 +253,8 @@ try {
   await ready(`${origin}/en/login`, web);
   await runBrowserJourney();
   if (worker.exitCode !== null) throw new Error("Compiled worker exited during journey");
+  verifyBrowserSource(source);
+  console.info(`Hosted acceptance passed: source ${source}; database ${BROWSER_POSTGRES_IMAGE}`);
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
