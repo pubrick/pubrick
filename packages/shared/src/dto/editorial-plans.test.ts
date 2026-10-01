@@ -9,6 +9,7 @@ import {
   editorialPlanPauseSchema,
   editorialPlanPreviewResultSchema,
   editorialPlanRemoveSchema,
+  editorialPlanScheduleSchema,
   editorialPlanSummarySchema,
   editorialPlanUpdateSchema,
 } from "./editorial-plans.js";
@@ -27,6 +28,16 @@ const draft = {
   endDate: "2026-12-31",
 };
 describe("editorial plan wire contracts", () => {
+  it("refuses year zero for persisted schedules and accepts the AD boundaries", () => {
+    for (const field of ["startDate", "endDate"] as const) {
+      expect(editorialPlanScheduleSchema.shape[field].safeParse("0000-01-01").success).toBe(false);
+    }
+    for (const date of ["0001-01-01", "9999-12-31"]) {
+      expect(
+        editorialPlanCreateSchema.safeParse({ ...draft, startDate: date, endDate: date }).success,
+      ).toBe(true);
+    }
+  });
   it("round trips opaque consenting actor IDs and durable consent snapshots", () => {
     const actorId = "user_00000000-0000-4000-8000-000000000001";
     const consent = {

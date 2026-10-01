@@ -182,4 +182,13 @@ describe("weekly editorial occurrence calculation", () => {
   it("refuses an invalid fixed clock", () => {
     expect(() => calculateEditorialPlanOccurrences(schedule, new Date("invalid"))).toThrow(/clock/);
   });
+  it("rejects astronomical year zero before a PostgreSQL date write", () => {
+    expect(() =>
+      validateEditorialPlanSchedule({
+        ...schedule,
+        startDate: "0000-01-01",
+        endDate: "0000-01-01",
+      }),
+    ).toThrow();
+  });
 });

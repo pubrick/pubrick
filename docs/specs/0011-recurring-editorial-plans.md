@@ -39,7 +39,9 @@ source of draft generation; its daily spend setting does not cover these plans.
 
 The user supplies ISO calendar start/end dates (end inclusive, at most 366 days
 after start), weekdays numbered Monday=1 through Sunday=7, an HH:mm local time,
-and a valid IANA zone (UTC accepted). A required end date bounds consent; renewal
+and a valid IANA zone (UTC accepted). Dates use AD years 0001–9999: PostgreSQL
+does not accept the astronomical year zero supported by some date libraries.
+A required end date bounds consent; renewal
 is an explicit edit and enabling action. The server returns ISO UTC instants,
 local dates, zone and offset for upcoming occurrences.
 

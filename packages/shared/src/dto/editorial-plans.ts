@@ -28,6 +28,9 @@ export type EditorialPlanOccurrenceState = (typeof EDITORIAL_PLAN_OCCURRENCE_STA
 export type EditorialPlanReason = (typeof EDITORIAL_PLAN_REASONS)[number];
 
 /** Shared validates the wire shape; the server's Luxon calculator validates calendar and zone semantics. */
+const editorialPlanDateSchema = z.iso
+  .date()
+  .refine((value) => value >= "0001-01-01", "Use an AD calendar date between years 0001 and 9999");
 export const editorialPlanScheduleSchema = z
   .strictObject({
     weekdays: z
@@ -38,8 +41,8 @@ export const editorialPlanScheduleSchema = z
       .transform((values) => [...values].sort((a, b) => a - b)),
     localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:mm"),
     timezone: z.string().min(1).max(100),
-    startDate: z.iso.date(),
-    endDate: z.iso.date(),
+    startDate: editorialPlanDateSchema,
+    endDate: editorialPlanDateSchema,
   })
   .refine(({ startDate, endDate }) => endDate >= startDate, "End date must not precede start date");
 export type EditorialPlanSchedule = z.infer<typeof editorialPlanScheduleSchema>;
@@ -101,7 +104,7 @@ const consentingActorIdSchema = z
 const offsetMinutesSchema = z.number().min(-1440).max(1440);
 
 export const editorialPlanCalculatedOccurrenceSchema = z.strictObject({
-  localDate: z.iso.date(),
+  localDate: editorialPlanDateSchema,
   localTime: editorialPlanScheduleSchema.shape.localTime,
   timezone: editorialPlanScheduleSchema.shape.timezone,
   scheduledAt: z.iso.datetime().nullable(),
@@ -120,7 +123,7 @@ export type EditorialPlanPreviewResult = z.infer<typeof editorialPlanPreviewResu
 export const editorialPlanOccurrenceSchema = z.strictObject({
   id: z.uuid(),
   planId: z.uuid(),
-  localDate: z.iso.date(),
+  localDate: editorialPlanDateSchema,
   localTime: editorialPlanScheduleSchema.shape.localTime,
   timezone: editorialPlanScheduleSchema.shape.timezone,
   scheduledAt: z.iso.datetime().nullable(),
