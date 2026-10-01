@@ -3043,9 +3043,9 @@
     "hostedStatus": "Hosted service in development",
     "selfHostedStatus": "Self-hosting available",
     "home": {
-      "eyebrow": "An open studio for your next great post.",
-      "title": "More of your voice. Less of the busywork.",
-      "description": "Turn the things you know into content worth sharing. Gather sources, shape drafts with AI, and bring your own judgment to every post.",
+      "eyebrow": "An open-source publishing workspace",
+      "title": "Make something worth putting your name on.",
+      "description": "Pubrick takes an article, a feed, or your notes and helps turn them into a draft. You shape the voice, review the changes, and decide what gets published.",
       "metaTitle": "Open-source AI content studio for creators",
       "metaDescription": "Pubrick is an open-source AI content studio for creators and editorial teams. Bring your own AI keys, turn sources into drafts, review and schedule content.",
       "note": "Your ideas. Your AI keys. Your final say.",
@@ -3059,8 +3059,8 @@
       "previewReview": "03 / YOUR CALL",
       "previewReviewTitle": "Ready when you say so",
       "previewReviewBody": "Review the actual draft before approving delivery. Autopilot prepares drafts; you decide what ships.",
-      "principlesTitle": "Creative work needs a home, not another pile of tabs.",
-      "principlesBody": "Keep your sources, brand context, drafts and decisions together. Spend your attention on the part only you can do.",
+      "principlesTitle": "What happens between an idea and a published post?",
+      "principlesBody": "The source stays close to the draft. Your edits stay visible. Publication waits for your approval.",
       "feature1Title": "Start with substance",
       "feature1Body": "Use your own source material, watched feeds and searchable knowledge to give a draft context.",
       "feature2Title": "Keep your signature",
@@ -3114,6 +3114,20 @@
       "openSource": "Open source",
       "hosting": "Hosting",
       "docs": "Docs"
+    },
+    "example": {
+      "label": "An editable example",
+      "title": "A small studio, a different kind of week",
+      "sourceLabel": "From the studio notes",
+      "source": "We closed the studio for one afternoon. Everyone brought a sketch, a question, or an unfinished piece. The best conversation started with the work nobody was ready to show.",
+      "draftLabel": "A proposed opening",
+      "proposal": "Our most useful studio meeting started with unfinished work. For one afternoon, we put the polished presentations away and shared what we were still figuring out.",
+      "hint": "Try rewriting a sentence. Nothing here is saved or sent to an AI provider.",
+      "lens": "Highlight unchanged proposal text",
+      "reset": "Reset example",
+      "unchanged": "The proposal is unchanged.",
+      "changed": "You have changed the proposal.",
+      "link": "Explore the drafting workflow"
     }
   }
 }

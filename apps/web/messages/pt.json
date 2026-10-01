@@ -3043,9 +3043,9 @@
     "hostedStatus": "Serviço hospedado em desenvolvimento",
     "selfHostedStatus": "Instalação própria disponível",
     "home": {
-      "eyebrow": "Um estúdio aberto para sua próxima grande publicação.",
-      "title": "Mais da sua voz. Menos tarefas repetitivas.",
-      "description": "Transforme o que você sabe em conteúdo que vale compartilhar. Reúna fontes, dê forma aos rascunhos com IA e use seu próprio julgamento em cada publicação.",
+      "eyebrow": "Um espaço de publicação com código aberto",
+      "title": "Crie algo que valha a pena assinar.",
+      "description": "O Pubrick ajuda a transformar um artigo, um feed ou suas notas em um rascunho. Você dá voz ao texto, revisa as alterações e decide o que será publicado.",
       "metaTitle": "Estúdio de conteúdo com IA e código aberto para criadores",
       "metaDescription": "O Pubrick é um estúdio de conteúdo com IA e código aberto para criadores e equipes editoriais. Use suas chaves de IA, transforme fontes em rascunhos, revise e agende conteúdo.",
       "note": "Suas ideias. Suas chaves de IA. Sua palavra final.",
@@ -3059,8 +3059,8 @@
       "previewReview": "03 / SUA DECISÃO",
       "previewReviewTitle": "Pronto quando você decidir",
       "previewReviewBody": "Revise o rascunho concreto antes de aprovar sua publicação. O Autopilot prepara rascunhos; você decide o que será publicado.",
-      "principlesTitle": "O trabalho criativo precisa de um lugar próprio, não de mais uma pilha de abas.",
-      "principlesBody": "Mantenha fontes, contexto da marca, rascunhos e decisões juntos. Dedique sua atenção à parte que só você pode fazer.",
+      "principlesTitle": "O que acontece entre uma ideia e uma publicação?",
+      "principlesBody": "A fonte fica perto do rascunho. Suas edições continuam visíveis. A publicação espera sua aprovação.",
       "feature1Title": "Comece com conteúdo",
       "feature1Body": "Use seus próprios materiais, feeds que acompanha e conhecimento com busca para dar contexto a um rascunho.",
       "feature2Title": "Mantenha sua assinatura",
@@ -3114,6 +3114,20 @@
       "openSource": "Código aberto",
       "hosting": "Hospedagem",
       "docs": "Documentação"
+    },
+    "example": {
+      "label": "Um exemplo editável",
+      "title": "Um pequeno estúdio, uma semana diferente",
+      "sourceLabel": "Das notas do estúdio",
+      "source": "Fechamos o estúdio durante uma tarde. Cada pessoa trouxe um esboço, uma pergunta ou uma peça inacabada. A melhor conversa começou com o trabalho que ninguém estava pronto para mostrar.",
+      "draftLabel": "Uma proposta de abertura",
+      "proposal": "Nossa reunião mais útil no estúdio começou com trabalhos inacabados. Durante uma tarde, deixamos de lado as apresentações polidas e compartilhamos o que ainda estávamos tentando entender.",
+      "hint": "Experimente reescrever uma frase. Nada aqui é salvo ou enviado a um provedor de IA.",
+      "lens": "Destacar o texto da proposta que não foi alterado",
+      "reset": "Redefinir exemplo",
+      "unchanged": "A proposta não foi alterada.",
+      "changed": "Você alterou a proposta.",
+      "link": "Explorar o processo de criação de rascunhos"
     }
   }
 }

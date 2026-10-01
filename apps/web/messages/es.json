@@ -3043,9 +3043,9 @@
     "hostedStatus": "Servicio alojado en desarrollo",
     "selfHostedStatus": "Instalación propia disponible",
     "home": {
-      "eyebrow": "Un estudio abierto para tu próxima gran publicación.",
-      "title": "Más de tu voz. Menos tareas rutinarias.",
-      "description": "Convierte lo que sabes en contenido que merece compartirse. Reúne fuentes, da forma a los borradores con IA y aporta tu criterio a cada publicación.",
+      "eyebrow": "Un espacio de publicación de código abierto",
+      "title": "Crea algo que merezca llevar tu nombre.",
+      "description": "Pubrick te ayuda a convertir un artículo, un feed o tus notas en un borrador. Tú le das voz, revisas los cambios y decides qué se publica.",
       "metaTitle": "Estudio de contenido con IA y código abierto para creadores",
       "metaDescription": "Pubrick es un estudio de contenido con IA y código abierto para creadores y equipos editoriales. Usa tus claves de IA, convierte fuentes en borradores, revisa y programa contenido.",
       "note": "Tus ideas. Tus claves de IA. Tu última palabra.",
@@ -3059,8 +3059,8 @@
       "previewReview": "03 / TU DECISIÓN",
       "previewReviewTitle": "Listo cuando tú lo decidas",
       "previewReviewBody": "Revisa el borrador concreto antes de aprobar su publicación. Autopilot prepara borradores; tú decides qué se publica.",
-      "principlesTitle": "El trabajo creativo necesita un lugar propio, no otra pila de pestañas.",
-      "principlesBody": "Mantén juntos las fuentes, el contexto de marca, los borradores y las decisiones. Dedica tu atención a lo que solo tú puedes hacer.",
+      "principlesTitle": "¿Qué ocurre entre una idea y una publicación?",
+      "principlesBody": "La fuente permanece cerca del borrador. Tus cambios siguen a la vista. La publicación espera tu aprobación.",
       "feature1Title": "Empieza con sustancia",
       "feature1Body": "Usa tus propios materiales, feeds que sigues y conocimiento con búsquedas para dar contexto al borrador.",
       "feature2Title": "Conserva tu sello",
@@ -3114,6 +3114,20 @@
       "openSource": "Código abierto",
       "hosting": "Alojamiento",
       "docs": "Documentación"
+    },
+    "example": {
+      "label": "Un ejemplo editable",
+      "title": "Un pequeño estudio, una semana diferente",
+      "sourceLabel": "De las notas del estudio",
+      "source": "Cerramos el estudio durante una tarde. Cada persona trajo un boceto, una pregunta o una pieza sin terminar. La mejor conversación empezó con el trabajo que nadie estaba listo para mostrar.",
+      "draftLabel": "Una propuesta de inicio",
+      "proposal": "Nuestra reunión más útil en el estudio empezó con trabajos sin terminar. Durante una tarde, dejamos de lado las presentaciones pulidas y compartimos aquello que aún intentábamos resolver.",
+      "hint": "Prueba a reescribir una frase. Nada de lo que hagas aquí se guarda ni se envía a un proveedor de IA.",
+      "lens": "Resaltar el texto de la propuesta que no has cambiado",
+      "reset": "Restablecer ejemplo",
+      "unchanged": "La propuesta no ha cambiado.",
+      "changed": "Has cambiado la propuesta.",
+      "link": "Explorar el proceso de creación de borradores"
     }
   }
 }
