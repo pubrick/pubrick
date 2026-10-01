@@ -38,5 +38,6 @@ export * from "./relevance-batches.js";
 export * from "./role-templates.js";
 export * from "./search.js";
 export * from "./sources.js";
+export * from "./telegram-draft-decisions.js";
 export * from "./topics.js";
 export * from "./webhooks.js";

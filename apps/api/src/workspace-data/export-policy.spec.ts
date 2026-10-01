@@ -4,6 +4,39 @@ import { PgTable } from "drizzle-orm/pg-core";
 import { expect, it } from "vitest";
 import { WORKSPACE_EXPORT_OMISSIONS, WORKSPACE_EXPORT_TABLES } from "./export-policy";
 
+it("exports minimal Telegram editorial evidence without identity or webhook secrets", () => {
+  const audit = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "telegramDecisionAudit");
+  expect(audit?.table).toBe(schema.telegramDecisionAudit);
+  expect(audit?.fields).toEqual([
+    "id",
+    "orgId",
+    "contentItemId",
+    "brandId",
+    "actorUserId",
+    "action",
+    "outcome",
+    "snapshotHash",
+    "snapshotVersion",
+    "decidedAt",
+  ]);
+  for (const privateTable of [
+    "telegramBotIdentities",
+    "telegramRemoteAttempts",
+    "telegramDecisionConfigs",
+    "telegramBindingChallenges",
+    "telegramBindings",
+    "telegramInitialCapabilities",
+    "telegramActorConfirmations",
+    "telegramUpdateReceipts",
+  ]) {
+    expect(privateTable in WORKSPACE_EXPORT_OMISSIONS, privateTable).toBe(true);
+    expect(
+      WORKSPACE_EXPORT_TABLES.some((entry) => entry.key === privateTable),
+      privateTable,
+    ).toBe(false);
+  }
+});
+
 it("exports tenant operation audits and imported review markers but omits transient global counters", () => {
   const audit = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "publicApiOperations");
   expect(audit?.fields).toEqual([

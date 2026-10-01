@@ -890,6 +890,13 @@
       "when": 1790854270144,
       "tag": "0127_content_reuse_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 128,
+      "version": "7",
+      "when": 1790882888596,
+      "tag": "0128_telegram_draft_decision_foundation",
+      "breakpoints": true
     }
   ]
 }

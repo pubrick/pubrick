@@ -1,11 +1,12 @@
 # Telegram draft decisions
 
-Status: proposed; independent source-grounded review closed three concrete
-setup, snapshot/authority and delivery-history findings. Concrete bounds,
-retention and deletion strategy are specified; implementation and actual native
-FK/cascade/lock proofs remain required gates. No callback
-decision, Telegram identity binding, webhook, migration or interface described
-below is implemented by this document.
+Status: foundation implemented and independently reviewed; user workflow
+proposed. Migration 0128 and strict storage/contracts have native deletion and
+cascade evidence in [the foundation receipt](../reviews/2026-10-01-telegram-foundation.md).
+No callback decision, Telegram identity binding endpoint, webhook setup or
+interface is enabled yet. Concrete bounds and retention are specified; their
+admission/janitor and future domain-writer concurrency proofs remain required
+implementation gates.
 Date: 2026-10-01.
 
 ## 1. First slice and existing code
@@ -100,6 +101,13 @@ Within that lane:
    prior remote attempts are settled and the owned remote configuration is
    confirmed removed; do not create a second owner while cleanup is uncertain.
    A late delete must never race an enabled successor.
+
+The first storage implementation is deliberately more conservative about
+ownership release: it does not implement transfer between organizations, even
+after a confirmed removal. Only deletion of the owning organization can clear
+its owner reference, and that leaves a disabled, quarantined registry record.
+Releasing or transferring a reserved bot requires a separately reviewed
+recovery procedure; deleting a tenant configuration is not release evidence.
 
 If a predecessor's completion cannot be established, leave remote mutation
 blocked and keep its ownership reservation. `getWebhookInfo`, two matching

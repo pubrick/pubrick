@@ -3,6 +3,22 @@ import { schema } from "@pubrick/db";
 /** Reviewed public data fields. New columns never become exportable implicitly. */
 export const WORKSPACE_EXPORT_TABLES = [
   {
+    key: "telegramDecisionAudit",
+    table: schema.telegramDecisionAudit,
+    fields: [
+      "id",
+      "orgId",
+      "contentItemId",
+      "brandId",
+      "actorUserId",
+      "action",
+      "outcome",
+      "snapshotHash",
+      "snapshotVersion",
+      "decidedAt",
+    ],
+  },
+  {
     key: "aiTextSettings",
     table: schema.aiTextSettings,
     fields: ["orgId", "provider", "model", "revision"],
@@ -866,6 +882,14 @@ export const WORKSPACE_EXPORT_TABLES = [
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  telegramBotIdentities: "Global inbound bot ownership and remote mutation quarantine",
+  telegramRemoteAttempts: "Immutable physical webhook mutation evidence",
+  telegramDecisionConfigs: "Encrypted Telegram credentials and webhook authentication secrets",
+  telegramBindingChallenges: "Transient personal identity confirmation challenges",
+  telegramBindings: "Private Telegram identity and chat bindings",
+  telegramInitialCapabilities: "One-time draft decision authentication capabilities",
+  telegramActorConfirmations: "Private actor-bound confirmation capabilities",
+  telegramUpdateReceipts: "Transient authenticated Telegram update replay protection",
   apiRequestLimits: "Shared transient API request rate counters",
   hostedAiCallLeases: "Operational physical model dispatch leases",
   mediaCleanupWork: "Durable physical media deletion obligations",

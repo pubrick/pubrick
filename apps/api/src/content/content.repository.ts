@@ -7194,92 +7194,100 @@ export class ContentRepository {
   async reject(orgId: string, id: string) {
     await db.transaction(async (tx) => {
       await holdOrganization(tx, orgId);
-      await this.requireItem(tx, orgId, id);
-      const outstanding = await this.lockAdaptations(tx, orgId, id, [
-        ...OUTSTANDING_ADAPTATION_STATUSES,
-        "manual_ready",
-      ]);
-      // A send claim means request bytes may already be on the wire. Keep the
-      // adaptation in publishing until its receipt is resolved; otherwise a
-      // late photo/reply result would be hidden behind pending and re-approval
-      // could send a second cover. The adaptation locks above come first, as
-      // on the worker's terminal path.
-      const publishingIds = outstanding
-        .filter((adaptation) => adaptation.status === "publishing")
-        .map((adaptation) => adaptation.id);
-      if (publishingIds.length > 0) {
-        const [activeClaim] = await tx
-          .select({ id: schema.publications.id })
-          .from(schema.publications)
-          .where(
-            and(
-              eq(schema.publications.orgId, orgId),
-              inArray(schema.publications.adaptationId, publishingIds),
-              eq(schema.publications.status, "in_flight"),
-            ),
-          )
-          .limit(1)
-          .for("update");
-        if (activeClaim) {
-          throw conflict(
-            "delivery_in_flight",
-            "A delivery has started; wait for its outcome before rejecting this post",
-          );
-        }
-      }
-      const live = await this.requireNotPublished(tx, orgId, id, {
-        of: "the fan-out",
-        hasOutstanding: outstanding.length > 0,
-      });
-      const journalDecision = await this.shouldJournalDecision(tx, orgId, id, "rejected");
-
-      if (outstanding.length > 0) {
-        // Rejecting a manual-ready Dzen adaptation also revokes its still
-        // pending public handoff. The adaptation locks above serialize this
-        // delete with a concurrent feed insert.
-        await tx.delete(schema.feedEntries).where(
-          and(
-            eq(schema.feedEntries.orgId, orgId),
-            inArray(
-              schema.feedEntries.adaptationId,
-              outstanding.map((adaptation) => adaptation.id),
-            ),
-          ),
-        );
-      }
-
-      for (const adaptation of outstanding) {
-        if (adaptation.status !== "manual_ready") {
-          await this.queue.cancelPublish(tx, adaptation.id, orgId);
-        }
-        await tx
-          .update(schema.adaptations)
-          .set({
-            status: "pending",
-            scheduledAt: null,
-            attemptCount:
-              adaptation.status === "manual_ready"
-                ? adaptation.attemptCount
-                : adaptation.attemptCount + 1,
-            // Cleared for the same reason `approve` clears it: the row is back
-            // to "nothing has been attempted", and leaving the last platform
-            // error behind makes a rejected adaptation look like a failed one.
-            lastError: null,
-            // And the coded half of that same sentence, which a screen reads
-            // instead of the prose.
-            failureReason: null,
-          })
-          .where(
-            and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
-          );
-      }
-
-      await this.setItemStatus(tx, orgId, id, live ? "partially_published" : "rejected");
-      if (journalDecision.should && (outstanding.length > 0 || !live)) {
-        await this.appendPromptDecision(tx, orgId, id, "rejected", journalDecision.ordinal);
-      }
+      await this.rejectInTx(orgId, id, tx);
     });
 
     return this.get(orgId, id);
+  }
+
+  /**
+   * Shared rejection mutation for callers that commit their authorization and
+   * one-time decision evidence in this same transaction. The caller must hold
+   * the organization and authorize its actor before entering this method.
+   * Adaptations remain locked before the content item, as on the worker path.
+   */
+  async rejectInTx(orgId: string, id: string, tx: Tx): Promise<void> {
+    await this.requireItem(tx, orgId, id);
+    const outstanding = await this.lockAdaptations(tx, orgId, id, [
+      ...OUTSTANDING_ADAPTATION_STATUSES,
+      "manual_ready",
+    ]);
+    // A send claim means request bytes may already be on the wire. Keep the
+    // adaptation in publishing until its receipt is resolved; otherwise a
+    // late photo/reply result would be hidden behind pending and re-approval
+    // could send a second cover. The adaptation locks above come first, as
+    // on the worker's terminal path.
+    const publishingIds = outstanding
+      .filter((adaptation) => adaptation.status === "publishing")
+      .map((adaptation) => adaptation.id);
+    if (publishingIds.length > 0) {
+      const [activeClaim] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            inArray(schema.publications.adaptationId, publishingIds),
+            eq(schema.publications.status, "in_flight"),
+          ),
+        )
+        .limit(1)
+        .for("update");
+      if (activeClaim) {
+        throw conflict(
+          "delivery_in_flight",
+          "A delivery has started; wait for its outcome before rejecting this post",
+        );
+      }
+    }
+    const live = await this.requireNotPublished(tx, orgId, id, {
+      of: "the fan-out",
+      hasOutstanding: outstanding.length > 0,
+    });
+    const journalDecision = await this.shouldJournalDecision(tx, orgId, id, "rejected");
+
+    if (outstanding.length > 0) {
+      // Rejecting a manual-ready Dzen adaptation also revokes its still
+      // pending public handoff. The adaptation locks above serialize this
+      // delete with a concurrent feed insert.
+      await tx.delete(schema.feedEntries).where(
+        and(
+          eq(schema.feedEntries.orgId, orgId),
+          inArray(
+            schema.feedEntries.adaptationId,
+            outstanding.map((adaptation) => adaptation.id),
+          ),
+        ),
+      );
+    }
+
+    for (const adaptation of outstanding) {
+      if (adaptation.status !== "manual_ready") {
+        await this.queue.cancelPublish(tx, adaptation.id, orgId);
+      }
+      await tx
+        .update(schema.adaptations)
+        .set({
+          status: "pending",
+          scheduledAt: null,
+          attemptCount:
+            adaptation.status === "manual_ready"
+              ? adaptation.attemptCount
+              : adaptation.attemptCount + 1,
+          // Cleared for the same reason `approve` clears it: the row is back
+          // to "nothing has been attempted", and leaving the last platform
+          // error behind makes a rejected adaptation look like a failed one.
+          lastError: null,
+          // And the coded half of that same sentence, which a screen reads
+          // instead of the prose.
+          failureReason: null,
+        })
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)));
+    }
+
+    await this.setItemStatus(tx, orgId, id, live ? "partially_published" : "rejected");
+    if (journalDecision.should && (outstanding.length > 0 || !live)) {
+      await this.appendPromptDecision(tx, orgId, id, "rejected", journalDecision.ordinal);
+    }
   }
 }
