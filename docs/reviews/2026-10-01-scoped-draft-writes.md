@@ -97,6 +97,13 @@ and environment files, preserving configuration examples. The opt-in native
 Docker COPY probe passed using only synthetic files and `FROM scratch`; it
 never copied the operator checkout or downloaded a base image.
 
+## Local installation
+
+The normal local installation was subsequently rebuilt and upgraded to migration
+0125 with retained data and encryption/auth configuration. See the
+[operator upgrade record](2026-10-01-scoped-local-upgrade.md) for canonical
+builds, architecture, probes, private recovery preparation and exact cleanup.
+
 ## Remaining release limits
 
 Main merge and public image release remain pending explicit authorization.
