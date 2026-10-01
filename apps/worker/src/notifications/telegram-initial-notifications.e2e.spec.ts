@@ -22,6 +22,7 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
   let initial: TelegramInitialNotificationsRepository;
   let publishQueue: string;
   const orgIds: string[] = [];
+  const userIds: string[] = [];
   beforeAll(async () => {
     process.env.DATABASE_URL = url as string;
     process.env.APP_ENCRYPTION_KEY ??= Buffer.alloc(32, 13).toString("base64");
@@ -48,10 +49,12 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
     await boss?.stop({ graceful: true });
     for (const orgId of orgIds)
       await connection.db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+    for (const userId of userIds)
+      await connection.db.delete(schema.user).where(eq(schema.user.id, userId));
     await connection?.pool.end();
     await (await import("../db")).pool.end();
   });
-  async function fixture() {
+  async function fixture(outboundOnly?: { botId: string; token: string; botIdentityId: string }) {
     const orgId = randomUUID();
     orgIds.push(orgId);
     await connection.db
@@ -109,12 +112,14 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
       })
       .returning({ id: schema.pipelineRuns.id });
     if (!run || !adaptation) throw new Error("Missing scoped run/adaptation");
-    const botId = String(BigInt(`0x${randomBytes(6).toString("hex")}`) + 1n);
-    const token = `${botId}:synthetic_token`;
-    const [bot] = await connection.db
-      .insert(schema.telegramBotIdentities)
-      .values({ botId, ownerOrgId: orgId, enabled: true })
-      .returning({ id: schema.telegramBotIdentities.id });
+    const botId = outboundOnly?.botId ?? String(BigInt(`0x${randomBytes(6).toString("hex")}`) + 1n);
+    const token = outboundOnly?.token ?? `${botId}:synthetic_token`;
+    const [bot] = outboundOnly
+      ? [{ id: outboundOnly.botIdentityId }]
+      : await connection.db
+          .insert(schema.telegramBotIdentities)
+          .values({ botId, ownerOrgId: orgId, enabled: true })
+          .returning({ id: schema.telegramBotIdentities.id });
     if (!bot) throw new Error("Missing bot fixture");
     await connection.db.insert(schema.notificationSettings).values({
       orgId,
@@ -125,31 +130,32 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
         process.env.APP_ENCRYPTION_KEY as string,
       ),
     });
-    await connection.db.insert(schema.telegramDecisionConfigs).values({
-      orgId,
-      botIdentityId: bot.id,
-      state: "active",
-      routeId: randomBytes(32).toString("base64url"),
-      secretHash: randomBytes(32).toString("hex"),
-      credentialsEncrypted: encryptJson(
-        { botToken: token },
-        process.env.APP_ENCRYPTION_KEY as string,
-      ),
-      retryPayloadEncrypted: encryptJson(
-        {
-          botId,
-          botUsername: "SyntheticBot",
-          request: {
-            url: "https://pubrick.example/api/telegram/synthetic",
-            secret_token: "synthetic",
-            allowed_updates: ["message", "callback_query"],
-            drop_pending_updates: false,
-            max_connections: 40,
+    if (!outboundOnly)
+      await connection.db.insert(schema.telegramDecisionConfigs).values({
+        orgId,
+        botIdentityId: bot.id,
+        state: "active",
+        routeId: randomBytes(32).toString("base64url"),
+        secretHash: randomBytes(32).toString("hex"),
+        credentialsEncrypted: encryptJson(
+          { botToken: token },
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+        retryPayloadEncrypted: encryptJson(
+          {
+            botId,
+            botUsername: "SyntheticBot",
+            request: {
+              url: "https://pubrick.example/api/telegram/synthetic",
+              secret_token: "synthetic",
+              allowed_updates: ["message", "callback_query"],
+              drop_pending_updates: false,
+              max_connections: 40,
+            },
           },
-        },
-        process.env.APP_ENCRYPTION_KEY as string,
-      ),
-    });
+          process.env.APP_ENCRYPTION_KEY as string,
+        ),
+      });
     const [event] = await connection.db
       .insert(schema.notificationEvents)
       .values({ orgId, event: "draft_ready", subjectId: run.id, targetId: item.id })
@@ -164,6 +170,7 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
       botId,
       token,
       eventId: event.id,
+      channelId: channel.id,
     };
   }
   async function capabilities(orgId: string) {
@@ -271,6 +278,242 @@ describe.skipIf(!url)("native durable initial Telegram draft notifications", () 
       url: expect.stringContaining("?intent=reject"),
     });
     sdk.mockRestore();
+  });
+  it("keeps a shared verified bot outbound-only in another organization with URL fallback", async () => {
+    const owner = await fixture();
+    const outbound = await fixture(owner);
+    await service.scan(boss, publishQueue);
+    expect(scripted.initial).toHaveBeenCalledTimes(1);
+    expect(scripted.initial.mock.calls[0]?.[0]).toBe(owner.token);
+    expect(scripted.initial.mock.calls[0]?.[1].reviewUrl).toContain(owner.itemId);
+    expect(scripted.legacy).toHaveBeenCalledTimes(1);
+    const [legacyCredentials, , options] = scripted.legacy.mock.calls[0] ?? [];
+    expect(legacyCredentials).toEqual({ botToken: owner.token, chatId: "-10042" });
+    expect(
+      options.buttonRows
+        .flat()
+        .every(
+          (button: { url?: string; callback_data?: string }) =>
+            Boolean(button.url) && button.callback_data === undefined,
+        ),
+    ).toBe(true);
+    expect(options.buttonRows[1][1]).toEqual({
+      text: "Reject",
+      url: expect.stringContaining(`${outbound.itemId}?intent=reject`),
+    });
+    expect(await capabilities(outbound.orgId)).toEqual([]);
+    expect(await capabilities(owner.orgId)).toMatchObject([
+      { state: "pending", sendState: "sent" },
+    ]);
+    const [registry] = await connection.db
+      .select({
+        owner: schema.telegramBotIdentities.ownerOrgId,
+        enabled: schema.telegramBotIdentities.enabled,
+        generation: schema.telegramBotIdentities.generation,
+        quarantined: schema.telegramBotIdentities.quarantined,
+      })
+      .from(schema.telegramBotIdentities)
+      .where(eq(schema.telegramBotIdentities.id, owner.botIdentityId));
+    expect(registry).toEqual({
+      owner: owner.orgId,
+      enabled: true,
+      generation: 1,
+      quarantined: false,
+    });
+    const configs = await connection.db
+      .select({
+        orgId: schema.telegramDecisionConfigs.orgId,
+        state: schema.telegramDecisionConfigs.state,
+      })
+      .from(schema.telegramDecisionConfigs)
+      .where(eq(schema.telegramDecisionConfigs.botIdentityId, owner.botIdentityId));
+    expect(configs).toEqual([{ orgId: owner.orgId, state: "active" }]);
+    const events = await connection.db
+      .select({ status: schema.notificationEvents.status })
+      .from(schema.notificationEvents)
+      .where(eq(schema.notificationEvents.orgId, outbound.orgId));
+    expect(events).toEqual([{ status: "sent" }]);
+  });
+
+  it("admits exactly one competing initial at 1999 combined live initial and private capabilities", async () => {
+    const f = await fixture();
+    const [secondItem] = await connection.db
+      .insert(schema.contentItems)
+      .values({
+        orgId: f.orgId,
+        brandId: f.brandId,
+        title: "Second quota draft",
+        body: "Synthetic second body",
+        status: "draft",
+        isSafeToDelete: true,
+      })
+      .returning({ id: schema.contentItems.id });
+    if (!secondItem) throw new Error("Missing second quota item");
+    await connection.db.insert(schema.adaptations).values({
+      orgId: f.orgId,
+      contentItemId: secondItem.id,
+      channelId: f.channelId,
+      status: "pending",
+      body: "Synthetic second adaptation",
+    });
+    const [secondRun] = await connection.db
+      .insert(schema.pipelineRuns)
+      .values({
+        orgId: f.orgId,
+        brandId: f.brandId,
+        contentItemId: secondItem.id,
+        status: "succeeded",
+        input: { kind: "brief", text: "Synthetic second", channelIds: [f.channelId] },
+      })
+      .returning({ id: schema.pipelineRuns.id });
+    if (!secondRun) throw new Error("Missing second quota run");
+    const [secondEvent] = await connection.db
+      .insert(schema.notificationEvents)
+      .values({
+        orgId: f.orgId,
+        event: "draft_ready",
+        subjectId: secondRun.id,
+        targetId: secondItem.id,
+      })
+      .returning({ id: schema.notificationEvents.id });
+    if (!secondEvent) throw new Error("Missing second quota outbox");
+    const snapshot = await readEditorialSnapshot(connection.db, f.orgId, f.itemId);
+    if (!snapshot) throw new Error("Missing quota seed snapshot");
+    const snapshotHash = hashEditorialSnapshot(snapshot);
+    const now = new Date(),
+      expiresAt = new Date(now.getTime() + 30 * 60000);
+    const seeded = Array.from({ length: 1998 }, () => ({
+      id: randomUUID(),
+      orgId: f.orgId,
+      botIdentityId: f.botIdentityId,
+      generation: 1,
+      contentItemId: f.itemId,
+      brandId: f.brandId,
+      snapshotHash,
+      snapshotVersion: "client-review-v1",
+      tokenHash: digest(randomUUID()),
+      chatId: "-10042",
+      createdAt: now,
+      expiresAt,
+    }));
+    // Batch below PostgreSQL's bind-parameter limit; timestamps are inserted,
+    // never rewritten around immutable source guards.
+    for (let start = 0; start < seeded.length; start += 250)
+      await connection.db
+        .insert(schema.telegramInitialCapabilities)
+        .values(seeded.slice(start, start + 250));
+    const userId = randomUUID();
+    userIds.push(userId);
+    await connection.db
+      .insert(schema.user)
+      .values({ id: userId, name: "Synthetic quota actor", email: `${userId}@example.invalid` });
+    const [binding] = await connection.db
+      .insert(schema.telegramBindings)
+      .values({
+        orgId: f.orgId,
+        userId,
+        botIdentityId: f.botIdentityId,
+        generation: 1,
+        telegramUserId: "779",
+        privateChatId: "779",
+      })
+      .returning({ id: schema.telegramBindings.id });
+    if (!binding || !seeded[0]) throw new Error("Missing quota actor/initial parent");
+    await connection.db.insert(schema.telegramActorConfirmations).values({
+      orgId: f.orgId,
+      userId,
+      bindingId: binding.id,
+      initialCapabilityId: seeded[0].id,
+      initialExpiresAt: expiresAt,
+      botIdentityId: f.botIdentityId,
+      generation: 1,
+      contentItemId: f.itemId,
+      brandId: f.brandId,
+      snapshotHash,
+      snapshotVersion: "client-review-v1",
+      tokenHash: digest(randomUUID()),
+      chatId: "779",
+      createdAt: now,
+      expiresAt,
+    });
+    const live = async () =>
+      (
+        await connection.pool.query(
+          `SELECT (SELECT count(*)::int FROM telegram_initial_capabilities WHERE org_id=$1 AND state='pending' AND expires_at>clock_timestamp()) AS initial, (SELECT count(*)::int FROM telegram_actor_confirmations WHERE org_id=$1 AND state='pending' AND expires_at>clock_timestamp()) AS private`,
+          [f.orgId],
+        )
+      ).rows[0];
+    expect(await live()).toEqual({ initial: 1998, private: 1 });
+    let release!: () => void;
+    const together = new Promise<void>((accept) => {
+      release = accept;
+    });
+    const prepare = initial.prepare.bind(initial);
+    const outcomes: Array<string | null> = [];
+    let arrivals = 0;
+    const spy = vi.spyOn(initial, "prepare").mockImplementation(async (...args) => {
+      if (++arrivals === 2) release();
+      await together;
+      const result = await prepare(...args);
+      outcomes.push(result?.capabilityId ?? null);
+      return result;
+    });
+    try {
+      // Each real scan claims a different committed outbox before the barrier;
+      // both genuine prepare transactions then compete on the same registry.
+      const scans = [service.scan(boss, publishQueue), service.scan(boss, publishQueue)];
+      try {
+        await vi.waitFor(() => expect(arrivals).toBe(2), { timeout: 3000, interval: 10 });
+      } finally {
+        release();
+        await Promise.allSettled(scans);
+      }
+      await Promise.all(scans);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(new Set(spy.mock.calls.map((call) => call[1].id))).toEqual(
+        new Set([f.eventId, secondEvent.id]),
+      );
+      expect(new Set(spy.mock.calls.map((call) => call[1].targetId))).toEqual(
+        new Set([f.itemId, secondItem.id]),
+      );
+      expect(outcomes.filter(Boolean)).toHaveLength(1);
+      expect(outcomes.filter((value) => value === null)).toHaveLength(1);
+      expect(scripted.initial).toHaveBeenCalledTimes(1);
+      expect(scripted.legacy).toHaveBeenCalledTimes(1);
+      const options = scripted.legacy.mock.calls[0]?.[2];
+      expect(options.buttonRows[1][1]).toEqual({
+        text: "Reject",
+        url: expect.stringContaining("?intent=reject"),
+      });
+      expect(
+        options.buttonRows
+          .flat()
+          .every((button: { callback_data?: string }) => button.callback_data === undefined),
+      ).toBe(true);
+      expect(await live()).toEqual({ initial: 1999, private: 1 });
+      const issued = await connection.db
+        .select({
+          id: schema.telegramInitialCapabilities.id,
+          sendState: schema.telegramInitialCapabilities.sendState,
+        })
+        .from(schema.telegramInitialCapabilities)
+        .where(
+          and(
+            eq(schema.telegramInitialCapabilities.orgId, f.orgId),
+            eq(schema.telegramInitialCapabilities.sendState, "sent"),
+          ),
+        );
+      expect(issued).toEqual([{ id: outcomes.find(Boolean), sendState: "sent" }]);
+      const events = await connection.db
+        .select({ status: schema.notificationEvents.status })
+        .from(schema.notificationEvents)
+        .where(eq(schema.notificationEvents.orgId, f.orgId));
+      expect(events).toHaveLength(2);
+      expect(events.every((event) => event.status === "sent")).toBe(true);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
   });
   it("does not revive a capability revoked while the provider request is outstanding", async () => {
     const f = await fixture();

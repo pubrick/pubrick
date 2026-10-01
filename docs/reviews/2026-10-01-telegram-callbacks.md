@@ -142,11 +142,12 @@ The logs retain those failures and the affected closure, including
 
 ## Remaining acceptance
 
-This is an implementation milestone, not completed Telegram feature acceptance.
-Broader native writer interleavings and a durable result shown in the web UI
-remain required; the compiled journey and three expanded native cases above passed. A separate private-only expiry fixture now isolates that predicate with a
-live parent. Reader-first channel deletion
-does not prove arbitrary raw channel-first deletion safe.
+Local scripted acceptance is distinct from live Telegram interoperability.
+The local gates now include native writer boundaries and durable web status.
+A separate private-only expiry fixture isolates that predicate with a live
+parent. Reader-first channel deletion does not prove arbitrary raw channel-first
+deletion safe. SQL storage boundaries do not replace full application writers,
+and exact inside/equality rolling-window clock boundaries remain unproved.
 
 The first integrated unit run timed out in two existing shared corpus tests under
 concurrent workspace load and aborted other packages. The sequential closure
@@ -161,7 +162,66 @@ cases explicitly skipped. The worker unit suite passed 255 cases with 406 native
 cases skipped. Logs retain the original failures and affected closures. No remote CI was dispatched and no `main`
 release or live Telegram interoperability is claimed.
 
+## Compiled and janitor acceptance
+
 The actual janitor/final-callback overlap test is independently source-reviewed
 and included in this acceptance candidate. It owns a compiled API subprocess,
 synthetic provider and pools; both orders use observed native lock barriers.
-Its execution remains pending against freshly built candidate artifacts.
+Both native overlap cases passed against API artifacts built from `4baacaff`.
+The final callback holding parents makes the janitor skip that organization;
+when the janitor holds parents, the actual callback waits then rejects once.
+Aged sibling records are removed without erasing the new audit, receipt or live
+capability. The first harness attempt used `expect.poll` in a hook, which Vitest
+rejects; it was replaced with the existing `vi.waitFor`. The second attempt
+passed both cases but cleanup incorrectly tried to delete an irreversible bot
+reservation. Cleanup now asserts its quarantined, ownerless state and leaves
+that opaque row in the owned disposable database. The final suite passed 2/2
+with cleanup, and the source and log were independently reviewed. Logs retain
+all attempts as `telegram-retention-callback-native{,-closure,-complete}.log`.
+
+The compiled journey also passed at exact source
+`4baacaffa74fbeaf61a6a3ce74013de1093c152d`, including the rejected draft's visible
+status and body, then a page reload preserving that status. No publication or
+usage-ledger rows were created. All owned browser services, media/certificate
+files and the database were removed. The retained log is
+`telegram-compiled-browser-durable-result.log`. Later changes are confined to
+test harnesses and receipts; the API runtime used by native overlap is unchanged.
+
+## Final local acceptance (2026-10-02)
+
+The affected native evidence covers 54 distinct cases: callback decisions 30,
+account binding 15, initial notifications seven and real janitor/callback overlap
+two. This is composite evidence from integrated runs and focused closures, not
+one green 54-case run. Both affected package typechecks passed sequentially.
+The compiled API/worker/web journey passed at `4baacaff` as recorded above.
+
+The binding follow-up proves source-valid expired claim/confirmation, observed
+concurrent confirmation/unlink, organization issuance at 99 → 100, supported
+update admission at 9,999 → 10,000, and a database-clock row just outside the
+10-minute issuance window. Its integrated run passed 14/15; the missing direct
+blocker count was corrected to follow actual transitive PostgreSQL tuple-waiter
+chains, and that case passed its focused closure. Exact positive/equality clock
+boundaries are not claimed. Logs are `telegram-binding-admission-native.log`
+and `telegram-binding-unlink-native-closure.log`.
+
+The final worker guards prove an outbound-only workspace can share the owner's
+bot without interactive capabilities or registry/config changes. They also
+prove two real scans compete for one remaining capability slot with one private
+capability already counted: 1,998 initials + one private becomes 1,999 + one.
+The worker run passed six of seven; the last test originally compared destination
+credentials to a string. Its corrected object assertion and full URL/no-capability
+assertions passed the focused closure. The API quota case independently passed:
+two bound editors competing at 1,999 initials issue exactly one private cap and
+one physical send, with no rejection or audit and no over-capacity receipt.
+Logs are `telegram-initial-guards-native.log`,
+`telegram-initial-shared-bot-native-closure.log` and
+`telegram-callback-capacity-native.log`. Source and scoped closure evidence were
+independently reviewed. No further broad suite rerun was needed for these
+fixture/assertion corrections.
+
+Local scripted acceptance is complete in this reviewed scope. Live Telegram
+webhook/certificate/event-shape compatibility remains unverified. Unknown remote
+mutation cannot authorize incompatible successor changes or ownership release.
+The matching SQL writer boundaries and defensive expiry fixture have the limits
+stated above; no full live publish operation or exact microsecond equality proof
+is claimed. This feature is unreleased in `main`.

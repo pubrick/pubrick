@@ -201,3 +201,10 @@ specs independently acquire the migration advisory lock and compete for the
 same PostgreSQL; CPU-parallel imports add another startup cost. Keep this tier's
 file concurrency bounded and preserve the actual interleaving inside its
 concurrency tests. A longer hook timeout does not remove resource contention.
+
+## 2026-10-02 — export patches after the final formatter run
+
+Several test handoffs had a passing formatter result but exported an earlier
+patch, requiring the same formatting corrections again at integration. Generate
+the patch after the last formatter write, then check the exact exported content.
+Source-check results describe the artifact being handed off, not an older diff.

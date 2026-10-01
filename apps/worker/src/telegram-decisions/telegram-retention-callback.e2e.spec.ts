@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 import { createDb, hashEditorialSnapshot, readEditorialSnapshot, schema } from "@pubrick/db";
 import { encryptJson } from "@pubrick/shared";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { TelegramRetentionRepository } from "./telegram-retention.repository";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -165,21 +165,18 @@ describe.skipIf(!url)("native retention overlapping the actual final Telegram ca
     api.once("error", (error) => {
       startupError = error;
     });
-    await expect
-      .poll(
-        async () => {
-          if (startupError) throw startupError;
-          if (api?.exitCode !== null || api?.signalCode !== null)
-            throw new Error(`Compiled API exited before readiness: ${output}`);
-          try {
-            return (await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1000) })).ok;
-          } catch {
-            return false;
-          }
-        },
-        { timeout: 60000, interval: 100 },
-      )
-      .toBe(true);
+    await vi.waitFor(
+      async () => {
+        if (startupError) throw startupError;
+        if (api?.exitCode !== null || api?.signalCode !== null)
+          throw new Error(`Compiled API exited before readiness: ${output}`);
+        const response = await fetch(`${origin}/api/health`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        expect(response.ok).toBe(true);
+      },
+      { timeout: 60000, interval: 100 },
+    );
   }, 90000);
 
   afterAll(async () => {
@@ -203,10 +200,23 @@ describe.skipIf(!url)("native retention overlapping the actual final Telegram ca
                   .where(eq(schema.organization.id, orgId));
               for (const userId of userIds)
                 await connection.db.delete(schema.user).where(eq(schema.user.id, userId));
-              for (const identityId of identityIds)
-                await connection.db
-                  .delete(schema.telegramBotIdentities)
+              // Bot reservations deliberately survive tenant deletion. Keep
+              // these opaque quarantined rows until this owned test DB is dropped.
+              for (const identityId of identityIds) {
+                const [reservation] = await connection.db
+                  .select({
+                    ownerOrgId: schema.telegramBotIdentities.ownerOrgId,
+                    enabled: schema.telegramBotIdentities.enabled,
+                    quarantined: schema.telegramBotIdentities.quarantined,
+                  })
+                  .from(schema.telegramBotIdentities)
                   .where(eq(schema.telegramBotIdentities.id, identityId));
+                expect(reservation).toEqual({
+                  ownerOrgId: null,
+                  enabled: false,
+                  quarantined: true,
+                });
+              }
             } finally {
               await connection.pool.end();
             }

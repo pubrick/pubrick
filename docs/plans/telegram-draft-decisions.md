@@ -1,6 +1,6 @@
 # Telegram draft decision execution plan
 
-Status: foundation, setup/binding, settings, retention and callbacks implemented; compiled journey passed; broader native proof and durable result UI acceptance pending.
+Status: foundation, setup/binding, settings, retention and callbacks implemented; compiled journey passed; local scripted acceptance passed; live sandbox verification and main release pending.
 Date: 2026-10-01. Tracking: `Ozon-tools-0mflt` (design),
 `Ozon-tools-ru3m0` (foundation), `Ozon-tools-4pvvm` (setup/binding).
 Design: [0013](../specs/0013-telegram-draft-decisions.md).
@@ -14,8 +14,9 @@ with real session authority, bounded update admission and scripted Bot API
 transport. Settings and bounded retention now have [focused follow-up evidence](../reviews/2026-10-01-telegram-settings-retention.md).
 Draft callback decisions and locked final authorization have
 [focused native evidence](../reviews/2026-10-01-telegram-callbacks.md). The compiled user journey, storage rollback and competing-editor cases passed.
-Mobile keyboard binding and revocation also passed. Broader native writer gates
-and the durable result UI assertion remain required.
+Mobile keyboard binding/revocation, native writer boundaries, actual janitor
+overlap and durable result UI assertions also passed. Binding admission, outbound sharing and combined capability limits also passed.
+The receipt records composite results and precise proof limits.
 Bot ownership transfer/release remains deliberately unsupported.
 
 Independent source review closed three concrete findings in the proposal:

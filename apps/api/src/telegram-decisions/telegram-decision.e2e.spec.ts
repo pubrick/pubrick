@@ -4,7 +4,7 @@ import type { NestExpressApplication } from "@nestjs/platform-express";
 import { Test } from "@nestjs/testing";
 import { hashEditorialSnapshot, readEditorialSnapshot, schema } from "@pubrick/db";
 import { encryptJson, withHashtags } from "@pubrick/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import pg from "pg";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1249,4 +1249,75 @@ describe.skipIf(!url)("Telegram draft decisions through authenticated native cal
       expect(await livePublishJobs(f)).toBe(false);
     },
   );
+  it("admits one private confirmation for two bound editors at the combined live-capability limit", async () => {
+    const f = await fixture();
+    const editor = await secondEditor(f);
+    // One bounded native INSERT preserves the live parent projection and all
+    // storage constraints; no thousands of HTTP/provider calls are needed.
+    const seeded = await db.execute(sql`INSERT INTO telegram_initial_capabilities
+      (org_id,bot_identity_id,generation,content_item_id,brand_id,snapshot_hash,snapshot_version,
+       token_hash,chat_id,message_id,state,send_state,send_attempted_at,created_at,expires_at)
+      SELECT org_id,bot_identity_id,generation,content_item_id,brand_id,snapshot_hash,snapshot_version,
+        md5(${randomUUID()} || series::text) || md5(${randomUUID()} || series::text),
+        chat_id,message_id,state,send_state,send_attempted_at,created_at,expires_at
+      FROM telegram_initial_capabilities CROSS JOIN generate_series(1,1998) series
+      WHERE org_id=${f.orgId} AND id=${f.initialId}::uuid RETURNING id`);
+    expect(seeded.rows).toHaveLength(1998);
+    async function liveCounts() {
+      const result = await db.execute<{ initial: number; private: number }>(sql`SELECT
+        (SELECT count(*)::int FROM telegram_initial_capabilities WHERE org_id=${f.orgId}
+          AND state='pending' AND expires_at>clock_timestamp()) AS initial,
+        (SELECT count(*)::int FROM telegram_actor_confirmations WHERE org_id=${f.orgId}
+          AND state='pending' AND expires_at>clock_timestamp()) AS private`);
+      return result.rows[0];
+    }
+    expect(await liveCounts()).toEqual({ initial: 1999, private: 0 });
+    const responses = await Promise.all([
+      post(f, callback(f, `ir:${f.code}`, 1, 777)),
+      post(f, callback(f, `ir:${f.code}`, 2, 888)),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 503]);
+    const winner = responses.findIndex((response) => response.status === 200);
+    expect(await liveCounts()).toEqual({ initial: 1999, private: 1 });
+    const confirmations = await db
+      .select({
+        userId: schema.telegramActorConfirmations.userId,
+        bindingId: schema.telegramActorConfirmations.bindingId,
+        state: schema.telegramActorConfirmations.state,
+        sendState: schema.telegramActorConfirmations.sendState,
+        chatId: schema.telegramActorConfirmations.chatId,
+      })
+      .from(schema.telegramActorConfirmations)
+      .where(eq(schema.telegramActorConfirmations.orgId, f.orgId));
+    expect(confirmations).toEqual([
+      {
+        userId: winner === 0 ? f.userId : editor.userId,
+        bindingId: winner === 0 ? f.bindingId : editor.bindingId,
+        state: "pending",
+        sendState: "sent",
+        chatId: winner === 0 ? "777" : "888",
+      },
+    ]);
+    const physical = sent.filter((row) => row.token === f.token);
+    expect(physical).toHaveLength(1);
+    expect(physical[0]?.body.chat_id).toBe(winner === 0 ? "777" : "888");
+    const receipts = await db
+      .select({
+        updateId: schema.telegramUpdateReceipts.updateId,
+        outcome: schema.telegramUpdateReceipts.outcome,
+      })
+      .from(schema.telegramUpdateReceipts)
+      .where(eq(schema.telegramUpdateReceipts.orgId, f.orgId));
+    expect(receipts).toEqual([{ updateId: String(winner + 1), outcome: "accepted" }]);
+    const [parent] = await db
+      .select({
+        state: schema.telegramInitialCapabilities.state,
+        terminalAt: schema.telegramInitialCapabilities.terminalAt,
+      })
+      .from(schema.telegramInitialCapabilities)
+      .where(eq(schema.telegramInitialCapabilities.id, f.initialId));
+    expect(parent).toEqual({ state: "pending", terminalAt: null });
+    expect(await status(f)).toEqual({ status: "draft", audit: [] });
+    expect(await livePublishJobs(f)).toBe(false);
+  });
 });

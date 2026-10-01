@@ -1,18 +1,15 @@
 # Telegram draft decisions
 
-Status: storage foundation and setup/account-binding backend implemented and
-independently reviewed. Migrations 0128/0129 have native evidence in the
-[foundation receipt](../reviews/2026-10-01-telegram-foundation.md) and
-[setup/binding receipt](../reviews/2026-10-01-telegram-setup-binding.md).
-Manager setup/disable routes and secret-authenticated private `/start` binding
-are enabled in the feature branch. Callback decisions are implemented with
-[focused native evidence](../reviews/2026-10-01-telegram-callbacks.md), while full
-feature acceptance remains pending. Settings account/setup controls and
-bounded background retention are implemented; their scope and remaining browser
-gate are recorded in the [follow-up receipt](../reviews/2026-10-01-telegram-settings-retention.md).
-Issuance/update admission is bounded. Full atomic callback/domain concurrency
-acceptance remains open.
-Date: 2026-10-01.
+Status: foundation, setup/binding, settings, retention and private callback
+rejection implemented in the feature branch. Local scripted acceptance passed:
+[callback receipt](../reviews/2026-10-01-telegram-callbacks.md),
+[foundation receipt](../reviews/2026-10-01-telegram-foundation.md),
+[setup/binding receipt](../reviews/2026-10-01-telegram-setup-binding.md) and
+[settings receipt](../reviews/2026-10-01-telegram-settings-retention.md).
+The receipts distinguish composite native results, compiled journeys and
+precise proof limits. Live sandbox verification and release to `main` remain
+pending. User instructions are in [notifications](../notifications.md).
+Updated: 2026-10-02.
 
 ## 1. First slice and existing code
 
@@ -552,11 +549,11 @@ one coherent integration milestone; retain failures and affected closures.
 
 ## 9. Open review gates and sources
 
-The following are unresolved design gates, not permission to implement shortcuts:
-inbound bot ownership and outbound-sharing isolation; native proof of the
-specified user/tenant deletion and janitor lock order; sharing the client-review snapshot
-without changing old hashes; transaction-bound domain rejection and immutable
-actor evidence; and receipt UX after uncertain Telegram delivery.
+The original gates covered inbound ownership/outbound isolation, native
+user/tenant deletion and janitor ordering, legacy snapshot compatibility, atomic
+rejection/actor evidence and uncertainty UX. Their local evidence is recorded
+in the receipts above. They do not establish live Telegram interoperability,
+full external publish operations or exact microsecond equality boundaries.
 Remote mutation uncertainty without a provider completion barrier is an explicit
 operational limitation, not a solved recovery guarantee. The reviewed initial
 implementation may operate one unchanged setup generation, but must remain

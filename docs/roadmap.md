@@ -170,8 +170,10 @@ observed usage and SaaS demand:
   Atomic draft rejection is implemented with
   [focused native evidence](reviews/2026-10-01-telegram-callbacks.md).
   The compiled browser/API/worker journey, storage rollback and competing-editor
-  checks passed. Mobile keyboard binding/revocation also passed. Broader native concurrency and
-  durable result UI gates remain open; this feature has not been released in `main`.
+  checks passed. Mobile keyboard binding/revocation, native writer boundaries,
+  actual janitor overlap and durable web status also passed. Binding admission,
+  outbound sharing and combined capability limits passed with composite native
+  evidence. Main release and live sandbox verification remain pending.
 - Controlled prompt experiments, useful outcome attribution and retrieval
   evaluation; observational revision cohorts are not causal A/B results.
 - Stock-media integration, additional measured platform metrics, and verified

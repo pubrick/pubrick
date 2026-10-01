@@ -7,6 +7,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/), versioning: [SemVer](ht
 
 ### Added
 
+- Optional Telegram private draft rejection: verified workspace bot ownership, two-phase editor account binding, fresh-draft confirmation and atomic audit/replay protection. Review, approval, scheduling and publication remain web decisions. Includes bounded temporary records and mobile keyboard settings; live Telegram sandbox verification remains pending.
+
 - Scoped v2 API and opt-in MCP tools for draft import and queued BYOK generation, with dedicated keys, explicit paid consent, safe request replay and metered cost status. Imported drafts retain human review before delivery; existing v1 read contracts remain supported.
 - A local operator status command (`pnpm ops:status`) reports durable mail, billing, media-cleanup and AI-call lease counts. It verifies the selected Compose installation and uses bounded read-only SQL without exposing tenant content or secrets.
 - Direct BYOK providers: OpenAI, Anthropic, DeepSeek, Google Vertex Express/service accounts, and validated public OpenAI-compatible endpoints alongside Google and OpenRouter. Settings identifies saved credentials and supported features; permission refusals and unknown costs remain explicit.
