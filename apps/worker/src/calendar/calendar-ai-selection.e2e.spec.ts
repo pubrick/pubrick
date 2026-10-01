@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AiTextSelectionChangedError, DEFAULT_TEXT_MODELS, encryptJson } from "@pubrick/shared";
 import { eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -227,6 +227,87 @@ describe.skipIf(!url)("calendar text selection admission", () => {
       await repository.claim(orgId, queued.id, `${job.id}#${randomUUID()}`, job.id),
     ).toBeUndefined();
     expect(await run()).toMatchObject({ status: "failed", error: "no_api_key" });
+  });
+
+  it("defers a broken selection without starving another tenant's due generation", async () => {
+    await settings("openrouter");
+    const healthyOrg = `calendar-healthy-${randomUUID()}`;
+    await db
+      .insert(schema.organization)
+      .values({ id: healthyOrg, name: "Healthy", slug: healthyOrg });
+    try {
+      const [brand] = await db
+        .insert(schema.brands)
+        .values({ orgId: healthyOrg, name: "Healthy" })
+        .returning();
+      if (!brand) throw new Error("Missing healthy brand");
+      const [channel] = await db
+        .insert(schema.channels)
+        .values({
+          orgId: healthyOrg,
+          brandId: brand.id,
+          platform: "telegram",
+          name: "Healthy",
+          credentialsEncrypted: "unused",
+        })
+        .returning();
+      if (!channel) throw new Error("Missing healthy channel");
+      const [healthySlot] = await db
+        .insert(schema.calendarSlots)
+        .values({
+          orgId: healthyOrg,
+          brandId: brand.id,
+          channelIds: [channel.id],
+          brief: "Healthy due brief",
+          scheduledAt: new Date(Date.now() - 30_000),
+        })
+        .returning();
+      if (!healthySlot) throw new Error("Missing healthy slot");
+      const started = Date.now();
+      await expect(calendar.scan(boss)).resolves.toBeUndefined();
+      await expectNoEnqueue();
+      const [deferred] = await db
+        .select({
+          retryAfter: schema.calendarSlots.retryAfter,
+          errorCode: schema.calendarSlots.errorCode,
+        })
+        .from(schema.calendarSlots)
+        .where(eq(schema.calendarSlots.id, slotId));
+      expect(deferred?.errorCode).toBeNull();
+      expect(deferred?.retryAfter?.getTime()).toBeGreaterThanOrEqual(started + 5 * 60_000);
+      expect(deferred?.retryAfter?.getTime()).toBeLessThanOrEqual(Date.now() + 5 * 60_000);
+      const [queued] = await db
+        .select({ runId: schema.calendarSlots.runId })
+        .from(schema.calendarSlots)
+        .where(eq(schema.calendarSlots.id, healthySlot.id));
+      expect(queued?.runId).toBeTruthy();
+      expect(await boss.findJobs("generate", { data: { orgId: healthyOrg } })).toHaveLength(1);
+      const trigger = vi.spyOn(calendar, "trigger");
+      try {
+        await calendar.scan(boss);
+        expect(trigger).not.toHaveBeenCalled();
+      } finally {
+        trigger.mockRestore();
+      }
+    } finally {
+      await db.delete(schema.organization).where(eq(schema.organization.id, healthyOrg));
+    }
+  });
+
+  it("still propagates transient dispatch errors without pretending they are configuration refusals", async () => {
+    const failure = new Error("Synthetic transient database failure");
+    const trigger = vi.spyOn(calendar, "trigger").mockRejectedValue(failure);
+    try {
+      await expect(calendar.scan(boss)).rejects.toBe(failure);
+      const [slot] = await db
+        .select({ retryAfter: schema.calendarSlots.retryAfter })
+        .from(schema.calendarSlots)
+        .where(eq(schema.calendarSlots.id, slotId));
+      expect(slot?.retryAfter).toBeNull();
+      await expectNoEnqueue();
+    } finally {
+      trigger.mockRestore();
+    }
   });
 
   it("does not deadlock brand deletion against calendar admission", async () => {
