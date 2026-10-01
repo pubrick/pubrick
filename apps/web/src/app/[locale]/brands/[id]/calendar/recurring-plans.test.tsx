@@ -416,4 +416,100 @@ describe("weekly editorial plans", () => {
     expect(pages).toHaveLength(2);
     expect(pages[1]?.url).toBe(pages[0]?.url);
   });
+  it("repairs a deleted destination only after explicit editing and submits the active replacement", async () => {
+    const user = userEvent.setup();
+    const orphanId = "6d3b3543-8c62-4d7e-9fa3-536faec2743f";
+    rows = [{ ...plan, channelIds: [orphanId], blockedReason: "channels_missing" }];
+    setup();
+    await screen.findByText(plan.name);
+    expect(requests.some((request) => request.method !== "GET")).toBe(false);
+    await user.click(screen.getByRole("button", { name: t.edit }));
+    expect(screen.getByLabelText("Weekly plan channel: Manual channel")).not.toBeChecked();
+    expect(screen.getByText(t.unavailableChannels)).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("form", { name: t.editForm })).getByRole("button", {
+        name: t.removeUnavailableChannels,
+      }),
+    );
+    expect(requests.some((request) => request.method !== "GET")).toBe(false);
+    expect(rows[0]?.channelIds).toEqual([orphanId]);
+    await user.click(screen.getByLabelText("Weekly plan channel: Manual channel"));
+    await user.click(screen.getByRole("button", { name: t.save }));
+    expect(requests.some((request) => request.method === "PATCH")).toBe(false);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.save }));
+    const request = requests.find((request) => request.method === "PATCH");
+    expect(request?.body).toEqual({
+      name: plan.name,
+      brief: plan.brief,
+      channelIds: [channelId],
+      weekdays: plan.weekdays,
+      localTime: plan.localTime,
+      timezone: plan.timezone,
+      startDate: plan.startDate,
+      endDate: plan.endDate,
+      expectedRevision: 1,
+    });
+    expect(editorialPlanUpdateSchema.parse(request?.body)).toEqual(request?.body);
+    expect(requests.some((request) => request.url.includes("/enable"))).toBe(false);
+  });
+
+  it("repairs channels removed while an edit is open without losing the unsaved brief", async () => {
+    const survivingId = "2b9da9b7-e8a2-4f62-a0cf-c974a92bd566";
+    rows = [{ ...plan, channelIds: [survivingId, channelId].sort() }];
+    const user = userEvent.setup();
+    const view = render(
+      <RecurringPlans
+        brandId={brandId}
+        channels={[
+          { id: channelId, name: "Manual channel" },
+          { id: survivingId, name: "Surviving" },
+        ]}
+        canEdit
+        onChange={vi.fn()}
+      />,
+    );
+    await screen.findByText(plan.name);
+    await user.click(screen.getByRole("button", { name: t.edit }));
+    await user.type(screen.getByLabelText(t.brief), " with my unsaved detail");
+    const replacementId = "ea45c835-0c79-4bc8-aa74-73ea2cd4ba92";
+    view.rerender(
+      <RecurringPlans
+        brandId={brandId}
+        channels={[
+          { id: survivingId, name: "Surviving" },
+          { id: replacementId, name: "Replacement" },
+        ]}
+        canEdit
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(t.unavailableChannels)).toBeInTheDocument();
+    await user.click(
+      within(screen.getByRole("form", { name: t.editForm })).getByRole("button", {
+        name: t.removeUnavailableChannels,
+      }),
+    );
+    expect(screen.getByLabelText(t.brief)).toHaveValue(
+      "Write a useful update with my unsaved detail",
+    );
+    expect(screen.getByLabelText("Weekly plan channel: Surviving")).toBeChecked();
+    expect(requests.some((request) => request.method !== "GET")).toBe(false);
+    await user.click(screen.getByLabelText("Weekly plan channel: Replacement"));
+    await user.click(screen.getByRole("button", { name: t.save }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: t.save }));
+    const request = requests.find((request) => request.method === "PATCH");
+    expect(request?.body).toEqual({
+      name: plan.name,
+      brief: "Write a useful update with my unsaved detail",
+      channelIds: [survivingId, replacementId],
+      weekdays: plan.weekdays,
+      localTime: plan.localTime,
+      timezone: plan.timezone,
+      startDate: plan.startDate,
+      endDate: plan.endDate,
+      expectedRevision: 1,
+    });
+    expect(editorialPlanUpdateSchema.parse(request?.body)).toEqual(request?.body);
+    expect(requests.some((request) => request.url.includes("/enable"))).toBe(false);
+  });
 });

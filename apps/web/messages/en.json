@@ -2861,6 +2861,8 @@
       "retention_capacity_reached": "Retained history is full. Contact the workspace operator; removing plans does not free replay history."
     },
     "removedEdit": "This plan was removed. Your unsaved text is preserved; cancel editing to start a new plan.",
-    "channelLabel": "Weekly plan channel: {channel}"
+    "channelLabel": "Weekly plan channel: {channel}",
+    "unavailableChannels": "Some selected channels are no longer available. Remove them from this edit and select active channels. The saved plan changes only after Save; started drafts keep their original destinations.",
+    "removeUnavailableChannels": "Remove unavailable channels"
   }
 }

@@ -2861,6 +2861,8 @@
       "retention_capacity_reached": "Histórico cheio. Contate o operador; remover planos não libera histórico."
     },
     "removedEdit": "O plano foi removido. Seu texto permanece no formulário; cancele a edição para criar outro plano.",
-    "channelLabel": "Canal do plano semanal: {channel}"
+    "channelLabel": "Canal do plano semanal: {channel}",
+    "unavailableChannels": "Alguns canais selecionados não estão mais disponíveis. Remova-os desta edição e selecione canais ativos. O plano só muda ao salvar; rascunhos iniciados mantêm seus destinos originais.",
+    "removeUnavailableChannels": "Remover canais indisponíveis"
   }
 }

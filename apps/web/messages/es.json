@@ -2861,6 +2861,8 @@
       "retention_capacity_reached": "Historial lleno. Contacta al operador; eliminar planes no libera historial."
     },
     "removedEdit": "El plan fue eliminado. Tu texto sigue en el formulario; cancela la edición para crear otro plan.",
-    "channelLabel": "Canal del plan semanal: {channel}"
+    "channelLabel": "Canal del plan semanal: {channel}",
+    "unavailableChannels": "Algunos canales seleccionados ya no están disponibles. Elimínalos de esta edición y elige canales activos. El plan solo cambia al guardar; los borradores iniciados conservan sus destinos originales.",
+    "removeUnavailableChannels": "Eliminar canales no disponibles"
   }
 }
