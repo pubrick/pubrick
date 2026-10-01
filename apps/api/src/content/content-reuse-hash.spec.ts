@@ -85,6 +85,16 @@ describe("evergreen source and operation identities", () => {
     );
   });
 
+  it("preserves UUID identity across valid hexadecimal case variants", () => {
+    const targetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    expect(hashContentReuseRequest("reuse", targetId.toUpperCase(), request)).toBe(
+      hashContentReuseRequest("reuse", targetId, request),
+    );
+    expect(hashContentReuseRequest("reuse-retry", targetId.toUpperCase(), consent)).toBe(
+      hashContentReuseRequest("reuse-retry", targetId, consent),
+    );
+  });
+
   it("rejects unconsented, unparsed and invalid target identities", () => {
     expect(() =>
       hashContentReuseRequest("reuse", contentId, { ...request, allowPaidGeneration: false }),
