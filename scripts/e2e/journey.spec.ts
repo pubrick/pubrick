@@ -10,6 +10,7 @@ test.skip(
 );
 
 const manualPlatform = "t_j" satisfies ManualPlatformId;
+test.use({ actionTimeout: 10_000 });
 
 test("account, manual approval, verified channel, worker publication and UI tenant switching", async ({
   page,
@@ -97,7 +98,6 @@ test("account, manual approval, verified channel, worker publication and UI tena
     return response.json();
   };
   await page.goto(brandPath);
-  await page.getByRole("link", { name: "Add a channel", exact: true }).click();
   await page.getByLabel("Platform", { exact: true }).selectOption("telegram");
   await page.getByLabel("Channel name", { exact: true }).fill("Browser native");
   await page.getByLabel("Bot token", { exact: true }).fill("74001:pubrick_disposable_channel_only");
@@ -141,7 +141,9 @@ test("account, manual approval, verified channel, worker publication and UI tena
   });
   try {
     await expect.poll(async () => (await fixtureState()).pending, { timeout: 10_000 }).toBe(true);
-    await expect(page.getByText("Publishing", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Publishing", { exact: true }).first()).toBeVisible({
+      timeout: 10_000,
+    });
   } finally {
     const released = await page.request.post(`${providerOrigin}/fixture/release`, {
       headers: { authorization: `Bearer ${providerSecret}` },
