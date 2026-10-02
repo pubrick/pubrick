@@ -1,9 +1,11 @@
 # First public beta — release-note candidate
 
-**Unpublished release-note candidate.** No version or image digest has been assigned. This note
-becomes a release announcement only after the selected source, both image
-architectures, installation and recovery have been verified and publication
-has been authorized. It does not announce a paid hosted service.
+**Historical release-note candidate, superseded on 2026-10-02.** The first
+public OSS beta is now
+[`v0.1.0-beta.1`](https://github.com/pubrick/pubrick/releases/tag/v0.1.0-beta.1)
+at source `e394ec7c6044a39f3a9e7726d58c6c85eea92099`. Use its published notes
+and assets for installation and known limits. This preparation document is
+retained for history and does not announce a paid hosted service.
 
 Pubrick brings the content workflow into an independent AGPL-3.0 project:
 automate source collection, create content by your brand rules, and plan and
@@ -15,7 +17,7 @@ It supports individual creators and teams sharing a workspace.
 - Set up brands with a voice, audience and content language. Collect feeds and
   monitored Telegram sources, review suggested topics, and retrieve context
   from a brand's knowledge base.
-- Generate and refine drafts using your own Google, OpenRouter, OpenAI,
+- Create and refine content using your own Google, OpenRouter, OpenAI,
   Anthropic or DeepSeek credentials. Vertex and public OpenAI-compatible
   endpoints have explicit credential modes and capability limits.
 - Edit the master text and channel adaptations, inspect revision history,
@@ -37,17 +39,17 @@ editable example that stays in the visitor's browser.
 
 ## Install or upgrade
 
-Use the [self-hosting guide](../self-hosting.md). Until this candidate has
-published images, install from source with Docker Compose; there is no release
-image set to download yet. Configure your own auth/encryption secrets and public
-origin, then add provider keys in Settings.
+Follow the [published release](https://github.com/pubrick/pubrick/releases/tag/v0.1.0-beta.1),
+[versioned image installation](../releases.md#operator-installation) or
+[self-hosting guide](../self-hosting.md). Configure your own auth/encryption
+secrets and public origin, then add provider keys in Settings.
 
 For an upgrade, first back up the database, media and encryption-key ring
 [together](../backup-restore.md). Stop the old worker before applying migrations
 through the new API, then start the matching services. Keep the previous
 snapshot: an older image alone is not a database rollback.
 
-When versioned images are available, follow the [digest-pinned release procedure](../releases.md).
+Use the [digest-pinned release procedure](../releases.md) for published images.
 Private installations remain non-indexable by default; public-site indexing
 requires an explicit HTTPS origin and [configuration](../public-website.md).
 

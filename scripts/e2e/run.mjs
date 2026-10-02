@@ -10,6 +10,7 @@ import {
   readBrowserSource,
   verifyBrowserSource,
 } from "./browser-provenance.mjs";
+import { startNativeChannelFixture } from "./native-channel-fixture.mjs";
 
 // Never accept a target URL or inherited app secrets: this runner owns its stack.
 // Resolve before allocating any temporary files, processes or containers.
@@ -17,6 +18,7 @@ const source = readBrowserSource();
 const container = `pubrick-browser-${randomUUID()}`;
 const media = await mkdtemp(join(tmpdir(), "pubrick-browser-media-"));
 const children = [];
+let fixture;
 const env = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
@@ -65,6 +67,57 @@ function start(cmd, args, cwd) {
   children.push(child);
   return child;
 }
+async function startWorker() {
+  const child = spawn(process.execPath, ["dist/main.cjs"], {
+    cwd: "apps/worker",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(child);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Compiled worker did not start")), 180_000);
+    let output = "";
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      output = (output + chunk.toString()).slice(-4096);
+      if (output.includes("worker started")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      reject(new Error("Compiled worker exited"));
+    });
+  });
+  return child;
+}
+async function runBrowserJourney() {
+  // The loopback provider shares this event loop; spawnSync would deadlock it.
+  const child = start(
+    "pnpm",
+    [
+      "exec",
+      "playwright",
+      "test",
+      "scripts/e2e/journey.spec.ts",
+      "scripts/e2e/scoped-write-journey.spec.ts",
+      "--config=scripts/e2e/playwright.config.ts",
+    ],
+    ".",
+  );
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) =>
+      code === 0 ? resolve() : reject(new Error(`Playwright failed (${code})`)),
+    );
+  });
+}
 let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= cleanupStack();
@@ -80,6 +133,7 @@ async function cleanupStack() {
     ]);
     if (child.exitCode === null) child.kill("SIGKILL");
   }
+  await fixture?.close();
   spawnSync("docker", ["rm", "-f", "-v", container], { stdio: "ignore" });
   await rm(media, { recursive: true, force: true });
 }
@@ -139,17 +193,27 @@ try {
     "build",
     "--filter=@pubrick/api...",
     "--filter=@pubrick/web...",
+    "--filter=@pubrick/worker...",
     "--concurrency=1",
   ]);
+  fixture = await startNativeChannelFixture();
+  Object.assign(env, {
+    TELEGRAM_API_BASE_URL: fixture.origin,
+    PUBRICK_E2E_NATIVE_ORIGIN: fixture.origin,
+    PUBRICK_E2E_NATIVE_SECRET: fixture.secret,
+  });
   const api = start(process.execPath, ["dist/main.js"], "apps/api");
   await ready(`${env.API_INTERNAL_URL}/api/health`, api);
+  const worker = await startWorker();
   const standalone = "apps/web/.next/standalone/apps/web";
   await cp("apps/web/.next/static", `${standalone}/.next/static`, { recursive: true, force: true });
   await cp("apps/web/public", `${standalone}/public`, { recursive: true, force: true });
   Object.assign(env, { PORT: String(webPort), HOSTNAME: "127.0.0.1" });
   const web = start(process.execPath, ["server.js"], standalone);
   await ready(`${origin}/en/login`, web);
-  command("pnpm", ["exec", "playwright", "test", "--config=scripts/e2e/playwright.config.ts"]);
+  await runBrowserJourney();
+  if (worker.exitCode !== null) throw new Error("Compiled worker exited during journey");
+  fixture.assertComplete();
   verifyBrowserSource(source);
   console.info(
     `Self-hosted acceptance passed: source ${source}; database ${BROWSER_POSTGRES_IMAGE}`,

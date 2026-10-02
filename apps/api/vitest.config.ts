@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    setupFiles: ["./vitest.setup.ts"],
     // Applies migrations once for the whole run instead of once per e2e file — see the
     // comment in vitest.global-setup.ts for the flake this removes.
     globalSetup: ["./vitest.global-setup.ts"],
