@@ -11,7 +11,7 @@ platform handoff should be described as automatic delivery.
 
 | Original phase | Current implementation | Remaining scope |
 | --- | --- | --- |
-| P0 — foundation | Monorepo, CI, organizations, brands, channels, review queue, Docker Compose, basic publishing and documentation | Public release packaging and repeatable installation/upgrade verification |
+| P0 — foundation | Monorepo, CI, organizations, brands, channels, review queue, Docker Compose, basic publishing and documentation | Release maintenance and verification of future releases and schema upgrades |
 | P1 — generation | Five-role generation, source repurposing, reviewed revisions/history, calendar, media/video, roles, Bluesky/Mastodon | Private inbox sources and transcription are extensions of the current bounded source import |
 | P2 — inbound | Feeds, public/private Telegram monitoring, relevance, topic suggestions, hybrid knowledge retrieval, images, reviewed website-to-brand import | X integration and verified social-profile import; richer retrieval evaluation |
 | P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, scoped write API/MCP (integrated at `81b346fb`), webhooks, UTM | Controlled prompt experiments, stock media, additional Telegram decisions beyond rejection, measured scheduling signals, additional platform metrics |
@@ -58,13 +58,22 @@ integrated in `main` at `474e28a4`. The built browser journey and native recover
 round trip passed locally. See the [verification record](reviews/2026-09-30-release-foundation.md)
 for test scope and follow-up fixes. The current-schema hosted recovery extension also passed locally, including
 rotated encryption keys, retained storage and billing receipts; see the
-[recovery acceptance record](reviews/2026-09-30-hosted-recovery.md). No versioned
-images or release have been published yet, so release acceptance remains pending.
-The offline release-asset validator checks that the three downloaded digest
-assignments match one expected version/source manifest before installation;
-see [operator installation](releases.md#operator-installation). Registry access,
-architecture execution and published release acceptance still require their
-separate checks.
+[recovery acceptance record](reviews/2026-09-30-hosted-recovery.md). The first public OSS beta,
+[`v0.1.0-beta.1`](https://github.com/pubrick/pubrick/releases/tag/v0.1.0-beta.1),
+was published on 2026-10-02 from reviewed source `e394ec7c`, merged through
+PR #157 at `8db1a675`. All three public GHCR images share that version/source
+and immutable multi-platform digests. Anonymous fresh installation, the
+maintained browser journey and recovery passed on AMD64 (Docker Desktop
+emulation) and native ARM64. A coherent source-built pre-release upgrade to the
+registry image set and independent recovery passed on ARM64. This first release
+has no published predecessor, and that upgrade had no database-source changes;
+future published-to-published and new-schema upgrades require their own checks.
+See the [release verification record](reviews/2026-10-02-first-public-beta.md)
+for exact scope and the observed recovery failure still under investigation.
+The offline release-asset validator checks the version/source/digest assignments
+before [operator installation](releases.md#operator-installation).
+Iteration 1 release acceptance is delivered for this version; it does not
+establish external SaaS readiness or production capacity.
 
 ## Iteration 2 — common LLM providers
 

@@ -72,9 +72,14 @@ The existing Dockerfiles use moving Node base tags, so a later rebuild can produ
 different bytes even with the same application source. The published digests are
 the installation identity.
 
-The [first beta release-note candidate](releases/first-beta-candidate.md) is an
-unpublished, concise product summary. Assign its version/source identity and
-confirm its claims against the final artifacts before using it as release notes.
+The first public OSS beta is
+[`v0.1.0-beta.1`](https://github.com/pubrick/pubrick/releases/tag/v0.1.0-beta.1),
+from source `e394ec7c6044a39f3a9e7726d58c6c85eea92099`. Its release page contains
+the three image assignments, source/platform manifest, sanitized acceptance
+receipt, installation links and known beta limits. See the
+[verification record](reviews/2026-10-02-first-public-beta.md). The
+[original release-note candidate](releases/first-beta-candidate.md) is retained
+as historical preparation; the published release notes are authoritative.
 
 ## Maintainer release procedure
 
