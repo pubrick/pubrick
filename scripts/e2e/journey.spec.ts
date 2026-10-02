@@ -112,9 +112,19 @@ test("account, manual approval, verified channel, worker publication and UI tena
   expect(JSON.stringify(channel)).not.toContain("74001:pubrick_disposable_channel_only");
   await page.reload();
   await expect(page.getByText("Browser native", { exact: false }).first()).toBeVisible();
+  const checked = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith(`/api/channels/${channel.id}/test`),
+  );
   await page.getByRole("button", { name: "Test connection", exact: true }).click();
+  const checkedResponse = await checked;
+  expect(checkedResponse.ok()).toBeTruthy();
+  expect(await checkedResponse.json()).toEqual({
+    ok: true,
+    account: "@browser_bot",
+    target: "Browser channel",
+  });
   await expect(
-    page.getByText("OK — connected as @browser_bot, can post to Browser channel", { exact: true }),
+    page.getByText("OK — connected as @browser_bot, can post to Browser channel", { exact: false }),
   ).toBeVisible();
   await page.goto("/en/content/new");
   await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Browser brand" });
