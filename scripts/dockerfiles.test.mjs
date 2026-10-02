@@ -57,3 +57,16 @@ for (const service of ["api", "worker", "web"]) {
     }
   });
 }
+
+test("web image keeps one API origin for baked rewrites and runtime export streaming", () => {
+  const dockerfile = readFileSync(path.join(root, "docker/web.Dockerfile"), "utf8");
+  const finalStage = dockerfile.slice(dockerfile.lastIndexOf("\nFROM "));
+  assert.match(finalStage, /^ENV API_INTERNAL_URL=\$API_INTERNAL_URL$/m);
+  assert.match(finalStage, /^ARG API_INTERNAL_URL$/m);
+  const globalArguments = dockerfile.split(/^FROM /m)[0];
+  assert.match(globalArguments, /^ARG API_INTERNAL_URL=http:\/\/api:3001$/m);
+  assert.equal((dockerfile.match(/^ARG API_INTERNAL_URL=/gm) ?? []).length, 1);
+  const buildStage = dockerfile.split("FROM deps AS build")[1].split("\nFROM ")[0];
+  assert.match(buildStage, /^ARG API_INTERNAL_URL$/m);
+  assert.match(buildStage, /^ENV API_INTERNAL_URL=\$API_INTERNAL_URL$/m);
+});

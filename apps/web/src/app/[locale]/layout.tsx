@@ -13,7 +13,8 @@ export function generateStaticParams() {
 export const metadata: Metadata = {
   title: "Pubrick",
   description:
-    "Pubrick — AI content factory: news in, drafts out, review queue, publish everywhere.",
+    "Pubrick — open-source content automation using your sources, brand voice and creative rules.",
+  robots: { index: false, follow: false },
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,

@@ -65,7 +65,7 @@ export function AuthForm({ mode }: { mode: "login" | "signup" }) {
         setVerificationPending(true);
         return;
       }
-      router.push(mode === "signup" ? `/${locale}/onboarding` : (next ?? `/${locale}`));
+      router.push(mode === "signup" ? `/${locale}/onboarding` : (next ?? `/${locale}/brands`));
     } catch {
       setError(t("genericError"));
     } finally {

@@ -1,3 +1,5 @@
+ARG API_INTERNAL_URL=http://api:3001
+
 FROM node:22-slim AS base
 RUN corepack enable
 WORKDIR /repo
@@ -25,11 +27,14 @@ FROM deps AS build
 # node_modules from the deps stage above is not in the build context (see
 # .dockerignore), so this COPY layers source on top without touching it.
 COPY . .
-ARG API_INTERNAL_URL=http://api:3001
+ARG API_INTERNAL_URL
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
 RUN pnpm --filter @pubrick/web... build
 
 FROM node:22-slim
+# Runtime routes stream exports through the same origin used by build-time rewrites.
+ARG API_INTERNAL_URL
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
 WORKDIR /app
 COPY --from=build /repo/apps/web/.next/standalone ./
 COPY --from=build /repo/apps/web/.next/static ./apps/web/.next/static

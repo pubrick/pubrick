@@ -1,6 +1,6 @@
 # Development roadmap
 
-Updated: 2026-10-01.
+Updated: 2026-10-02.
 
 This is the current execution plan. The original [product design](specs/0001-product-design.md)
 records the P0–P5 scope; [porting status](porting-status.md) describes today's
@@ -14,7 +14,7 @@ platform handoff should be described as automatic delivery.
 | P0 — foundation | Monorepo, CI, organizations, brands, channels, review queue, Docker Compose, basic publishing and documentation | Public release packaging and repeatable installation/upgrade verification |
 | P1 — generation | Five-role generation, source repurposing, reviewed revisions/history, calendar, media/video, roles, Bluesky/Mastodon | Private inbox sources and transcription are extensions of the current bounded source import |
 | P2 — inbound | Feeds, public/private Telegram monitoring, relevance, topic suggestions, hybrid knowledge retrieval, images, reviewed website-to-brand import | X integration and verified social-profile import; richer retrieval evaluation |
-| P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, scoped write API/MCP (integrated at `81b346fb`), webhooks, UTM | Controlled prompt experiments, stock media, evergreen recycling, Telegram decision bot, recurring plans/channel scheduling signals, additional platform metrics |
+| P3 — feedback and automation | Activity/results, VK metrics, comment analysis, draft Autopilot and digest, prompt revision observations, client review links, read API/MCP, scoped write API/MCP (integrated at `81b346fb`), webhooks, UTM | Controlled prompt experiments, stock media, additional Telegram decisions beyond rejection, measured scheduling signals, additional platform metrics |
 | P4 — hosted SaaS | Tenant isolation, usage ledger, public site, verified registration/recovery, durable mail, sandbox subscriptions, plans and resource/dispatch admission | Real payment sandbox verification, operations and support; platform-paid AI is a later extension |
 | P5 — platform breadth | Several platforms have explicit manual publication workflows | Verified native integrations and broader media formats |
 
@@ -117,6 +117,12 @@ remain required before a hosted beta is declared. The read-only
 [operator status command](hosted-operations.md) is implemented in `main` at `81b346fb`; it reports bounded aggregate queue, subscription, cleanup and
 physical-call facts and does not certify provider readiness.
 
+Owner direction (2026-10-02): defer payment verification for now and prioritize
+the public product/open-source website. Its English-first public routes explain
+both deployment paths without advertising a live paid service. See
+[website configuration](public-website.md). Real payment acceptance remains a
+future launch gate, rather than a dependency of this website iteration.
+
 Delivery slices:
 
 1. **Hosted entry point:** public product site, sign-up/sign-in, workspace
@@ -166,7 +172,7 @@ observed usage and SaaS demand:
   [design](specs/0011-recurring-editorial-plans.md) and
   [verification](reviews/2026-10-01-recurring-editorial-plans.md).
   Manual evergreen draft reuse has passed local composite integration and
-  compiled browser acceptance; main release remains pending. See the
+  compiled browser acceptance and is integrated in `main` at `ffd8af41`. See the
   [user workflow](evergreen-draft-reuse.md) and
   [verification](reviews/2026-10-01-evergreen-integration.md).
 - Telegram decisions follow the reviewed [design](specs/0013-telegram-draft-decisions.md).
@@ -178,7 +184,8 @@ observed usage and SaaS demand:
   checks passed. Mobile keyboard binding/revocation, native writer boundaries,
   actual janitor overlap and durable web status also passed. Binding admission,
   outbound sharing and combined capability limits passed with composite native
-  evidence. Main release and live sandbox verification remain pending.
+  evidence. Main integration is complete at `ffd8af41`; controlled live sandbox
+  verification remains pending.
 - Controlled prompt experiments, useful outcome attribution and retrieval
   evaluation; observational revision cohorts are not causal A/B results.
 - Stock-media integration, additional measured platform metrics, and verified

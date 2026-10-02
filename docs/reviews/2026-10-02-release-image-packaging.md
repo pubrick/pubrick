@@ -47,5 +47,7 @@ publication and real payment sandbox verification remain unverified.
 
 Read-only GitHub inspection found no releases on 2026-10-02. Local operator
 configuration inspection found billing and SMTP fields unconfigured; only field
-presence booleans were reported, never secret values. Main integration and
-publication need explicit owner authorization.
+presence booleans were reported, never secret values. The owner authorized
+main integration on 2026-10-02; remote `main` is verified at `ffd8af41573b562d2a3ac2b4f4cd9b0fdee0dd19`.
+Version publication remains separate. Payment verification was deferred by the
+owner on the same date.

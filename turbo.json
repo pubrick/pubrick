@@ -44,6 +44,8 @@
         "TEST_DATABASE_URL",
         // The server export route reads the internal API origin at runtime and in tests.
         "API_INTERNAL_URL",
+        "PUBLIC_ORIGIN",
+        "PUBLIC_SITE_INDEXING",
         "PUBLIC_API_MAX_OPERATION_RECORDS",
         "BETTER_AUTH_SECRET",
         "APP_ENCRYPTION_KEY",

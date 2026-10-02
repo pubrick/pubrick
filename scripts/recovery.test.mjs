@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,7 +12,41 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { parseArguments, recover, validateSnapshot } from "./recovery.mjs";
+
+test("direct and symlink CLI paths execute recovery argument validation", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "pubrick-recovery-cli-"));
+  const script = fileURLToPath(new URL("./recovery.mjs", import.meta.url));
+  const alias = path.join(root, "recover.mjs");
+  symlinkSync(script, alias);
+  try {
+    for (const entry of [script, alias]) {
+      const result = spawnSync(process.execPath, [entry, "unsupported"], {
+        cwd: root,
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      assert.equal(result.status, 1, `CLI must execute through ${entry}`);
+      assert.match(result.stderr, /Usage: node scripts\/recovery\.mjs/);
+      assert.equal(result.stdout, "");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("importing recovery with a non-file argument does not execute the CLI", () => {
+  const script = new URL("./recovery.mjs", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `await import(${JSON.stringify(script)})`, "missing-entry.mjs"],
+    { encoding: "utf8", timeout: 5000 },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
 
 function fixture(options = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "pubrick-recovery-unit-"));

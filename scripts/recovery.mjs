@@ -383,7 +383,11 @@ export function parseArguments(args) {
   }
   return options;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  existsSync(process.argv[1]) &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   try {
     console.log(recover(parseArguments(process.argv.slice(2))));
   } catch (error) {

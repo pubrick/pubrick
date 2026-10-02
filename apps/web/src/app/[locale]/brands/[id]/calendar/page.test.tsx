@@ -564,10 +564,13 @@ describe("brand calendar", () => {
     await renderAsync(<CalendarPage params={Promise.resolve({ id: "brand-1" })} />);
     await waitFor(() => expect(screen.getByLabelText("Topic 21")).toBeInTheDocument());
     const user = userEvent.setup();
-    for (let index = 1; index <= 20; index++) {
-      await user.click(screen.getByLabelText(`Topic ${index}`, { exact: true }));
+    const topicsGroup = within(screen.getByRole("group", { name: en.Calendar.bulkTopics }));
+    const choices = topicsGroup.getAllByRole("checkbox");
+    expect(choices).toHaveLength(21);
+    for (let index = 0; index < 20; index++) {
+      await user.click(choices[index] as HTMLElement);
     }
-    expect(screen.getByLabelText("Topic 21")).toBeDisabled();
+    expect(topicsGroup.getByRole("checkbox", { name: "Topic 21" })).toBeDisabled();
     expect(
       screen.getByText(
         en.Calendar.bulkSelectedCount.replace("{count}", "20").replace("{limit}", "20"),

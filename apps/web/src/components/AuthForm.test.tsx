@@ -57,7 +57,7 @@ async function fillLogin(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("AuthForm — login mode", () => {
-  it("submits signIn.email with the typed credentials and navigates to the locale root", async () => {
+  it("submits signIn.email with the typed credentials and navigates to the localized workspace", async () => {
     mockAuthClient.signIn.email.mockResolvedValue({ data: { user: { id: "u1" } }, error: null });
     render(<AuthForm mode="login" />);
     const user = userEvent.setup();
@@ -70,7 +70,7 @@ describe("AuthForm — login mode", () => {
         password: "hunter22222",
       }),
     );
-    expect(routerMock.push).toHaveBeenCalledWith("/en");
+    expect(routerMock.push).toHaveBeenCalledWith("/en/brands");
     expect(mockAuthClient.signUp.email).not.toHaveBeenCalled();
   });
 
@@ -209,7 +209,7 @@ describe("AuthForm — the return path AppShell's guard attaches", () => {
 
   it("returns the person to the page they were bounced off", async () => {
     // Without this the guard's `?next=` is decoration: you are sent to login
-    // from the queue and land on the locale root.
+    // from the queue and lose the original destination.
     navigationState.searchParams = new URLSearchParams("next=/en/content/42");
     await login();
 
@@ -222,7 +222,7 @@ describe("AuthForm — the return path AppShell's guard attaches", () => {
     navigationState.searchParams = new URLSearchParams("next=//evil.example/steal");
     await login();
 
-    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en"));
+    await waitFor(() => expect(routerMock.push).toHaveBeenCalledWith("/en/brands"));
   });
 
   it("sends a brand-new account to onboarding regardless of next", async () => {
@@ -242,7 +242,7 @@ describe("AuthForm — the return path AppShell's guard attaches", () => {
 
 describe("hosted ownership journey", () => {
   it.each([
-    { next: undefined, destination: "/en" },
+    { next: undefined, destination: "/en/brands" },
     { next: "/en/onboarding?invitation=invite", destination: "/en/onboarding?invitation=invite" },
   ])(
     "keeps successful hosted login navigation under the app's control ($destination)",
