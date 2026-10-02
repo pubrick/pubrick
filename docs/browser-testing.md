@@ -30,9 +30,10 @@ The runner creates a uniquely named `pubrick-browser-*` PostgreSQL container
 with an automatically allocated loopback port, a temporary media directory,
 fresh encryption/authentication secrets, and dedicated loopback ports (web 31300, API 31301). It refuses occupied
 ports and never reuses another server. Stable ports let Turbo reuse an unchanged
-production build with its baked-in API rewrite. It builds the API, web application and their dependencies, starts their
-production entry points, waits for readiness and then runs Chromium. It does
-not start a worker, configure LLM credentials, or publish to an external service.
+production build with its baked-in API rewrite. It builds the API, worker, web application and their dependencies, starts their
+production entry points, waits for readiness and then runs Chromium. A runner-owned
+loopback Telegram fixture verifies synthetic credentials and receives exactly one
+human-approved post. No LLM credentials or external publication are used.
 Its child environment does not inherit your application secrets or database URL.
 The container (including its anonymous volumes), media and servers are removed
 on completion, including test failure. Build outputs remain available locally.
@@ -51,12 +52,19 @@ channel fixture is typed against the shared `ManualPlatformId` contract.
 ## Coverage
 
 The journey creates an account and workspace through the browser, creates a
-brand and manual channel, writes and saves a draft, reloads it and checks the
-review action without approving or publishing. It checks the HttpOnly session
+brand and manual channel, writes and saves content, reloads it and approves it
+for manual preparation. It also creates and tests a Telegram channel after a
+reload, proving the encrypted credential round trip. Human approval enqueues the
+native post; the real worker sends it to the local fixture. A bounded response
+latch lets the browser observe Publishing before the fixture releases its receipt.
+The journey verifies the persisted Published state and exactly one provider send.
+It checks the actual root locale redirect and the HttpOnly session
 cookie, creates a second workspace through the actual first-party auth endpoint,
 switches through the Settings workspace selector, verifies brand isolation on
 the Russian route, and switches back through the Russian Settings selector to
-verify the saved draft. Requests are not intercepted or mocked. The second-
+verify the saved content. Both brand lists and content access are isolated after
+the tenant switch. Application requests are not intercepted or mocked. Each runner
+selects only its own specs, preserving the guards of separately owned fixtures. The second-
 workspace fixture and UI switches exercise the same-origin auth rewrite and
 cookie updates.
 

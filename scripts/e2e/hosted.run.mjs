@@ -37,7 +37,13 @@ async function runBrowserJourney() {
   // would block their event loop and deadlock verification mail/control calls.
   const child = start(
     "pnpm",
-    ["exec", "playwright", "test", "--config=scripts/e2e/playwright.config.ts"],
+    [
+      "exec",
+      "playwright",
+      "test",
+      "scripts/e2e/hosted-journey.spec.ts",
+      "--config=scripts/e2e/playwright.config.ts",
+    ],
     ".",
   );
   await new Promise((resolve, reject) => {

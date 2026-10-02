@@ -85,9 +85,7 @@ async function registerAndVerify(page: Page, email: string) {
   await page.getByLabel("Email", { exact: true }).fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Log in", exact: true }).click();
-  await expect(page).toHaveURL(/\/en$/);
-  await page.getByRole("link", { name: "Go to brands", exact: true }).click();
-  await expect(page).toHaveURL(/\/en\/onboarding/);
+  await expect(page).toHaveURL(/\/en\/onboarding$/);
 }
 
 test("hosted BYOK: verified onboarding, fixture entitlement, human draft, invitation, quotas and expired recovery", async ({
@@ -178,6 +176,19 @@ test("hosted BYOK: verified onboarding, fixture entitlement, human draft, invita
     await invited.goto(draftPath);
     await expect(invited.getByLabel("Body", { exact: true })).toHaveValue(edited);
     await page.goto("/en/settings");
+    const subscription = page.locator('[aria-labelledby="billing-heading"]');
+    for (const [label, value] of [
+      ["Seats", "2 / 2"],
+      ["Brands", "1 / 1"],
+      ["Channels", "1 / 1"],
+      ["Media storage", "0 MiB / 1 MiB"],
+      ["Concurrent jobs", "0 / 1"],
+    ] as const) {
+      const row = subscription
+        .locator("dl > div")
+        .filter({ has: page.getByText(label, { exact: true }) });
+      await expect(row.locator("dd")).toHaveText(value);
+    }
     const seats = await post(page, "/api/hosted-admission/invite", {
       orgId,
       email: "third@hosted.browser.example",

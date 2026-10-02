@@ -11,12 +11,14 @@ test.skip(
 
 const manualPlatform = "t_j" satisfies ManualPlatformId;
 
-test("account, workspace, manual draft, persisted edits and UI tenant switching", async ({
+test("account, manual approval, verified channel, worker publication and UI tenant switching", async ({
   page,
   context,
 }) => {
+  test.setTimeout(120_000);
   await page.setViewportSize({ width: 375, height: 812 });
-  await page.goto("/en");
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/en$/);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.getByRole("link", { name: "Installation guide" })).toHaveAttribute(
     "href",
@@ -39,6 +41,7 @@ test("account, workspace, manual draft, persisted edits and UI tenant switching"
   await page.getByLabel("New brand name").fill("Browser brand");
   await page.getByRole("button", { name: "Create brand", exact: true }).click();
   await page.getByRole("link", { name: "Add a channel", exact: true }).click();
+  const brandPath = new URL(page.url()).pathname;
   await page.getByLabel("Platform", { exact: true }).selectOption(manualPlatform);
   await page.getByLabel("Channel name", { exact: true }).fill("Browser manual");
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
@@ -69,6 +72,99 @@ test("account, workspace, manual draft, persisted edits and UI tenant switching"
   await expect(
     page.getByRole("button", { name: "Approve and prepare", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Approve and prepare", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Ready for manual publishing", exact: true }),
+  ).toBeDisabled();
+  const manual = await page.request.get(`/api/content/${draftPath.split("/").at(-1)}`);
+  expect(manual.ok()).toBeTruthy();
+  expect((await manual.json()).adaptations).toEqual([
+    expect.objectContaining({ status: "manual_ready" }),
+  ]);
+  // Only the provider boundary is synthetic. UI, API, encrypted credentials,
+  // PostgreSQL queue, compiled worker and persisted receipts all remain real.
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: owned loopback provider from run.mjs.
+  const providerOrigin = process.env.PUBRICK_E2E_NATIVE_ORIGIN;
+  // biome-ignore lint/suspicious/noUndeclaredEnvVars: synthetic fixture-control credential.
+  const providerSecret = process.env.PUBRICK_E2E_NATIVE_SECRET;
+  if (!providerOrigin || new URL(providerOrigin).hostname !== "127.0.0.1" || !providerSecret)
+    throw new Error("Owned native channel fixture required");
+  const fixtureState = async () => {
+    const response = await page.request.get(`${providerOrigin}/fixture/state`, {
+      headers: { authorization: `Bearer ${providerSecret}` },
+    });
+    expect(response.ok()).toBeTruthy();
+    return response.json();
+  };
+  await page.goto(brandPath);
+  await page.getByRole("link", { name: "Add a channel", exact: true }).click();
+  await page.getByLabel("Platform", { exact: true }).selectOption("telegram");
+  await page.getByLabel("Channel name", { exact: true }).fill("Browser native");
+  await page.getByLabel("Bot token", { exact: true }).fill("74001:pubrick_disposable_channel_only");
+  await page.getByLabel("Chat ID", { exact: true }).fill("-1001234567890");
+  const added = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith("/api/channels"),
+  );
+  await page.getByRole("button", { name: "Add channel", exact: true }).click();
+  const channelResponse = await added;
+  expect(channelResponse.ok()).toBeTruthy();
+  const channel = await channelResponse.json();
+  expect(JSON.stringify(channel)).not.toContain("74001:pubrick_disposable_channel_only");
+  await page.reload();
+  await expect(page.getByText("Browser native", { exact: false }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(
+    page.getByText("OK — connected as @browser_bot, can post to Browser channel", { exact: true }),
+  ).toBeVisible();
+  await page.goto("/en/content/new");
+  await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Browser brand" });
+  await page.getByRole("checkbox", { name: /Browser native/ }).check();
+  await page.getByLabel("Title", { exact: true }).fill("Browser native publication");
+  await page
+    .getByLabel("Body", { exact: true })
+    .fill("A reviewed post delivered only to the local Telegram fixture.");
+  await page.getByRole("button", { name: "Create post", exact: true }).click();
+  await expect(page).toHaveURL(/\/en\/content\/[a-f0-9-]+$/);
+  const nativePath = new URL(page.url()).pathname;
+  expect((await fixtureState()).calls).toEqual(["getMe", "getChat", "getChatMember"]);
+  const approved = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith("/approve"),
+  );
+  await page.getByRole("button", { name: "Publish now", exact: true }).click();
+  const approvedResponse = await approved;
+  expect(approvedResponse.ok()).toBeTruthy();
+  expect(await approvedResponse.json()).toMatchObject({
+    status: "approved",
+    adaptations: [
+      { channelId: channel.id, status: expect.stringMatching(/^(queued|publishing)$/) },
+    ],
+  });
+  try {
+    await expect.poll(async () => (await fixtureState()).pending, { timeout: 10_000 }).toBe(true);
+    await expect(page.getByText("Publishing", { exact: true }).first()).toBeVisible();
+  } finally {
+    const released = await page.request.post(`${providerOrigin}/fixture/release`, {
+      headers: { authorization: `Bearer ${providerSecret}` },
+    });
+    expect(released.ok()).toBeTruthy();
+  }
+  await expect(page.getByText("Published", { exact: true }).first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.reload();
+  const published = await page.request.get(`/api/content/${nativePath.split("/").at(-1)}`);
+  expect(published.ok()).toBeTruthy();
+  expect(await published.json()).toMatchObject({
+    status: "published",
+    adaptations: [
+      { channelId: channel.id, status: "published", externalUrl: "https://t.me/c/1234567890/88" },
+    ],
+  });
+  expect(await fixtureState()).toMatchObject({
+    calls: ["getMe", "getChat", "getChatMember", "sendMessage"],
+    unexpected: [],
+    pending: false,
+  });
   expect(
     (await context.cookies()).some(
       (cookie) => cookie.httpOnly && cookie.name.includes("session_token"),
@@ -118,6 +214,12 @@ test("account, workspace, manual draft, persisted edits and UI tenant switching"
   await page.goto("/ru/brands");
   await expect(page.getByLabel("Название нового бренда")).toBeVisible();
   await expect(page.getByRole("link", { name: "Browser brand", exact: true })).toHaveCount(0);
+  await page.goto("/en/content");
+  await expect(
+    page.getByRole("link", { name: "Browser release journey", exact: true }),
+  ).toHaveCount(0);
+  const hidden = await page.request.get(`/api/content/${nativePath.split("/").at(-1)}`);
+  expect(hidden.status()).toBe(404);
   await page.goto("/ru/settings");
   await page.getByLabel("Рабочее пространство", { exact: true }).selectOption(result.original);
   await page.getByRole("button", { name: "Переключить", exact: true }).click();
