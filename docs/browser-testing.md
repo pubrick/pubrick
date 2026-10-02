@@ -9,7 +9,7 @@ and is not part of CI by default (issue #14).
 
 Requirements: Node.js 22.12 or newer, the pinned pnpm version, Docker, and enough
 free disk space for the Chromium download and a workspace production build.
-Run from a clean, committed working tree. All four browser runners resolve and
+Run from a clean, committed working tree. The maintained browser runners resolve and
 validate Git HEAD before creating temporary resources, use the same reviewed
 PostgreSQL digest as CI, and recheck the unchanged source before reporting success.
 Tracked modifications and nonignored untracked files require a commit first;
@@ -79,7 +79,7 @@ separation, v1 exclusion of imported drafts, changed-payload conflicts and key
 revocation. The owner opens the imported draft through the editor, sees its
 intake history, edits the body and reloads it. Replaying the original import
 returns the original acknowledgement without replacing those edits. The journey
-does not approve, publish, run a worker or call an LLM. Actual queued generation
+does not approve, publish, enqueue generation or call an LLM. Actual queued generation
 and metering are covered by the native public-write integration tier with the
 existing scripted model, independently of this browser journey.
 

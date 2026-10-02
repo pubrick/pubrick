@@ -32,10 +32,13 @@ without relying on undocumented developer setup.
 Deliverables:
 
 - Local real-browser journeys against a built stack: account/workspace creation,
-  brand and manual channel setup, draft editing/review, and organization switching.
+  channel setup and verification, content editing/manual approval, worker delivery
+  to an owned provider fixture, and organization switching.
   Keep external delivery/model calls mocked at their transport boundary. Run
   locally first; [issue #14](https://github.com/pubrick/pubrick/issues/14) does not
   authorize adding this expensive tier to every CI run.
+  [Acceptance evidence](reviews/2026-10-02-public-issue-acceptance.md) records
+  the self-hosted and hosted journeys, transport fixtures and remaining launch scope.
 - Fresh-install and upgrade smoke checks with database migrations, correct
   browser origin, durable media storage, and readiness checks.
 - Backup/restore instructions and a tested recovery path for database, media,
