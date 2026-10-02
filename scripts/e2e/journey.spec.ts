@@ -42,8 +42,8 @@ test("account, manual approval, verified channel, worker publication and UI tena
   await page.getByLabel("New brand name").fill("Browser brand");
   await page.getByRole("button", { name: "Create brand", exact: true }).click();
   await page.getByRole("link", { name: "Add a channel", exact: true }).click();
-  const brandPath = new URL(page.url()).pathname;
   await page.getByLabel("Platform", { exact: true }).selectOption(manualPlatform);
+  const brandPath = new URL(page.url()).pathname;
   await page.getByLabel("Channel name", { exact: true }).fill("Browser manual");
   await page.getByRole("button", { name: "Add channel", exact: true }).click();
   await expect(page.getByText("Browser manual", { exact: false }).first()).toBeVisible();
