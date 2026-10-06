@@ -167,7 +167,9 @@ test("account, manual approval, verified channel, worker publication and UI tena
   });
   expect(changed.ok()).toBeTruthy();
   await postingDialog.getByRole("button", { name: "Approve", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("This preview changed or expired.");
+  await expect(
+    page.getByRole("alert").filter({ hasText: "This preview changed or expired." }),
+  ).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("Body", { exact: true })).toHaveValue(
     "Teammate content that needs a fresh review.",
