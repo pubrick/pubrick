@@ -6,6 +6,7 @@ export { TELEGRAM_REQUEST_TIMEOUT_MS, telegramPublisher } from "./telegram.js";
 export * from "./telegram-draft-decisions.js";
 export { sendTelegramNotification } from "./telegram-notification.js";
 export {
+  AcceptedPublicationError,
   PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,

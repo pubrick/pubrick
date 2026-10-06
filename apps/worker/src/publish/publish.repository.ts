@@ -1148,6 +1148,108 @@ export class PublishRepository {
   }
 
   /**
+   * Preserve a provider's accepted record without claiming it is published.
+   * Only this attempt's claim may be resolved. A late reply can enrich an
+   * unasserted unknown receipt, but never replace a human verdict or append a
+   * second receipt. The adaptation moves only while its send fence still holds.
+   */
+  async markAcceptedPublication(
+    orgId: string,
+    adaptationId: string,
+    error: string,
+    fence: AttemptFence,
+    receipt: Readonly<PublishResult>,
+    claim: SendClaim,
+  ): Promise<boolean> {
+    if (fence.status !== "publishing" || fence.attemptCount !== claim.attempt) return false;
+    return db.transaction(async (tx) => {
+      if (!(await holdOrganization(tx, orgId))) return false;
+      const [adaptation] = await tx
+        .select({ id: schema.adaptations.id })
+        .from(schema.adaptations)
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
+        .for("update");
+      const [current] = await tx
+        .select({
+          status: schema.publications.status,
+          externalId: schema.publications.externalId,
+          externalUrl: schema.publications.externalUrl,
+          error: schema.publications.error,
+        })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.id, claim.id),
+            eq(schema.publications.attempt, claim.attempt),
+            adaptation
+              ? eq(schema.publications.adaptationId, adaptationId)
+              : isNull(schema.publications.adaptationId),
+            inArray(schema.publications.status, ["in_flight", "unknown"]),
+            isNull(schema.publications.assertedAt),
+          ),
+        )
+        .for("update");
+      if (!current) return false;
+      if (
+        (current.externalId !== null &&
+          receipt.externalId !== null &&
+          current.externalId !== receipt.externalId) ||
+        (current.externalUrl !== null &&
+          receipt.externalUrl !== null &&
+          current.externalUrl !== receipt.externalUrl)
+      )
+        return false;
+      const externalId = receipt.externalId ?? current.externalId;
+      const externalUrl = receipt.externalUrl ?? current.externalUrl;
+      if (
+        current.status === "unknown" &&
+        current.externalId === externalId &&
+        current.externalUrl === externalUrl &&
+        current.error === error
+      )
+        return true;
+      await tx
+        .update(schema.publications)
+        .set({ status: "unknown", externalId, externalUrl, error })
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.id, claim.id),
+            eq(schema.publications.attempt, claim.attempt),
+            isNull(schema.publications.assertedAt),
+            inArray(schema.publications.status, ["in_flight", "unknown"]),
+          ),
+        );
+      const [updated] = await tx
+        .update(schema.adaptations)
+        .set({
+          status: "failed",
+          lastError: error,
+          failureReason: "outcome_unknown",
+          // markPublishing already advanced this exact send attempt. Reuse
+          // the terminal-attempt rule so a later re-approval gets a new fence.
+          attemptCount: FAILED_ATTEMPT_COUNT,
+          updatedAt: nowSql(),
+        })
+        .where(fencedBy(orgId, adaptationId, fence))
+        .returning({ contentItemId: schema.adaptations.contentItemId });
+      if (updated) {
+        await this.recomputeItemStatus(tx, orgId, updated.contentItemId);
+        await enqueueNotification(
+          tx,
+          orgId,
+          "delivery_unknown",
+          adaptationId,
+          updated.contentItemId,
+          claim.attempt,
+        );
+      }
+      return true;
+    });
+  }
+
+  /**
    * Terminal end of an attempt: stores `lastError`, resolves this attempt's
    * `in_flight` claim (or logs a fresh row when there is none), bumps
    * `attempt_count` exactly once for this attempt (see `FAILED_ATTEMPT_COUNT`),

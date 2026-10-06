@@ -3,6 +3,7 @@ import path from "node:path";
 import { Injectable, Logger, Optional } from "@nestjs/common";
 import { schema } from "@pubrick/db";
 import {
+  AcceptedPublicationError,
   BLUESKY_REQUEST_TIMEOUT_MS,
   getPublisher,
   MASTODON_REQUEST_TIMEOUT_MS,
@@ -627,6 +628,17 @@ export class PublishService {
       );
     } catch (error) {
       const message = (error as Error).message;
+      if (error instanceof AcceptedPublicationError) {
+        await this.recordAcceptedPublication(
+          job.orgId,
+          job.adaptationId,
+          message,
+          fence,
+          error.receipt,
+          claim,
+        );
+        return;
+      }
       if (error instanceof UnknownOutcomePublishError) {
         // The request left this process and its answer never came back. Not
         // retried, and deliberately NOT recorded as a failure: "failed" would
@@ -969,9 +981,51 @@ export class PublishService {
     result: PublishResult,
     claim: SendClaim,
   ): Promise<void> {
+    await this.recordPublicationReceipt(
+      orgId,
+      adaptationId,
+      result,
+      claim,
+      () => this.repo.markPublished(orgId, adaptationId, result, claim),
+      true,
+    );
+  }
+
+  /** Accepted creation is terminal even when the provider retained a nonpublic record. */
+  private async recordAcceptedPublication(
+    orgId: string,
+    adaptationId: string,
+    detail: string,
+    fence: AttemptFence,
+    receipt: Readonly<PublishResult>,
+    claim: SendClaim,
+  ): Promise<void> {
+    const reason =
+      "ACCEPTED BUT PUBLICATION UNCONFIRMED: the provider accepted this post, but publication " +
+      `has not been confirmed (${detail}). Inspect the provider before sending again; ` +
+      "another send may create a duplicate.";
+    await this.recordPublicationReceipt(
+      orgId,
+      adaptationId,
+      receipt,
+      claim,
+      () => this.repo.markAcceptedPublication(orgId, adaptationId, reason, fence, receipt, claim),
+      false,
+    );
+  }
+
+  /** Reuse the confirmed-send recording budget; retry the receipt, never creation. */
+  private async recordPublicationReceipt(
+    orgId: string,
+    adaptationId: string,
+    result: Readonly<PublishResult>,
+    claim: SendClaim,
+    write: () => Promise<boolean>,
+    confirmed: boolean,
+  ): Promise<void> {
     for (let attempt = 1; attempt <= MARK_PUBLISHED_MAX_ATTEMPTS; attempt++) {
       try {
-        const recorded = await this.repo.markPublished(orgId, adaptationId, result, claim);
+        const recorded = await write();
         if (recorded === false) {
           this.logger.warn(
             `Publication receipt not recorded: this claim was superseded by a newer decision. ` +
@@ -988,14 +1042,16 @@ export class PublishService {
         // it, so converge the adaptation's status instead of burning all three
         // attempts and then crying "manual reconciliation needed" about a post
         // that is correctly recorded.
-        if (isDuplicatePublication(error)) {
+        if (confirmed && isDuplicatePublication(error)) {
           await this.convergeAlreadyPublished(orgId, adaptationId);
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
         if (attempt === MARK_PUBLISHED_MAX_ATTEMPTS) {
           this.logger.error(
-            "PUBLISH RECORDING FAILED: the post WAS delivered to the platform but could not be " +
+            (confirmed
+              ? "PUBLISH RECORDING FAILED: the post WAS delivered to the platform but could not be "
+              : "ACCEPTED RECORDING FAILED: the provider accepted the post, but publication is unconfirmed. Inspect the provider; the receipt could not be ") +
               `recorded after ${MARK_PUBLISHED_MAX_ATTEMPTS} attempts — manual reconciliation needed. ` +
               `orgId=${orgId} adaptationId=${adaptationId} externalId=${result.externalId ?? "null"} ` +
               `externalUrl=${result.externalUrl ?? "null"} lastError=${message}`,

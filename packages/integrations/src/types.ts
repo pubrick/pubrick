@@ -129,6 +129,24 @@ export class UnknownOutcomePublishError extends Error {
   }
 }
 
+/**
+ * The provider created a remote record, but did not confirm its publication.
+ * The receipt contains only a provider ID and a safe, non-secret URL, just as
+ * a published receipt does. Adapters must never include credentials here.
+ * Retrying creation can duplicate the accepted record; inspect the provider.
+ */
+export class AcceptedPublicationError extends UnknownOutcomePublishError {
+  readonly receipt: Readonly<PublishResult>;
+
+  constructor(message: string, receipt: PublishResult, status?: number) {
+    super(message, status);
+    this.receipt = Object.freeze({
+      externalId: receipt.externalId,
+      externalUrl: receipt.externalUrl,
+    });
+  }
+}
+
 /** A Telegram primary is live, but its complete delivery has not been confirmed. */
 export class PartialTelegramPublishError extends UnknownOutcomePublishError {
   constructor(
