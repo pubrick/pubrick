@@ -918,6 +918,13 @@
       "when": 1791316143930,
       "tag": "0131_native_channel_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 132,
+      "version": "7",
+      "when": 1791317617794,
+      "tag": "0132_content_assignments",
+      "breakpoints": true
     }
   ]
 }

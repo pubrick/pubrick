@@ -11,6 +11,7 @@ export * from "./calendar.js";
 export * from "./claim-review.js";
 export * from "./client-review.js";
 export * from "./content.js";
+export * from "./content-assignments.js";
 export * from "./content-images.js";
 export * from "./content-items.js";
 export * from "./content-reuse.js";
