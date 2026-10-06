@@ -116,12 +116,13 @@ export function PostingScheduleSettings({
         <div className="flex flex-wrap gap-3">
           <Button
             variant="secondary"
+            className="min-h-11"
             onClick={() => setReload((value) => value + 1)}
             disabled={busy || loading}
           >
             {t("reload")}
           </Button>
-          <Button onClick={save} disabled={!dirty || busy || loading}>
+          <Button className="min-h-11" onClick={save} disabled={!dirty || busy || loading}>
             {busy ? t("saving") : t("save")}
           </Button>
         </div>
@@ -132,10 +133,10 @@ export function PostingScheduleSettings({
         <div role="alert" className="mb-4 rounded-control border border-border p-3">
           <p className="mb-3 text-sm">{t("discardHint")}</p>
           <div className="flex flex-wrap gap-3">
-            <Button variant="secondary" onClick={() => setDiscard(false)}>
+            <Button className="min-h-11" variant="secondary" onClick={() => setDiscard(false)}>
               {t("keepEditing")}
             </Button>
-            <Button variant="danger" onClick={onClose}>
+            <Button className="min-h-11" variant="danger" onClick={onClose}>
               {t("discard")}
             </Button>
           </div>
@@ -148,6 +149,7 @@ export function PostingScheduleSettings({
           <>
             <Input
               id={`${id}-timezone`}
+              className="min-h-11"
               label={t("timezone")}
               value={timezone}
               onChange={(event) => {
@@ -192,6 +194,7 @@ export function PostingScheduleSettings({
                   </label>
                   <Input
                     id={`${id}-time-${index}`}
+                    className="min-h-11"
                     label={t("time")}
                     type="time"
                     value={slot.localTime}
@@ -207,6 +210,7 @@ export function PostingScheduleSettings({
                   />
                   <Button
                     variant="ghost"
+                    className="min-h-11"
                     disabled={busy}
                     aria-label={t("removeSlot", {
                       day:
@@ -225,7 +229,7 @@ export function PostingScheduleSettings({
               ))}
             </div>
             <Button
-              className="my-4"
+              className="my-4 min-h-11"
               variant="secondary"
               disabled={busy || slots.length >= MAX_POSTING_SLOTS}
               onClick={() => {

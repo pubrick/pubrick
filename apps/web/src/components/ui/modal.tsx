@@ -155,7 +155,7 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
               type="button"
               onClick={onClose}
               aria-label={t("close")}
-              className={`rounded-control p-1 text-fg-tertiary ${TRANSITION_COLORS} hover:bg-bg-sunken hover:text-fg`}
+              className={`flex min-h-11 min-w-11 items-center justify-center rounded-control p-1 text-fg-tertiary ${TRANSITION_COLORS} hover:bg-bg-sunken hover:text-fg`}
             >
               <IconClose size={16} />
             </button>
