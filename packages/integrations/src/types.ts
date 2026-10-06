@@ -41,6 +41,8 @@ export type VerifyResult =
 export interface PublisherOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /** Server application credentials for LinkedIn's token inspector; never part of a channel bag. */
+  linkedin?: { clientId: string; clientSecret: string };
   /** Persist the accepted Telegram photo and frozen reply before attempting the reply. */
   onTelegramPhotoAccepted?: (primary: PublishResult, followup: string) => Promise<void>;
   /** Persist each accepted part before another request; first previousRemaining is null. */
