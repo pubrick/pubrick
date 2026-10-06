@@ -60,7 +60,7 @@ test("native Meta configuration and mobile explicit Page selection recover witho
 
   // An unconfigured application really refuses a callback; no external provider is contacted.
   await page.goto("/en/connections/meta/threads?code=synthetic-code&state=first&state=second");
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByRole("main").getByRole("alert")).toBeVisible();
   expect(new URL(page.url()).search).toBe("");
   await expect(page.getByRole("link", { name: "Back to brands", exact: true })).toBeVisible();
 
@@ -120,7 +120,7 @@ test("native Meta configuration and mobile explicit Page selection recover witho
   expect(refused.status()).toBe(503);
   expect(await refused.json()).toMatchObject({ code: "meta_unavailable" });
   expect(refused.request().postDataJSON()).toEqual({ requestId, pageId: "222" });
-  await expect(page.getByRole("alert")).toContainText(
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(
     "This server does not have this provider’s application configured.",
   );
   await expect(connect).toHaveCount(0);

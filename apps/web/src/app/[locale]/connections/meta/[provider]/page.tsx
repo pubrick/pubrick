@@ -174,7 +174,7 @@ function MetaCallback({ provider }: { provider: MetaConnectionProvider }) {
         )}
         {(error || choices) && (
           <Link
-            className="mt-4 inline-flex min-h-11 items-center text-accent underline"
+            className="mt-4 flex min-h-11 w-fit items-center text-accent underline"
             href={`/${locale}/brands`}
           >
             {t("backToBrands")}
@@ -201,7 +201,7 @@ export default function MetaCallbackPage() {
             {t("genericError")}
           </p>
           <Link
-            className="mt-4 inline-flex min-h-11 items-center text-accent underline"
+            className="mt-4 flex min-h-11 w-fit items-center text-accent underline"
             href={`/${locale}/brands`}
           >
             {t("backToBrands")}
