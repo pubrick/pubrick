@@ -854,6 +854,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             return (
               <ListRow
                 key={c.id}
+                actionsBelow
                 title={channelLabel(c.platform, c.name)}
                 meta={
                   // Plain strings for the loading/ok cases — NOT wrapped in an

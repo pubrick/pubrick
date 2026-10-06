@@ -8,6 +8,8 @@ export type ListRowProps = {
   meta?: ReactNode;
   metaClassName?: string;
   trailing?: ReactNode;
+  /** Multi-action records keep their title and metadata readable at narrow widths. */
+  actionsBelow?: boolean;
   href?: string;
   className?: string;
 };
@@ -19,11 +21,13 @@ export function ListRow({
   meta,
   metaClassName,
   trailing,
+  actionsBelow = false,
   href,
   className,
 }: ListRowProps) {
   const classes = [
-    "flex items-center justify-between gap-4 border-b border-border-soft px-4 py-3 last:border-b-0",
+    "flex gap-4 border-b border-border-soft px-4 py-3 last:border-b-0",
+    actionsBelow ? "flex-col items-stretch" : "items-center justify-between",
     href ? `${TRANSITION_COLORS} hover:bg-bg-sunken` : "",
     className,
   ]
@@ -33,14 +37,28 @@ export function ListRow({
   const content = (
     <>
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="truncate text-[15px] font-semibold text-fg">{title}</span>
+        <span
+          className={`${actionsBelow ? "break-words whitespace-normal" : "truncate"} text-[15px] font-semibold text-fg`}
+        >
+          {title}
+        </span>
         {meta && (
           <span className={`${metaClassName ?? "truncate"} text-[13px] text-fg-tertiary`}>
             {meta}
           </span>
         )}
       </span>
-      {trailing && <span className="flex shrink-0 items-center gap-2">{trailing}</span>}
+      {trailing && (
+        <span
+          className={
+            actionsBelow
+              ? "flex flex-wrap items-center gap-2 [&_button]:min-h-11"
+              : "flex shrink-0 items-center gap-2"
+          }
+        >
+          {trailing}
+        </span>
+      )}
     </>
   );
 

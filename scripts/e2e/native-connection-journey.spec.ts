@@ -125,6 +125,15 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   ).toBeVisible();
   await expect(page.getByText("Not checked", { exact: true })).toBeVisible();
   expect(await readDelivery()).toEqual(original);
+  // Absence of page overflow alone missed an unreadably squeezed channel description.
+  const destination = page.getByText(`Destination: ${channel.connectionTarget}`, { exact: true });
+  expect((await destination.boundingBox())?.width).toBeGreaterThanOrEqual(250);
+  await expect(page.getByText("WordPress · Studio journal", { exact: true })).toBeVisible();
+  for (const name of ["Posting times", "Test connection", "Edit", "Remove"]) {
+    expect(
+      (await page.getByRole("button", { name, exact: true }).boundingBox())?.height,
+    ).toBeGreaterThanOrEqual(44);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
