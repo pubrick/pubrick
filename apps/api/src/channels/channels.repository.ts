@@ -10,14 +10,15 @@ import {
   isManualPlatform,
   isOutstandingAdaptation,
   isUnreadableCiphertext,
+  type LinkedInConnection,
   RUN_ADMISSION_LOCK_NAMESPACE,
   rewrapJson,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { conflict, notFound } from "../api-error";
+import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
-import { env } from "../env";
+import { env, linkedinApplication } from "../env";
 import { QueueService } from "../queue/queue.service";
 import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 
@@ -30,6 +31,15 @@ const PUBLIC_COLUMNS = {
   platform: schema.channels.platform,
   name: schema.channels.name,
   connectionTarget: schema.channels.connectionTarget,
+  connection: sql<LinkedInConnection | null>`case when ${schema.channels.platform} = 'linkedin' then json_build_object(
+    'state', case when ${schema.channels.credentialsEncrypted} is null then 'disconnected'
+      when ${schema.channels.connectionExpiresAt} is null then 'reconnect'
+      when ${schema.channels.connectionExpiresAt} <= clock_timestamp() then 'expired'
+      when ${schema.channels.healthOk} = false then 'reconnect' else 'connected' end,
+    'generation', ${schema.channels.connectionGeneration}, 'account', ${schema.channels.connectionAccount},
+    'scopes', ${schema.channels.connectionScopes}, 'expiresAt', ${schema.channels.connectionExpiresAt},
+    'connectedAt', ${schema.channels.connectionConnectedAt}, 'disconnectedAt', ${schema.channels.connectionDisconnectedAt}
+  ) else null end`,
   metricsAutoRefresh: schema.channels.metricsAutoRefresh,
   createdAt: schema.channels.createdAt,
   /**
@@ -59,11 +69,12 @@ function credentialTarget(platform: string, credentials: Record<string, string>)
   const publisher = getPublisher(platform);
   if (!publisher?.credentialTarget) return null;
   const parsed = publisher.credentialsSchema.safeParse(credentials);
-  if (!parsed.success) throw new BadRequestException("Required connection fields are invalid");
+  if (!parsed.success)
+    throw badRequest("invalid_request", "Required connection fields are invalid");
   try {
     return publisher.credentialTarget(parsed.data);
   } catch {
-    throw new BadRequestException("The connection destination is invalid");
+    throw badRequest("invalid_request", "The connection destination is invalid");
   }
 }
 
@@ -143,6 +154,11 @@ export class ChannelsRepository {
    * written, so a refused create leaves no row and no ciphertext behind.
    */
   async create(orgId: string, data: ChannelCreate) {
+    if (data.platform === "linkedin")
+      throw badRequest(
+        "linkedin_oauth_required",
+        "LinkedIn channels must be connected through OAuth",
+      );
     if (!getPublisher(data.platform) && !isManualPlatform(data.platform)) {
       throw new BadRequestException(
         `Pubrick cannot publish to ${data.platform} yet, so a channel for it would never deliver a post`,
@@ -232,6 +248,11 @@ export class ChannelsRepository {
       if (!channel) throw notFound("channel_not_found", "Channel not found");
       if (data.credentials !== undefined && isManualPlatform(channel.platform))
         throw new BadRequestException("Manual channels do not use credentials");
+      if (data.credentials !== undefined && channel.platform === "linkedin")
+        throw conflict(
+          "linkedin_oauth_required",
+          "Reconnect LinkedIn through authorization; tokens cannot be pasted",
+        );
       if (data.metricsAutoRefresh === true && channel.platform !== "vk")
         throw new BadRequestException("Automatic metric checks are only available for VK channels");
       if (data.credentials !== undefined) {
@@ -525,6 +546,7 @@ export class ChannelsRepository {
         platform: schema.channels.platform,
         credentialsEncrypted: schema.channels.credentialsEncrypted,
         connectionTarget: schema.channels.connectionTarget,
+        connectionExpiresAt: schema.channels.connectionExpiresAt,
       })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
@@ -538,6 +560,16 @@ export class ChannelsRepository {
         reason: "Manual channels are prepared in Pubrick and published by a person",
       };
     }
+    if (
+      channel.platform === "linkedin" &&
+      (!channel.credentialsEncrypted ||
+        !channel.connectionExpiresAt ||
+        channel.connectionExpiresAt.getTime() <= Date.now())
+    )
+      throw conflict(
+        "linkedin_reconnect_required",
+        "Reconnect this LinkedIn account before checking or publishing",
+      );
 
     const publisher = getPublisher(channel.platform);
     if (!publisher) {
@@ -586,7 +618,10 @@ export class ChannelsRepository {
             : channel.platform === "telegram"
               ? env.TELEGRAM_API_BASE_URL
               : undefined;
-      result = await publisher.verify(parsed.data, { baseUrl });
+      result = await publisher.verify(parsed.data, {
+        baseUrl,
+        ...(channel.platform === "linkedin" ? { linkedin: linkedinApplication } : {}),
+      });
     } catch {
       result = { ok: false, reason: "Connection test failed unexpectedly", indeterminate: true };
     }

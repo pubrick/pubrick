@@ -66,6 +66,7 @@ export * from "./dto/editorial-placeholders.js";
 export * from "./dto/editorial-plans.js";
 export * from "./dto/errors.js";
 export * from "./dto/knowledge.js";
+export * from "./dto/linkedin-connections.js";
 export * from "./dto/media.js";
 export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
@@ -188,6 +189,7 @@ export {
   worstCaseSelfInflictedSeconds,
 } from "./jobs.js";
 export * from "./link-policy-defaults.js";
+export * from "./linkedin-environment.js";
 export * from "./organization-roles.js";
 export {
   adaptationLimit,

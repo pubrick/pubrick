@@ -18,4 +18,5 @@ export const DEFAULT_UTM: Record<PlatformId, { source: string; medium: string }>
   mastodon: { source: "mastodon", medium: "post" },
   x: { source: "x", medium: "post" },
   wordpress: { source: "wordpress", medium: "article" },
+  linkedin: { source: "linkedin", medium: "social" },
 };

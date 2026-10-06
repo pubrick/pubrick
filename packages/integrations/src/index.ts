@@ -1,4 +1,5 @@
 export { BLUESKY_REQUEST_TIMEOUT_MS, blueskyPublisher } from "./bluesky.js";
+export { LINKEDIN_REQUEST_TIMEOUT_MS, linkedinPublisher } from "./linkedin.js";
 export { MASTODON_REQUEST_TIMEOUT_MS, mastodonPublisher } from "./mastodon.js";
 export { MAX_REQUEST_TIMEOUT_MS, maxPublisher } from "./max.js";
 export { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";

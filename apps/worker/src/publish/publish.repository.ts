@@ -667,6 +667,80 @@ export class PublishRepository {
     return decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
   }
 
+  /** One atomic snapshot: reconnect/disconnect must fence exactly the token this attempt read. */
+  async managedCredentialSnapshot(orgId: string, channelId: string) {
+    const [row] = await db
+      .select({
+        credentialsEncrypted: schema.channels.credentialsEncrypted,
+        generation: schema.channels.connectionGeneration,
+        target: schema.channels.connectionTarget,
+      })
+      .from(schema.channels)
+      .where(
+        and(
+          eq(schema.channels.orgId, orgId),
+          eq(schema.channels.id, channelId),
+          eq(schema.channels.platform, "linkedin"),
+        ),
+      );
+    if (!row) throw new ChannelNotFoundError("LinkedIn channel no longer exists");
+    if (!row.credentialsEncrypted)
+      throw new NoAutomaticCredentialsError("LinkedIn is disconnected; reconnect the account");
+    return {
+      credentials: decryptJson<Record<string, string>>(
+        row.credentialsEncrypted,
+        env.APP_ENCRYPTION_KEY,
+      ),
+      generation: row.generation,
+      target: row.target,
+    };
+  }
+
+  async linkedInSendCurrent(
+    orgId: string,
+    channelId: string,
+    generation: number,
+    target: string,
+    adaptationId: string,
+    claim: SendClaim,
+  ): Promise<boolean> {
+    const [row] = await db
+      .select({ id: schema.channels.id })
+      .from(schema.channels)
+      .innerJoin(
+        schema.adaptations,
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.channelId, schema.channels.id),
+          eq(schema.adaptations.id, adaptationId),
+        ),
+      )
+      .innerJoin(
+        schema.publications,
+        and(
+          eq(schema.publications.orgId, orgId),
+          eq(schema.publications.adaptationId, schema.adaptations.id),
+          eq(schema.publications.id, claim.id),
+          eq(schema.publications.attempt, claim.attempt),
+        ),
+      )
+      .where(
+        and(
+          eq(schema.channels.orgId, orgId),
+          eq(schema.channels.id, channelId),
+          eq(schema.channels.platform, "linkedin"),
+          eq(schema.channels.connectionGeneration, generation),
+          eq(schema.channels.connectionTarget, target),
+          sql`${schema.channels.credentialsEncrypted} is not null`,
+          sql`${schema.channels.connectionExpiresAt} > clock_timestamp()`,
+          eq(schema.adaptations.status, "publishing"),
+          eq(schema.adaptations.attemptCount, claim.attempt),
+          eq(schema.publications.status, "in_flight"),
+        ),
+      );
+    return Boolean(row);
+  }
+
   /**
    * Has this adaptation already been delivered, according to the durable
    * record rather than the adaptation's own status column?

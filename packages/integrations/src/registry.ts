@@ -1,5 +1,6 @@
 import type { PublishablePlatformId } from "@pubrick/shared";
 import { blueskyPublisher } from "./bluesky.js";
+import { linkedinPublisher } from "./linkedin.js";
 import { mastodonPublisher } from "./mastodon.js";
 import { maxPublisher } from "./max.js";
 import { telegramPublisher } from "./telegram.js";
@@ -33,6 +34,7 @@ const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   bluesky: blueskyPublisher as unknown as Publisher<never>,
   mastodon: mastodonPublisher as unknown as Publisher<never>,
   wordpress: wordpressPublisher as unknown as Publisher<never>,
+  linkedin: linkedinPublisher as unknown as Publisher<never>,
 };
 
 /**

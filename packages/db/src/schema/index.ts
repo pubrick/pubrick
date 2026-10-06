@@ -23,6 +23,7 @@ export * from "./generation.js";
 export * from "./hosted-account-admission.js";
 export * from "./hosted-ai-call-leases.js";
 export * from "./knowledge.js";
+export * from "./linkedin-connections.js";
 export * from "./media.js";
 export * from "./media-cleanup.js";
 export * from "./memorable-dates.js";

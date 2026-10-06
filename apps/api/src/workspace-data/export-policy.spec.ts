@@ -30,6 +30,29 @@ it("exports assignment revisions and audit without account email or content copi
   }
 });
 
+it("exports nonsecret LinkedIn connection metadata and omits authorization state", () => {
+  const channels = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "channels");
+  expect(channels?.table).toBe(schema.channels);
+  expect(channels?.fields).toEqual(
+    expect.arrayContaining([
+      "connectionTarget",
+      "connectionGeneration",
+      "connectionAccount",
+      "connectionScopes",
+      "connectionExpiresAt",
+      "connectionConnectedAt",
+      "connectionDisconnectedAt",
+    ]),
+  );
+  expect(channels?.fields).not.toContain("credentialsEncrypted");
+  expect(WORKSPACE_EXPORT_OMISSIONS.linkedinAuthorizationRequests).toBe(
+    "Short-lived OAuth state and encrypted authorization nonce",
+  );
+  expect(WORKSPACE_EXPORT_TABLES.map((entry) => entry.key)).not.toContain(
+    "linkedinAuthorizationRequests",
+  );
+});
+
 it("exports minimal Telegram editorial evidence without identity or webhook secrets", () => {
   const audit = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "telegramDecisionAudit");
   expect(audit?.table).toBe(schema.telegramDecisionAudit);

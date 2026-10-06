@@ -6,6 +6,7 @@ import {
   AcceptedPublicationError,
   BLUESKY_REQUEST_TIMEOUT_MS,
   getPublisher,
+  LINKEDIN_REQUEST_TIMEOUT_MS,
   MASTODON_REQUEST_TIMEOUT_MS,
   MAX_REQUEST_TIMEOUT_MS,
   PartialTelegramPublishError,
@@ -17,6 +18,7 @@ import {
   type TelegramPartCheckpoint,
   UnknownOutcomePublishError,
   VK_REQUEST_TIMEOUT_MS,
+  WORDPRESS_REQUEST_TIMEOUT_MS,
 } from "@pubrick/integrations";
 import {
   isManualPlatform,
@@ -26,7 +28,7 @@ import {
   type PublishJob,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
-import { env } from "../env";
+import { env, linkedinApplication } from "../env";
 import {
   type AttemptFence,
   ChannelNotFoundError,
@@ -118,6 +120,9 @@ export const PUBLISH_STOP_TIMEOUT_MS =
     BLUESKY_REQUEST_TIMEOUT_MS * 4,
     // Mastodon: instance configuration, then create status.
     MASTODON_REQUEST_TIMEOUT_MS * 2,
+    WORDPRESS_REQUEST_TIMEOUT_MS * 2,
+    // LinkedIn: application token introspection, personal identity, then Posts create.
+    LINKEDIN_REQUEST_TIMEOUT_MS * 3,
   ) +
   PUBLISH_RECORD_BUDGET_MS +
   10_000;
@@ -424,8 +429,18 @@ export class PublishService {
     let result: PublishResult;
     try {
       let credentials: Record<string, string>;
+      let managedGeneration: number | undefined;
       try {
-        credentials = await this.repo.credentials(job.orgId, adaptation.channelId);
+        if (adaptation.platform === "linkedin") {
+          const snapshot = await this.repo.managedCredentialSnapshot(
+            job.orgId,
+            adaptation.channelId,
+          );
+          credentials = snapshot.credentials;
+          managedGeneration = snapshot.generation;
+        } else {
+          credentials = await this.repo.credentials(job.orgId, adaptation.channelId);
+        }
       } catch (credentialsError) {
         // The two failures repo.credentials() DESCRIBES — the channel row is
         // gone, or credentialsEncrypted fails to decrypt (wrong key / corrupted
@@ -617,6 +632,29 @@ export class PublishService {
         },
         {
           baseUrl,
+          ...(adaptation.platform === "linkedin"
+            ? {
+                linkedin: linkedinApplication,
+                beforeLinkedInCreate: async () => {
+                  if (
+                    managedGeneration === undefined ||
+                    !adaptation.connectionTarget ||
+                    !(await this.repo.linkedInSendCurrent(
+                      job.orgId,
+                      adaptation.channelId,
+                      managedGeneration,
+                      adaptation.connectionTarget,
+                      job.adaptationId,
+                      claim,
+                    ))
+                  )
+                    throw new ClassifiedPermanentError(
+                      "LinkedIn access or this delivery changed during verification; reconnect and review the post",
+                      "credentials_invalid",
+                    );
+                },
+              }
+            : {}),
           ...(adaptation.platform === "telegram" && text.length > 4096 && !video
             ? {
                 onTelegramPartAccepted: async (checkpoint: TelegramPartCheckpoint) => {

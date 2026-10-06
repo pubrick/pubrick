@@ -268,6 +268,39 @@ describe("LinkedIn provider-confirmed personal publishing grant", () => {
 });
 
 describe("LinkedIn reviewed plain text create request", () => {
+  it("rechecks the current connection immediately after proof and before creating", async () => {
+    queueProof();
+    const beforeLinkedInCreate = vi
+      .fn()
+      .mockRejectedValue(new PermanentPublishError("Connection changed"));
+    await expect(
+      publish("Reviewed text", { ...options, beforeLinkedInCreate }),
+    ).rejects.toBeInstanceOf(PermanentPublishError);
+    expect(beforeLinkedInCreate).toHaveBeenCalledOnce();
+    expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
+    expect(mockGuardedFetch.mock.calls.every(([url]) => !String(url).endsWith("/rest/posts"))).toBe(
+      true,
+    );
+  });
+  it("does not create if the token expires while waiting for the final connection check", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const now = Date.now();
+      queueProof();
+      await expect(
+        publish("Reviewed text", {
+          ...options,
+          beforeLinkedInCreate: async () => {
+            vi.setSystemTime(now + 3_600_001);
+          },
+        }),
+      ).rejects.toBeInstanceOf(PermanentPublishError);
+      expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preflights again and creates once through the current Posts API with the exact reviewed text", async () => {
     queueProof();
     mockGuardedFetch.mockResolvedValueOnce(created());

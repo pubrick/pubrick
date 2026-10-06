@@ -68,6 +68,13 @@ export const channels = pgTable(
     credentialsEncrypted: text("credentials_encrypted"),
     /** Non-secret immutable destination for adapters with a canonical target. */
     connectionTarget: text("connection_target"),
+    /** CAS fence for managed authorization, replacement and disconnect. */
+    connectionGeneration: integer("connection_generation").default(0).notNull(),
+    connectionAccount: text("connection_account"),
+    connectionScopes: text("connection_scopes"),
+    connectionExpiresAt: timestamp("connection_expires_at", { withTimezone: true }),
+    connectionConnectedAt: timestamp("connection_connected_at", { withTimezone: true }),
+    connectionDisconnectedAt: timestamp("connection_disconnected_at", { withTimezone: true }),
     /** Last real platform verification, invalidated when credentials change. */
     healthOk: boolean("health_ok"),
     healthCheckedAt: timestamp("health_checked_at", { withTimezone: true }),
@@ -80,6 +87,20 @@ export const channels = pgTable(
   (t) => [
     index("channels_org_id_idx").on(t.orgId),
     index("channels_brand_id_idx").on(t.brandId),
+    uniqueIndex("channels_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
+    check("channels_connection_generation_check", sql`${t.connectionGeneration} >= 0`),
+    check(
+      "channels_connection_account_check",
+      sql`${t.connectionAccount} is null or length(${t.connectionAccount}) between 1 and 300`,
+    ),
+    check(
+      "channels_connection_scopes_check",
+      sql`${t.connectionScopes} is null or length(${t.connectionScopes}) <= 2048`,
+    ),
+    check(
+      "channels_linkedin_target_check",
+      sql`${t.platform} <> 'linkedin' or (${t.connectionTarget} is not null and ${t.connectionTarget} ~ '^urn:li:person:[A-Za-z0-9_-]{1,200}$')`,
+    ),
     check(
       "channels_connection_target_check",
       sql`${t.connectionTarget} is null or length(${t.connectionTarget}) between 1 and 2048`,
@@ -112,7 +133,7 @@ export const channels = pgTable(
      */
     check(
       "channels_credentials_mode_check",
-      sql`${t.platform} = 'dzen' or ((${t.platform} in (${enumSqlLiterals(MANUAL_PLATFORM_IDS.filter((platform) => platform !== "dzen"))})) = (${t.credentialsEncrypted} is null))`,
+      sql`${t.platform} in ('dzen', 'linkedin') or ((${t.platform} in (${enumSqlLiterals(MANUAL_PLATFORM_IDS.filter((platform) => platform !== "dzen"))})) = (${t.credentialsEncrypted} is null))`,
     ),
     check(
       "channels_metrics_auto_refresh_vk_check",

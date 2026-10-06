@@ -9,6 +9,8 @@ import {
   isManualPlatform,
   isOrganizationManager,
   isPublishablePlatform,
+  type LinkedInConnection,
+  linkedinAuthorizationStartSchema,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -20,6 +22,10 @@ import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedSettings } from "@/components/feed-controls";
+import {
+  LinkedInConnectionActions,
+  LinkedInConnectionSummary,
+} from "@/components/linkedin-connection";
 import { PostingScheduleSettings } from "@/components/posting-schedule-settings";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
@@ -34,6 +40,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
+import { openLinkedInAuthorization } from "@/lib/linkedin";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 import { BrandImport } from "./brand-import";
 
@@ -45,6 +52,7 @@ type Channel = {
   scheduledCount?: number;
   health?: { state: "ok" | "failed" | "unknown"; checkedAt: string | null };
   connectionTarget?: string | null;
+  connection?: LinkedInConnection | null;
 };
 /**
  * Voice, audience and language shape generation. Description is used for
@@ -123,6 +131,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
    */
   const te = useTranslations("Errors");
   const tp = useTranslations("PostingSchedule");
+  const tl = useTranslations("LinkedIn");
   const locale = useLocale();
   const router = useRouter();
   const { data: session } = authClient.useSession();
@@ -168,6 +177,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [channels, setChannels] = useState<Channel[] | null>(null);
   const [channelsError, setChannelsError] = useState<string | null>(null);
   const [platform, setPlatform] = useState<PlatformId>(DEFAULT_PLATFORM);
+  const [linkedinAvailable, setLinkedinAvailable] = useState<boolean | null>(null);
+  const [linkedinConfigurationError, setLinkedinConfigurationError] = useState<string | null>(null);
+  const [linkedinConfigurationRetry, setLinkedinConfigurationRetry] = useState(0);
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -242,6 +254,24 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       });
   }, [id, describeError]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The retry counter repeats a failed read without changing the selected platform.
+  useEffect(() => {
+    if (platform !== "linkedin" || !canManageAccess) return;
+    let active = true;
+    setLinkedinAvailable(null);
+    setLinkedinConfigurationError(null);
+    api<{ available: boolean }>(`/api/channels/linkedin/configuration?brandId=${id}`)
+      .then((result) => {
+        if (active) setLinkedinAvailable(result.available === true);
+      })
+      .catch((caught) => {
+        if (active) setLinkedinConfigurationError(describeError(caught));
+      });
+    return () => {
+      active = false;
+    };
+  }, [platform, canManageAccess, id, describeError, linkedinConfigurationRetry]);
+
   const load = useCallback(() => {
     api<Brand>(`/api/brands/${id}`)
       .then(setBrand)
@@ -310,6 +340,16 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     setError(null);
     setBusy(true);
     try {
+      if (platform === "linkedin") {
+        const body = linkedinAuthorizationStartSchema.parse({ brandId: id, name, locale });
+        openLinkedInAuthorization(
+          await api("/api/channels/linkedin/authorize", {
+            method: "POST",
+            body: JSON.stringify(body),
+          }),
+        );
+        return;
+      }
       await api("/api/channels", {
         method: "POST",
         body: JSON.stringify({
@@ -556,8 +596,14 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       title={brand ? brand.name : <Skeleton lines={1} className="w-40" />}
       primaryAction={
         canEditBrandSettings && (
-          <Button type="submit" form={FORM_ID} disabled={busy}>
-            {t("add")}
+          <Button
+            type="submit"
+            form={FORM_ID}
+            disabled={
+              busy || (platform === "linkedin" && (!canManageAccess || linkedinAvailable !== true))
+            }
+          >
+            {platform === "linkedin" ? tl("connect") : t("add")}
           </Button>
         )
       }
@@ -826,13 +872,18 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                     t("manualMeta")
                   ) : (
                     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <StatusBadge
-                        status={
-                          health === "ok" ? "published" : health === "failed" ? "review" : "draft"
-                        }
-                      >
-                        {t(`health.${health}`)}
-                      </StatusBadge>
+                      {c.platform === "linkedin" && (
+                        <LinkedInConnectionSummary connection={c.connection} />
+                      )}
+                      {c.platform !== "linkedin" && (
+                        <StatusBadge
+                          status={
+                            health === "ok" ? "published" : health === "failed" ? "review" : "draft"
+                          }
+                        >
+                          {t(`health.${health}`)}
+                        </StatusBadge>
+                      )}
                       {c.connectionTarget && (
                         <span className="break-all">
                           {t("connectedTarget", { target: c.connectionTarget })}
@@ -862,6 +913,13 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                     )}
                     {canEditBrandSettings && (
                       <>
+                        {canManageAccess && c.platform === "linkedin" && (
+                          <LinkedInConnectionActions
+                            brandId={id}
+                            channel={c}
+                            onChanged={loadChannels}
+                          />
+                        )}
                         {c.platform === "vk" && (
                           <Button
                             size="sm"
@@ -928,7 +986,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 className="min-w-[160px]"
               >
                 {OFFERED_PLATFORMS.map((p) => (
-                  <option key={p} value={p}>
+                  <option key={p} value={p} disabled={p === "linkedin" && !canManageAccess}>
                     {platformName(p)}
                   </option>
                 ))}
@@ -982,6 +1040,31 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             )}
             {platform === "wordpress" && (
               <p className="text-sm text-fg-secondary">{t("wordpressHint")}</p>
+            )}
+            {platform === "linkedin" && (
+              <div className="text-sm text-fg-secondary">
+                <p>{tl("connectHint")}</p>
+                {linkedinConfigurationError ? (
+                  <>
+                    <p role="alert" className="mt-2 text-danger">
+                      {linkedinConfigurationError}
+                    </p>
+                    <Button
+                      className="mt-2 min-h-11"
+                      variant="secondary"
+                      onClick={() => setLinkedinConfigurationRetry((value) => value + 1)}
+                    >
+                      {tl("retry")}
+                    </Button>
+                  </>
+                ) : linkedinAvailable === null ? (
+                  <p role="status" className="mt-2">
+                    {tl("configurationPending")}
+                  </p>
+                ) : !linkedinAvailable ? (
+                  <p className="mt-2">{tl("configurationUnavailable")}</p>
+                ) : null}
+              </div>
             )}
             {isManualPlatform(platform) && (
               <p className="text-sm text-fg-secondary">
@@ -1085,7 +1168,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             label={t("namePlaceholder")}
             required
           />
-          {editing && isManualPlatform(editing.platform) ? (
+          {editing?.platform === "linkedin" ? (
+            <p className="text-sm text-fg-secondary">{tl("editHint")}</p>
+          ) : editing && isManualPlatform(editing.platform) ? (
             <p className="text-sm text-fg-secondary">
               {t("manualHint", { platform: platformName(editing.platform) })}
             </p>

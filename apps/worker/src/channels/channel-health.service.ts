@@ -4,7 +4,7 @@ import { getPublisher } from "@pubrick/integrations";
 import { CHANNEL_HEALTH_TTL_MS, decryptJson, isUnreadableCiphertext } from "@pubrick/shared";
 import { and, asc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
-import { env } from "../env";
+import { env, linkedinApplication } from "../env";
 
 /** Five serial checks per tick bound platform traffic and the job's runtime. */
 export const CHANNEL_HEALTH_SCAN_LIMIT = 5;
@@ -62,7 +62,10 @@ export class ChannelHealthService {
                     ? env.TELEGRAM_API_BASE_URL
                     : undefined;
             try {
-              const result = await publisher.verify(parsed.data, { baseUrl });
+              const result = await publisher.verify(parsed.data, {
+                baseUrl,
+                ...(candidate.platform === "linkedin" ? { linkedin: linkedinApplication } : {}),
+              });
               ok = result.ok ? true : result.indeterminate ? null : false;
             } catch {
               // A check that could not complete is inconclusive, never broken.

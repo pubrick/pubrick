@@ -15,6 +15,7 @@ export const PLATFORM_IDS = [
   "mastodon",
   "x",
   "wordpress",
+  "linkedin",
 ] as const;
 
 /**
@@ -58,6 +59,7 @@ export const PUBLISHABLE_PLATFORM_IDS = [
   "bluesky",
   "mastodon",
   "wordpress",
+  "linkedin",
 ] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
@@ -106,6 +108,8 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   mastodon: ["instanceUrl", "accessToken"],
   x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],
   wordpress: ["siteUrl", "username", "applicationPassword"],
+  // Personal tokens are installed only by the server-owned authorization flow.
+  linkedin: [],
 };
 
 /** Fields that are not secrets — everything else renders as type="password". */
@@ -155,7 +159,9 @@ export const channelCreateSchema = z
     credentials: credentialsBag.optional(),
   })
   .superRefine((channel, ctx) => {
-    if (isManualPlatform(channel.platform)) {
+    if (channel.platform === "linkedin") {
+      ctx.addIssue({ code: "custom", message: "LinkedIn channels require OAuth authorization" });
+    } else if (isManualPlatform(channel.platform)) {
       if (channel.credentials !== undefined) {
         ctx.addIssue({
           code: "custom",

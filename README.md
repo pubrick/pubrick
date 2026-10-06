@@ -28,7 +28,8 @@ in the current pre-alpha.
 brands — each with a voice, an audience and a content language the generator is
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to
-Telegram, VK communities, MAX chats or channels, Bluesky accounts, and Mastodon instances — through a restyled,
+Telegram, VK communities, MAX chats or channels, Bluesky accounts, Mastodon instances, self-hosted WordPress sites, and
+[personal LinkedIn accounts](docs/linkedin.md) (public text only) — through a restyled,
 installable (PWA) web app. [VC.ru, Dzen, Instagram, YouTube, RuTube, TenChat and T—Ж](docs/manual-publications.md)
 use a manual copy and confirmation workflow. External clients can review a
 draft through an [expiring approval link](docs/client-review.md), while the team

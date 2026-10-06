@@ -58,6 +58,33 @@ describe.skipIf(!url)("saved channel destination e2e", () => {
     return { agent, orgId: created.body.id as string };
   }
 
+  it.each([
+    { ...credentials, siteUrl: "https://127.0.0.1/blog" },
+    { ...credentials, username: "" },
+  ])(
+    "returns a coded invalid destination refusal and stores no channel",
+    async (invalidCredentials) => {
+      const { agent } = await orgAgent();
+      const brand = await agent
+        .post("/api/brands")
+        .send({ name: "Invalid destination" })
+        .expect(201);
+      const result = await agent
+        .post("/api/channels")
+        .send({
+          brandId: brand.body.id,
+          platform: "wordpress",
+          name: "Journal",
+          credentials: invalidCredentials,
+        })
+        .expect(400);
+      expect(result.body.code).toBe("invalid_request");
+      expect((await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200)).body).toEqual(
+        [],
+      );
+    },
+  );
+
   async function connectedChannel() {
     const { agent, orgId } = await orgAgent();
     const brand = await agent.post("/api/brands").send({ name: "Creators" }).expect(201);

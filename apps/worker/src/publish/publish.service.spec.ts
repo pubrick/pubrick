@@ -4,6 +4,7 @@ import path from "node:path";
 import { schema } from "@pubrick/db";
 import {
   BLUESKY_REQUEST_TIMEOUT_MS,
+  LINKEDIN_REQUEST_TIMEOUT_MS,
   MASTODON_REQUEST_TIMEOUT_MS,
   PartialTelegramPublishError,
   PermanentPublishError,
@@ -13,6 +14,7 @@ import {
   type TelegramPartCheckpoint,
   TransientPublishError,
   UnknownOutcomePublishError,
+  WORDPRESS_REQUEST_TIMEOUT_MS,
 } from "@pubrick/integrations";
 import {
   MANUAL_PLATFORM_IDS,
@@ -757,6 +759,12 @@ describe("PublishService.handle", () => {
     );
     expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
       MASTODON_REQUEST_TIMEOUT_MS * 2 + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      WORDPRESS_REQUEST_TIMEOUT_MS * 2 + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      LINKEDIN_REQUEST_TIMEOUT_MS * 3 + PUBLISH_RECORD_BUDGET_MS,
     );
   });
 

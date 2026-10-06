@@ -25,6 +25,7 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
   mastodon: 500,
   x: 280,
   wordpress: MAX_BODY_LENGTH,
+  linkedin: 3000,
 };
 
 export const TELEGRAM_ADAPTER_MAX_TEXT_LENGTH = TELEGRAM_LONG_POST_LENGTH;

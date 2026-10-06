@@ -475,6 +475,18 @@ describe("LinkedIn bounded OAuth transport", () => {
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
   });
 
+  it.each([configuration.clientSecret, accessToken, refreshToken, code, state, nonce])(
+    "does not retain provider scope metadata that echoes a secret",
+    async (secret) => {
+      queueConnection(
+        tokens({ refresh_token: refreshToken, scope: `openid profile w_member_social ${secret}` }),
+      );
+      const error = await exchange().catch((caught: unknown) => caught);
+      assertSafeError(error, "unavailable");
+      expect(error).not.toHaveProperty("credentials");
+    },
+  );
+
   it.each([
     new Error(configuration.clientSecret),
     new GuardedFetchError(GuardedFetchErrorCode.TIMEOUT, code),

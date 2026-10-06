@@ -167,7 +167,7 @@ describe.skipIf(!url)("channels e2e", () => {
       });
     }
 
-    for (const platform of PUBLISHABLE_PLATFORM_IDS) {
+    for (const platform of PUBLISHABLE_PLATFORM_IDS.filter((id) => id !== "linkedin")) {
       it(`still accepts a ${platform} channel, which the picker still offers`, async () => {
         const agent = await orgAgent();
         const brand = await agent
@@ -196,6 +196,8 @@ describe.skipIf(!url)("channels e2e", () => {
       });
     }
 
+    // LinkedIn is publishable but creates channels through verified OAuth only.
+    // Its independent lifecycle suite exercises the offered connection flow.
     it("creates a VC.ru channel without a token and rejects credential injection", async () => {
       const agent = await orgAgent();
       const brand = await agent.post("/api/brands").send({ name: "Manual VC" }).expect(201);

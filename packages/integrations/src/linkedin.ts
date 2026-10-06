@@ -389,6 +389,7 @@ export const linkedinPublisher: Publisher<LinkedInCredentials> = {
   platform: "linkedin",
   maxTextLength: MAX_TEXT_LENGTH,
   credentialsSchema,
+  credentialTarget: (credentials) => credentials.authorUrn,
 
   async verify(rawCredentials, options): Promise<VerifyResult> {
     try {
@@ -412,6 +413,9 @@ export const linkedinPublisher: Publisher<LinkedInCredentials> = {
       throw new PermanentPublishError(`LinkedIn text must be 1..${MAX_TEXT_LENGTH} characters`);
     const { credentials, application } = credentialsAndApplication(rawCredentials, options);
     const proof = await publishingProof(credentials, application, options);
+    if (proof.expiresAt <= Date.now() / 1000)
+      throw new PermanentPublishError("LinkedIn access token has expired; reconnect the account");
+    await options?.beforeLinkedInCreate?.();
     if (proof.expiresAt <= Date.now() / 1000)
       throw new PermanentPublishError("LinkedIn access token has expired; reconnect the account");
     const created = await request(

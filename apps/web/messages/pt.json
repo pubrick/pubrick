@@ -1911,7 +1911,16 @@
     "delivery_receipt_changed": "O registro de entrega mudou ou não pôde ser identificado. Recarregue e verifique a tentativa atual antes de decidir.",
     "accepted_record_removal_required": "Verifique o registro aceito no provedor e confirme sua remoção antes de enviar novamente.",
     "assignment_changed": "A atribuição mudou. Recarregue antes de salvar.",
-    "assignment_member_unavailable": "Este membro não tem mais acesso à marca. Recarregue e escolha um membro atual."
+    "assignment_member_unavailable": "Este membro não tem mais acesso à marca. Recarregue e escolha um membro atual.",
+    "linkedin_unavailable": "O LinkedIn não está configurado neste servidor. Entre em contato com o administrador.",
+    "linkedin_authorization_invalid": "Esta solicitação do LinkedIn expirou ou já foi usada. Comece novamente na marca.",
+    "linkedin_authorization_failed": "O LinkedIn não confirmou sua conta e a permissão de publicação. Autorize novamente.",
+    "linkedin_authorization_unavailable": "O LinkedIn não concluiu a verificação. Inicie uma nova autorização quando o serviço estiver disponível.",
+    "linkedin_authority_changed": "Sua sessão ou acesso de administrador mudou. Entre e confira suas permissões antes de tentar novamente.",
+    "linkedin_connection_changed": "Esta conexão do LinkedIn mudou. Recarregue o canal antes de reconectar ou desconectar.",
+    "linkedin_reconnect_required": "Reconecte esta conta do LinkedIn antes de verificar ou publicar.",
+    "linkedin_oauth_required": "Conecte o LinkedIn pela autorização na página da marca. Não é possível colar tokens.",
+    "linkedin_authorization_capacity": "Há muitas solicitações de autorização do LinkedIn pendentes. Aguarde dez minutos e tente novamente."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -3296,5 +3305,32 @@
     "filterAll": "Todos os conteúdos",
     "filterMine": "Minhas",
     "filterUnassigned": "Sem responsável"
+  },
+  "LinkedIn": {
+    "connect": "Conectar",
+    "reconnect": "Reconectar",
+    "disconnect": "Desconectar",
+    "cancel": "Cancelar",
+    "retry": "Tentar novamente",
+    "working": "Atualizando…",
+    "genericError": "Não foi possível atualizar a conexão do LinkedIn. Tente novamente na página da marca.",
+    "capability": "Conta pessoal · publicações de texto públicas",
+    "expires": "Expira em {date}",
+    "states": {
+      "connected": "Conectado",
+      "disconnected": "Desconectado",
+      "expired": "Expirado",
+      "reconnect": "Reconexão necessária"
+    },
+    "disconnectTitle": "Desconectar o LinkedIn?",
+    "disconnectBody": "Remove as credenciais salvas do LinkedIn de {name}. As tarefas agendadas e o histórico de publicações são mantidos. Uma publicação que já está sendo enviada pode terminar.",
+    "connectHint": "Autorize sua conta pessoal do LinkedIn. O Pubrick verifica a permissão para publicar texto público. Imagens, vídeos e páginas de empresas não são compatíveis.",
+    "configurationPending": "Verificando se o LinkedIn está disponível neste servidor…",
+    "configurationUnavailable": "O administrador deste servidor ainda não configurou o LinkedIn.",
+    "editHint": "Aqui você pode alterar o nome do canal. Use Reconectar no canal para renovar a autorização da mesma conta do LinkedIn.",
+    "callbackTitle": "Conectar o LinkedIn",
+    "callbackPending": "Verificando sua conta do LinkedIn e a permissão de publicação…",
+    "callbackRecovery": "Esta autorização não pode ser reutilizada. Abra sua marca e inicie uma nova conexão ou reconecte o canal existente.",
+    "backToBrands": "Abrir marcas"
   }
 }

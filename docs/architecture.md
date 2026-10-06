@@ -63,10 +63,13 @@ fixed model and dimension. The metering (`usage.ts`), the call budget
 
 **`packages/integrations`** — publishers, one per platform, behind a registry
 typed over the platforms `shared` declares as publishable. Today: Telegram,
-VK community walls, MAX chats or channels, Bluesky accounts, and Mastodon
-instances. A
-publisher's errors are one of three kinds — permanent, transient, or unknown
-outcome — and that distinction is the whole delivery story (below).
+VK community walls, MAX chats or channels, Bluesky accounts, Mastodon instances,
+self-hosted WordPress and personal LinkedIn public text. LinkedIn credentials
+come from a session-bound, one-use OAuth connection; the worker verifies the
+actual application grant before creating a post. See [LinkedIn lifecycle](linkedin.md).
+Publishers distinguish permanent refusal, known retryable failure, unknown
+outcome and an accepted record with an unconfirmed publication state. Accepted
+receipts are retained for manual resolution; they never authorize another create.
 
 **`apps/api`** — NestJS, one module per domain (`brands`, `channels`, `content`,
 `runs`, `knowledge`, `ai-credentials`, `org`, `queue`, `health`). Controllers never touch the

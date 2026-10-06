@@ -304,7 +304,11 @@ export class LinkedInOAuthClient {
         input.expectedState,
         input.expectedNonce,
       ].filter((value): value is string => typeof value === "string" && value.length > 0);
-      if (secrets.some((secret) => member.data.sub.includes(secret)))
+      if (
+        secrets.some(
+          (secret) => member.data.sub.includes(secret) || credentials.scopes.includes(secret),
+        )
+      )
         throw new LinkedInOAuthClientError("unavailable");
       if (Date.parse(expiresAt) <= Date.now()) throw new LinkedInOAuthClientError("unavailable");
       credentials.authorUrn = `urn:li:person:${member.data.sub}`;

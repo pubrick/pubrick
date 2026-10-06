@@ -371,6 +371,14 @@ uncertain create-record response is not retried automatically; inspect the
 account before trying again. See Bluesky's
 [post and image guide](https://docs.bsky.app/docs/tutorials/creating-a-post).
 
+## Connect a LinkedIn personal account
+
+Native LinkedIn uses a server-configured confidential application and an OAuth
+connection owned by an organization manager. See [LinkedIn setup and token
+lifecycle](linkedin.md) for required products, the fixed HTTPS callback,
+expiration, reconnection and safe delivery recovery. Media and company pages
+are not supported.
+
 ## Connect a Mastodon account
 
 1. Create an access token with `write:statuses` permission in your Mastodon

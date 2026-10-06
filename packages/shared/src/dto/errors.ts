@@ -425,6 +425,15 @@ export const API_ERROR_CODES = [
   /** The channel does not exist in this org (or no longer does). */
   "channel_not_found",
   "channel_target_changed",
+  "linkedin_unavailable",
+  "linkedin_authorization_invalid",
+  "linkedin_authorization_failed",
+  "linkedin_authorization_unavailable",
+  "linkedin_authority_changed",
+  "linkedin_connection_changed",
+  "linkedin_reconnect_required",
+  "linkedin_oauth_required",
+  "linkedin_authorization_capacity",
   /**
    * The channel's stored credentials will not decrypt under any key this
    * instance has — `APP_ENCRYPTION_KEY` was changed under a stored row, or the

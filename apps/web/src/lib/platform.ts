@@ -24,6 +24,7 @@ const PLATFORM_NAMES: Record<string, string> = {
   mastodon: "Mastodon",
   x: "X",
   wordpress: "WordPress",
+  linkedin: "LinkedIn",
 };
 
 export function platformName(id: string): string {

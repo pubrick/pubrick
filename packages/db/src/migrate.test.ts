@@ -149,6 +149,9 @@ const ZONED_COLUMNS = [
   "calendar_slots.scheduled_at",
   "calendar_slots.topic_updated_at",
   "calendar_slots.updated_at",
+  "channels.connection_connected_at",
+  "channels.connection_disconnected_at",
+  "channels.connection_expires_at",
   "channels.created_at",
   "channels.health_checked_at",
   "channels.updated_at",
@@ -194,6 +197,9 @@ const ZONED_COLUMNS = [
   "manual_topic_plan_attempts.completed_at",
   "manual_topic_plan_attempts.created_at",
   "manual_topic_plan_attempts.started_at",
+  "linkedin_authorization_requests.consumed_at",
+  "linkedin_authorization_requests.created_at",
+  "linkedin_authorization_requests.expires_at",
   "media_assets.created_at",
   "media_cleanup_work.completed_at",
   "media_cleanup_work.created_at",
@@ -383,6 +389,18 @@ const NON_ENUM_CHECKS = [
   "content_assignments_identity_check",
   "content_assignments_revision_check",
   "content_assignment_history_revision_check",
+  // 0133's lifecycle bounds and locale pin arrive after the historical seed.
+  // The dedicated upgrade case below proves invalid writes one cause at a time.
+  "channels_connection_generation_check",
+  "channels_connection_account_check",
+  "channels_connection_scopes_check",
+  "channels_linkedin_target_check",
+  "linkedin_authorization_hash_check",
+  "linkedin_authorization_actor_check",
+  "linkedin_authorization_name_check",
+  "linkedin_authorization_requests_locale_check",
+  "linkedin_authorization_intent_check",
+  "linkedin_authorization_expiry_check",
   // 0130: weekly slots/revision are relational bounds, rather than enum pins.
   // posting-schedule.e2e.test.ts proves defaults and invalid direct SQL writes.
   "channels_posting_revision_check",
@@ -5080,6 +5098,228 @@ describe.skipIf(!url)("runMigrations", () => {
             proposed_title: null,
           },
         ]);
+      } finally {
+        await upgraded.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("0133 preserves every legacy platform and binds managed LinkedIn state", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0133_linkedin_connections");
+    const oldPlatforms = [
+      "telegram",
+      "vk",
+      "dzen",
+      "vc_ru",
+      "instagram",
+      "youtube",
+      "rutube",
+      "tenchat",
+      "t_j",
+      "max",
+      "bluesky",
+      "mastodon",
+      "x",
+      "wordpress",
+    ];
+    const manual = new Set(["dzen", "vc_ru", "instagram", "youtube", "rutube", "tenchat", "t_j"]);
+    const columns =
+      "id, org_id, brand_id, platform, name, credentials_encrypted, connection_target, created_at, updated_at";
+    let legacy: unknown[];
+    let brandId: string;
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('linkedin_upgrade', 'LinkedIn upgrade', 'linkedin-upgrade')",
+        );
+        const brand = await old.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('linkedin_upgrade', 'Writing') RETURNING id",
+        );
+        brandId = brand.rows[0]?.id as string;
+        for (const platform of oldPlatforms)
+          await old.query(
+            "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted, connection_target) VALUES ('linkedin_upgrade', $1, $2, $2, $3, $4)",
+            [
+              brandId,
+              platform,
+              manual.has(platform) ? null : `legacy-${platform}-ciphertext`,
+              platform === "wordpress" ? "https://journal.example.com/blog/" : null,
+            ],
+          );
+        legacy = (await old.query(`SELECT ${columns} FROM channels ORDER BY platform`)).rows;
+      } finally {
+        await old.end();
+      }
+      await runMigrations(fresh.url);
+      const upgraded = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        expect(
+          (
+            await upgraded.query(
+              "SELECT to_regclass('public.content_assignments') AS assignments, to_regclass('public.content_assignment_history') AS history",
+            )
+          ).rows,
+        ).toEqual([{ assignments: "content_assignments", history: "content_assignment_history" }]);
+        const journal = JSON.parse(
+          await fs.readFile(
+            path.resolve(
+              path.dirname(fileURLToPath(import.meta.url)),
+              "..",
+              "migrations",
+              "meta",
+              "_journal.json",
+            ),
+            "utf8",
+          ),
+        ) as { entries: { tag: string; when: number }[] };
+        const previousWhen = journal.entries.find(
+          (entry) => entry.tag === "0132_content_assignments",
+        )?.when;
+        expect(previousWhen).toBeTypeOf("number");
+        expect(
+          (
+            await upgraded.query(
+              "SELECT count(*)::integer AS applied FROM drizzle.__drizzle_migrations WHERE created_at = $1",
+              [previousWhen],
+            )
+          ).rows,
+        ).toEqual([{ applied: 1 }]);
+        expect(
+          (await upgraded.query(`SELECT ${columns} FROM channels ORDER BY platform`)).rows,
+        ).toEqual(legacy);
+        const defaults = await upgraded.query(
+          "SELECT connection_generation, connection_account, connection_scopes, connection_expires_at, connection_connected_at, connection_disconnected_at FROM channels ORDER BY platform",
+        );
+        expect(defaults.rows).toEqual(
+          oldPlatforms.map(() => ({
+            connection_generation: 0,
+            connection_account: null,
+            connection_scopes: null,
+            connection_expires_at: null,
+            connection_connected_at: null,
+            connection_disconnected_at: null,
+          })),
+        );
+        const created = await upgraded.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted, connection_target) VALUES ('linkedin_upgrade', $1, 'linkedin', 'Personal', 'synthetic-ciphertext', 'urn:li:person:writer') RETURNING id",
+          [brandId],
+        );
+        const channelId = created.rows[0]?.id;
+        for (const target of [null, "", "urn:li:organization:42", "urn:li:person:bad/target"])
+          expect(
+            await refusal(upgraded, "UPDATE channels SET connection_target = $1 WHERE id = $2", [
+              target,
+              channelId,
+            ]),
+          ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(upgraded, "UPDATE channels SET connection_generation = -1 WHERE id = $1", [
+            channelId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        for (const account of ["", "a".repeat(301)])
+          expect(
+            await refusal(upgraded, "UPDATE channels SET connection_account = $1 WHERE id = $2", [
+              account,
+              channelId,
+            ]),
+          ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(upgraded, "UPDATE channels SET connection_scopes = $1 WHERE id = $2", [
+            "a".repeat(2049),
+            channelId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        await upgraded.query("UPDATE channels SET credentials_encrypted = NULL WHERE id = $1", [
+          channelId,
+        ]);
+        expect(
+          (
+            await upgraded.query("SELECT credentials_encrypted FROM channels WHERE id = $1", [
+              channelId,
+            ])
+          ).rows,
+        ).toEqual([{ credentials_encrypted: null }]);
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE channels SET credentials_encrypted = NULL WHERE platform = 'telegram'",
+            [],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        const state = await upgraded.query<{ id: string }>(
+          "INSERT INTO linkedin_authorization_requests (org_id, brand_id, user_id, session_id, state_hash, nonce_encrypted, name, locale, created_at, expires_at) VALUES ('linkedin_upgrade', $1, 'actor', 'session', $2, 'synthetic-encrypted-nonce', 'Personal', 'en', now(), now() + interval '10 minutes') RETURNING id",
+          [brandId, "a".repeat(64)],
+        );
+        const stateId = state.rows[0]?.id;
+        const invalid = [
+          ["state_hash = $1", "raw-state"],
+          ["user_id = $1", ""],
+          ["session_id = $1", ""],
+          ["name = $1", ""],
+          ["locale = $1", "unknown"],
+        ] as const;
+        for (const [expression, value] of invalid)
+          expect(
+            await refusal(
+              upgraded,
+              `UPDATE linkedin_authorization_requests SET ${expression} WHERE id = $2`,
+              [value, stateId],
+            ),
+          ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET expires_at = created_at + interval '11 minutes' WHERE id = $1",
+            [stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET expires_at = created_at WHERE id = $1",
+            [stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        // Missing one member of the reconnect tuple is the only bad field.
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET channel_id = $1 WHERE id = $2",
+            [channelId, stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        await upgraded.query(
+          "UPDATE linkedin_authorization_requests SET channel_id = $1, expected_generation = 0, expected_target = 'urn:li:person:writer' WHERE id = $2",
+          [channelId, stateId],
+        );
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET expected_target = NULL WHERE id = $1",
+            [stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET expected_generation = NULL WHERE id = $1",
+            [stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
+        expect(
+          await refusal(
+            upgraded,
+            "UPDATE linkedin_authorization_requests SET expected_generation = -1 WHERE id = $1",
+            [stateId],
+          ),
+        ).toBe(CHECK_VIOLATION);
       } finally {
         await upgraded.end();
       }

@@ -2,6 +2,8 @@ import path from "node:path";
 import { googleProxyEnvSchema } from "@pubrick/ai";
 import { mailEnvironmentSchema, resolveSmtpConfig } from "@pubrick/mail";
 import {
+  linkedinApplicationConfiguration,
+  linkedinEnvironmentSchema,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
   PUBLISH_QUEUE_OPTIONS,
@@ -14,6 +16,7 @@ import { z } from "zod";
 export const env = parseEnv({
   PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
   ...mailEnvironmentSchema.shape,
+  ...linkedinEnvironmentSchema.shape,
   BETTER_AUTH_SECRET: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(16).optional(),
@@ -127,3 +130,6 @@ if (
   new URL(env.WEB_ORIGIN).protocol !== "https:"
 )
   throw new Error("Hosted authentication mail requires HTTPS in production.");
+
+/** Fixed server application used to prove actual personal publication grants. */
+export const linkedinApplication = linkedinApplicationConfiguration(env);

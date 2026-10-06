@@ -216,6 +216,12 @@ export const WORKSPACE_EXPORT_TABLES = [
       "platform",
       "name",
       "connectionTarget",
+      "connectionGeneration",
+      "connectionAccount",
+      "connectionScopes",
+      "connectionExpiresAt",
+      "connectionConnectedAt",
+      "connectionDisconnectedAt",
       "postingTimezone",
       "postingSlots",
       "postingRevision",
@@ -918,6 +924,7 @@ export const WORKSPACE_EXPORT_TABLES = [
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  linkedinAuthorizationRequests: "Short-lived OAuth state and encrypted authorization nonce",
   telegramBotIdentities: "Global inbound bot ownership and remote mutation quarantine",
   telegramRemoteAttempts: "Immutable physical webhook mutation evidence",
   telegramDecisionConfigs: "Encrypted Telegram credentials and webhook authentication secrets",

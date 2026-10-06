@@ -1911,7 +1911,16 @@
     "delivery_receipt_changed": "The delivery record changed or could not be identified. Reload and inspect the current attempt before deciding.",
     "accepted_record_removal_required": "Inspect the accepted provider record and confirm it was removed before sending again.",
     "assignment_changed": "Assignment changed. Reload before saving.",
-    "assignment_member_unavailable": "This member no longer has access to the brand. Reload and choose a current member."
+    "assignment_member_unavailable": "This member no longer has access to the brand. Reload and choose a current member.",
+    "linkedin_unavailable": "LinkedIn is not configured on this server. Contact the administrator.",
+    "linkedin_authorization_invalid": "This LinkedIn request expired or was already used. Start again from the brand.",
+    "linkedin_authorization_failed": "LinkedIn did not confirm your account and publishing permission. Start authorization again.",
+    "linkedin_authorization_unavailable": "LinkedIn could not complete verification. Start a new authorization when the service is available.",
+    "linkedin_authority_changed": "Your session or manager access changed. Sign in and check your permissions before trying again.",
+    "linkedin_connection_changed": "This LinkedIn connection changed. Reload the channel before reconnecting or disconnecting.",
+    "linkedin_reconnect_required": "Reconnect this LinkedIn account before checking or publishing.",
+    "linkedin_oauth_required": "Connect LinkedIn through authorization on the brand page. Tokens cannot be pasted.",
+    "linkedin_authorization_capacity": "Too many LinkedIn authorization requests are pending. Wait ten minutes and try again."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -3296,5 +3305,32 @@
     "filterAll": "All posts",
     "filterMine": "Mine",
     "filterUnassigned": "Unassigned"
+  },
+  "LinkedIn": {
+    "connect": "Connect",
+    "reconnect": "Reconnect",
+    "disconnect": "Disconnect",
+    "cancel": "Cancel",
+    "retry": "Retry",
+    "working": "Updating…",
+    "genericError": "The LinkedIn connection could not be updated. Try again from the brand.",
+    "capability": "Personal account · public text posts",
+    "expires": "Expires {date}",
+    "states": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "expired": "Expired",
+      "reconnect": "Reconnect required"
+    },
+    "disconnectTitle": "Disconnect LinkedIn?",
+    "disconnectBody": "Remove the saved LinkedIn credentials for {name}. Scheduled work and publication history are kept. A publication already being sent may finish.",
+    "connectHint": "Authorize your personal LinkedIn account. Pubrick verifies permission to publish public text posts. Images, videos and company pages are not supported.",
+    "configurationPending": "Checking whether LinkedIn is available on this server…",
+    "configurationUnavailable": "LinkedIn has not been configured by this server’s administrator.",
+    "editHint": "You can change the channel name here. Use Reconnect on the channel to renew authorization for the same LinkedIn account.",
+    "callbackTitle": "Connect LinkedIn",
+    "callbackPending": "Verifying your LinkedIn account and publishing permission…",
+    "callbackRecovery": "This authorization cannot be reused. Open your brand and start a new connection or reconnect the existing channel.",
+    "backToBrands": "Open brands"
   }
 }
