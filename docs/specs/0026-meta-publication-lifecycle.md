@@ -42,8 +42,39 @@ defines GET container status with `id,status,error_message`. Follow that
 request contract rather than the collection's contradictory publish-POST prose.
 Use these sources as protocol references; do not copy their sample code.
 
-The developer-site pages were unavailable to the research tool; its changelog
-and live application configuration remain explicit acceptance checks.
+The developer site was unavailable to the research tool, but its current pages
+were subsequently read in the browser on 2026-10-06. The [Instagram publishing
+guide](https://developers.facebook.com/documentation/instagram-platform/content-publishing)
+confirms the native `graph.instagram.com` host, bearer authorization, separate
+container and publish requests, and status reads. For this initial image flow,
+follow its one-minute polling interval and five-minute bounded processing check.
+Its quota prose differs between sections; query the documented publishing-limit
+endpoint and respect provider refusal rather than invent a universal quota.
+
+The [image reference](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-user/media)
+specifies JPEG, at most 8 MB, an aspect ratio from 4:5 through 1.91:1, width
+320–1440 pixels and sRGB. Normalize before human preview; the approved bytes
+must be the bytes served to the provider. Captions allow at most 2,200 characters,
+30 hashtags and 20 mentions. Video is a separate validation contract.
+
+The [native login flow](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/business-login)
+returns actual granted permissions at code exchange. A long-lived token's expiry
+comes from the provider's exchange response, bound to that encrypted token.
+Do not invent an Instagram-native `debug_token` endpoint or reuse Facebook's
+inspector. The [native identity guide](https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login/get-started)
+distinguishes the app-scoped `id` from professional-account `user_id`; request
+both and bind the OAuth subject and publication destination explicitly.
+The [publishing-limit reference](https://developers.facebook.com/documentation/instagram-platform/instagram-graph-api/reference/ig-user/content_publishing_limit)
+requires both native publishing permissions. A successful scoped read provides a
+current publishing-capability probe; it is not scope enumeration or token-expiry
+introspection. Rejected or inconclusive reads must not be called a valid grant.
+
+The [Facebook Page feed reference](https://developers.facebook.com/docs/graph-api/reference/page/feed/)
+requires a Page token, the `CREATE_CONTENT` task and `pages_manage_posts`,
+`pages_read_engagement`, `pages_show_list` for text publication. Its publishing
+contract is narrower than the multi-operation Pages guide. Graph examples use
+`v26.0`; do not apply that version to Threads. Provider app configuration and
+live receipts remain external acceptance checks.
 
 ## Approved media access
 
@@ -59,8 +90,8 @@ provider acceptance.
 Capability previews and approval must agree with the adapter. Unsupported
 formats refuse before sending; attachments are never silently dropped. Initial
 formats are Threads text, native Instagram one normalized JPEG and Facebook
-Page text. Document Instagram's exact dimensions/size and Facebook's required
-Page grants/tasks from accessible primary references before shipping adapters.
+Page text. Enforce the primary-reference dimensions and Page grants above
+before registering their adapters.
 Existing MP4 checks establish container shape and size, not codec or duration;
 video needs a maintained metadata validation contract before native support.
 Carousel and specialized formats require their own reviewed contract.

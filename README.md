@@ -18,13 +18,14 @@
 
 ---
 
-Pubrick watches RSS, web feeds, and Telegram sources, drafts on-brand posts
-with AI agents, queues them for **your** approval, and publishes approved posts
-on schedule. Brand knowledge, manual image generation, opt-in draft cover
-generation, Telegram video attachments, and VK performance metrics are available
-in the current pre-alpha.
+Pubrick turns your sources, brand knowledge and creative direction into content
+with AI agents. Review the saved text, adapt it for each channel, and publish
+approved content on your schedule. Sources, generation, media, teamwork and
+results share one self-hosted workspace.
 
-**Status: pre-alpha.** Working today: accounts and sessions, organizations,
+**Status: public beta.** The first versioned release is
+[`v0.1.0-beta.1`](https://github.com/pubrick/pubrick/releases/tag/v0.1.0-beta.1);
+`main` also includes subsequent development. Working today: accounts and sessions, organizations,
 brands — each with a voice, an audience and a content language the generator is
 instructed with — and channels with credentials encrypted at rest, plus content
 drafts, a review queue with approval/rejection/overrides, and publishing to

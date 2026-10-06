@@ -46,12 +46,16 @@ adding a Node import.
 applied programmatically under an advisory lock at api boot. The schema
 *imports* its enums from `shared` rather than restating them; a CHECK constraint
 on every enum-bounded column is asserted in both directions by
-`schema-invariants.test.ts`. Eighteen tables in six files: `auth.ts` (better-auth:
-user, session, account, verification, organization, member, invitation),
-`content.ts` (brands, channels), `knowledge.ts` (brand notes), `content-items.ts` (content_items,
-adaptations, publications), `generation.ts` (ai_credentials, pipeline_runs,
-usage_ledger, content_versions), `refine.ts` (refine_proposals),
-`draft-revision.ts` (one staged whole-body suggestion per post).
+`schema-invariants.test.ts`. The [schema index](../packages/db/src/schema/index.ts)
+is the authoritative domain inventory. Authentication and memberships live in
+`auth.ts`; brands and channels in `content.ts`; posts, channel adaptations and
+publication receipts in `content-items.ts`; generation and accounting in
+`generation.ts`. Separate domains cover sources, knowledge, media, planning,
+review links, responsibility history, prompt decisions, integrations, public
+API operations, notifications, billing and hosted admission. New domains extend
+this schema rather than introducing another database or a parallel queue.
+Migration upgrade checks preserve existing values and pin safe initial metadata
+defaults explicitly.
 
 **`packages/ai`** — every model call in the product. `defineStep` is the only
 way to make a structured text step and is what keeps the untrusted-text boundary, the schema sent
@@ -77,10 +81,12 @@ database; repositories take `orgId` first and select explicit column lists.
 Runs migrations on boot. Enqueues jobs in the same transaction as the write
 that justifies them.
 
-**`apps/worker`** — NestJS standalone context, no HTTP. Two pg-boss queues
-(`generate`, `publish`), each with a dead-letter queue and a five-minute sweep
-for rows a dead handler left non-terminal. Every model call runs under the
-run's fence; every send is claimed before the platform is called.
+**`apps/worker`** — NestJS standalone context, no HTTP. Domain-specific pg-boss
+queues share the [queue contract](../packages/shared/src/jobs.ts): generation,
+publication, source collection, planning, notifications and bounded background
+observations. Recovery and dead-letter handling follow each domain's delivery
+policy. Every model call runs under the run's fence; every publication send is
+claimed before the platform is called.
 
 **`apps/web`** — Next.js, UI only, talking to the api through a `/api/*` proxy so
 cookies stay first-party. Four locales with key parity enforced by test. One
