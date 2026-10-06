@@ -16,7 +16,7 @@ test("account, manual approval, verified channel, worker publication and UI tena
   page,
   context,
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/");
   await expect(page).toHaveURL(/\/en$/);
@@ -126,6 +126,74 @@ test("account, manual approval, verified channel, worker publication and UI tena
   await expect(
     page.getByText("OK — connected as @browser_bot, can post to Browser channel", { exact: false }),
   ).toBeVisible();
+  // Configure a weekly posting time and confirm saved content on a small screen.
+  // Delivery stays safely in the future; this must not consume the send fixture.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Posting times", exact: true }).click();
+  let postingDialog = page.getByRole("dialog", { name: "Posting times · Browser native" });
+  await postingDialog.getByLabel("Time zone", { exact: true }).fill("UTC");
+  await postingDialog.getByRole("button", { name: "Add", exact: true }).click();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  await postingDialog
+    .getByLabel("Weekday", { exact: true })
+    .selectOption(String(tomorrow.getUTCDay() || 7));
+  await postingDialog.getByLabel("Time", { exact: true }).fill("09:00");
+  await postingDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(postingDialog.getByText("Posting times saved.", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: "/tmp/pubrick-posting-times-mobile.png", fullPage: true });
+  await postingDialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.goto("/en/content/new");
+  await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Browser brand" });
+  await page.getByRole("checkbox", { name: /Browser native/ }).check();
+  await page.getByLabel("Title", { exact: true }).fill("A queued creative post");
+  await page.getByLabel("Body", { exact: true }).fill("My original source-based content.");
+  await page.getByRole("button", { name: "Create post", exact: true }).click();
+  await expect(page).toHaveURL(/\/en\/content\/[a-f0-9-]+$/);
+  const queueItemId = new URL(page.url()).pathname.split("/").at(-1);
+  await page.getByLabel("Body", { exact: true }).fill("My reviewed and saved creative content.");
+  await expect(page.getByRole("button", { name: "Publish now", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Add to queue", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Add to queue", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Add to queue", exact: true }).click();
+  postingDialog = page.getByRole("dialog", { name: "Confirm publication times" });
+  await expect(postingDialog.getByText("Browser native", { exact: true })).toBeVisible();
+  // A second editor changed the actual content after this preview was prepared.
+  const changed = await page.request.patch(`/api/content/${queueItemId}`, {
+    data: { body: "Teammate content that needs a fresh review." },
+  });
+  expect(changed.ok()).toBeTruthy();
+  await postingDialog.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("This preview changed or expired.");
+  await page.reload();
+  await expect(page.getByLabel("Body", { exact: true })).toHaveValue(
+    "Teammate content that needs a fresh review.",
+  );
+  await page.getByRole("button", { name: "Add to queue", exact: true }).click();
+  postingDialog = page.getByRole("dialog", { name: "Confirm publication times" });
+  await expect(postingDialog.locator("time")).toBeVisible();
+  const exactTime = await postingDialog.locator("time").getAttribute("datetime");
+  await page.screenshot({ path: "/tmp/pubrick-posting-confirm-mobile.png", fullPage: true });
+  const queueApproved = page.waitForResponse(
+    (r) => r.request().method() === "POST" && r.url().endsWith(`/content/${queueItemId}/approve`),
+  );
+  await postingDialog.getByRole("button", { name: "Approve", exact: true }).click();
+  const queueResponse = await queueApproved;
+  expect(queueResponse.ok()).toBeTruthy();
+  expect(await queueResponse.json()).toMatchObject({
+    status: "approved",
+    adaptations: [{ channelId: channel.id, status: "scheduled", scheduledAt: exactTime }],
+  });
+  expect((await fixtureState()).calls).toEqual(["getMe", "getChat", "getChatMember"]);
+  await page.goto(`${brandPath}/publications`);
+  await page.getByRole("button", { name: "Scheduled", exact: true }).click();
+  await expect(
+    page.getByRole("link", { name: "A queued creative post", exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/en/content/new");
   await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Browser brand" });
   await page.getByRole("checkbox", { name: /Browser native/ }).check();

@@ -904,6 +904,13 @@
       "when": 1790883708939,
       "tag": "0129_telegram_setup_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 130,
+      "version": "7",
+      "when": 1791309606903,
+      "tag": "0130_channel_posting_schedules",
+      "breakpoints": true
     }
   ]
 }

@@ -8,6 +8,7 @@ import {
   isAvailablePlatform,
   isManualPlatform,
   isOrganizationManager,
+  isPublishablePlatform,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -19,6 +20,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedSettings } from "@/components/feed-controls";
+import { PostingScheduleSettings } from "@/components/posting-schedule-settings";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -119,6 +121,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
    * `testConnection`. Both take this, or four of the five stay English.
    */
   const te = useTranslations("Errors");
+  const tp = useTranslations("PostingSchedule");
   const locale = useLocale();
   const router = useRouter();
   const { data: session } = authClient.useSession();
@@ -130,6 +133,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // Legacy members retain channel access; brand writes require a manager.
   const canEditBrandSettings =
     canManageAccess || hasOrganizationRole(activeMember?.role, ["member"]);
+  const canEditPostingTimes =
+    canEditBrandSettings || hasOrganizationRole(activeMember?.role, ["editor"]);
   const [brand, setBrand] = useState<Brand | null>(null);
   const [claimEvidenceBusy, setClaimEvidenceBusy] = useState(false);
   const [claimEvidenceError, setClaimEvidenceError] = useState<string | null>(null);
@@ -185,6 +190,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // so there is nothing to prefill and a placeholder pretending otherwise would
   // be a lie the Save button would then act on.
   const [editing, setEditing] = useState<Channel | null>(null);
+  const [postingChannel, setPostingChannel] = useState<Channel | null>(null);
   const [editName, setEditName] = useState("");
   const [editCreds, setEditCreds] = useState<Record<string, string>>({});
   const [editError, setEditError] = useState<string | null>(null);
@@ -555,6 +561,13 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         )
       }
     >
+      {postingChannel && (
+        <PostingScheduleSettings
+          channelId={postingChannel.id}
+          channelName={postingChannel.name}
+          onClose={() => setPostingChannel(null)}
+        />
+      )}
       <div className="mb-5 flex flex-wrap gap-4 text-sm font-medium">
         <Link href={`/${locale}/brands/${id}/sources`} className="text-accent underline">
           {tb("sourcesLink")}
@@ -835,31 +848,43 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                 }
                 metaClassName="whitespace-normal"
                 trailing={
-                  canEditBrandSettings && (
-                    <>
-                      {c.platform === "vk" && (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          disabled={metricsBusy === c.id}
-                          onClick={() => toggleMetrics(c)}
-                          aria-label={
-                            c.metricsAutoRefresh ? t("autoMetricsDisable") : t("autoMetricsEnable")
-                          }
-                          title={t("autoMetricsHint")}
-                        >
-                          {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
-                        </Button>
-                      )}
-                      {!isManualPlatform(c.platform) && (
-                        <Button size="sm" variant="secondary" onClick={() => testConnection(c.id)}>
-                          {t("test")}
-                        </Button>
-                      )}
-                      <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
-                        {t("edit")}
+                  <>
+                    {canEditPostingTimes && isPublishablePlatform(c.platform) && (
+                      <Button size="sm" variant="secondary" onClick={() => setPostingChannel(c)}>
+                        {tp("settingsAction")}
                       </Button>
-                      {/* Deliberately a plain visible Button, not tucked behind
+                    )}
+                    {canEditBrandSettings && (
+                      <>
+                        {c.platform === "vk" && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={metricsBusy === c.id}
+                            onClick={() => toggleMetrics(c)}
+                            aria-label={
+                              c.metricsAutoRefresh
+                                ? t("autoMetricsDisable")
+                                : t("autoMetricsEnable")
+                            }
+                            title={t("autoMetricsHint")}
+                          >
+                            {c.metricsAutoRefresh ? t("autoMetricsOn") : t("autoMetricsOff")}
+                          </Button>
+                        )}
+                        {!isManualPlatform(c.platform) && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => testConnection(c.id)}
+                          >
+                            {t("test")}
+                          </Button>
+                        )}
+                        <Button size="sm" variant="secondary" onClick={() => startEditing(c)}>
+                          {t("edit")}
+                        </Button>
+                        {/* Deliberately a plain visible Button, not tucked behind
                         the Menu component: a page test looks this up directly
                         via getByRole("button", { name: /remove/i }) with no
                         prior click to open anything — putting it in a Menu
@@ -867,11 +892,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                         and stay hidden until the trigger opens) would break
                         that lookup. It opens the confirmation below; it is not
                         the delete. */}
-                      <Button size="sm" variant="danger" onClick={() => setPendingRemoval(c)}>
-                        {t("remove")}
-                      </Button>
-                    </>
-                  )
+                        <Button size="sm" variant="danger" onClick={() => setPendingRemoval(c)}>
+                          {t("remove")}
+                        </Button>
+                      </>
+                    )}
+                  </>
                 }
               />
             );

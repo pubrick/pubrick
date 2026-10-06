@@ -43,7 +43,8 @@ before reading and locking the parent, so a job fetched before archive cannot
 claim a send after archive has committed. Worker status recomputation keeps an
 archived parent unchanged.
 
-Moving one channel's scheduled time locks only its adaptation, then reads its
+Moving one channel's scheduled time takes the workspace posting mutex before
+locking its adaptation, then reads its
 item and receipts before changing its queue job. It never locks the item first.
 The worker's claim waits on that adaptation lock and checks `scheduled_at` as
 well as status, so an old job fetched before a move cannot send at the new slot.
@@ -757,6 +758,25 @@ against generation, RSS, suggestions, Autopilot, terminal publication writes
 and bulk publication recovery. Every path must let the cascade complete and
 finish without a deadlock or an attempted insert into the deleted tenant.
 
+
+## Publication posting admission
+
+Weekly posting settings, next-slot previews/confirmation, legacy timed approval
+(including the 30-minute shortcut), and per-channel rescheduling share an
+organization-scoped advisory transaction lock: namespace `0x7a12`, key
+`hashtext(orgId)`. Acquire organization `FOR KEY SHARE`, then this mutex, before
+any adaptation, channel or content-item lock. Organization key-share alone does
+not serialize scheduling. Immediate delivery and terminal worker writes do not
+acquire this mutex and retain their existing row-lock order.
+
+Confirmation locks adaptations before the item through the existing approval
+path. It reads channel settings without acquiring a late channel row lock;
+settings writers already hold the same mutex. Every time writer checks the
+channel's occupied `scheduled`, `queued` and `publishing` instants while holding
+the mutex until the adaptation and pg-boss job transaction commits. Cancel and
+worker transitions can release slots, but cannot create a new future slot.
+Expiration and future-time checks use `clock_timestamp()` after lock waits.
+Settings changes increment a revision and never move existing jobs.
 
 ## Workspace text defaults and credential admission
 

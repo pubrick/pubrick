@@ -1045,7 +1045,10 @@
     "manualAssertionHint": "Al registrar esta URL, afirmas que publicaste el contenido. Pubrick no pide confirmación a {platform}.",
     "manualPublicationAsserted": "Registrado por {name} el {date}; dato facilitado por la persona, sin consulta a {platform}.",
     "manualPublicationAssertedRemoved": "Registrado por un miembro eliminado el {date}; dato facilitado por la persona, sin consulta a {platform}.",
-    "versionExternal": "Texto importado"
+    "versionExternal": "Texto importado",
+    "saveBeforePublishing": "Guarda los cambios antes de publicar o programar. Se enviará la versión guardada.",
+    "saveReviewChanges": "Guardar cambios",
+    "reloadSavedContent": "Recargar contenido guardado"
   },
   "Prompts": {
     "title": "Guía de generación",
@@ -1887,7 +1890,12 @@
     "editorial_plan_retention_capacity": "El historial está lleno. Contacta al operador; eliminar planes no libera historial.",
     "editorial_plan_channels_missing": "Falta un canal de destino. Comprueba los canales.",
     "calendar_recurring_slot": "Edita o pausa el plan semanal del evento. Puedes omitir este evento en Calendario.",
-    "editorial_plan_authority_revoked": "Tus permisos cambiaron. Recarga y comprueba el acceso a la marca."
+    "editorial_plan_authority_revoked": "Tus permisos cambiaron. Recarga y comprueba el acceso a la marca.",
+    "posting_preview_changed": "La vista previa cambió o caducó. Recarga el contenido, revísalo y prepara otra vista previa.",
+    "posting_slot_occupied": "Otro envío ocupa esta hora. Actualiza la vista previa o elige otra hora.",
+    "posting_schedule_missing": "Configura horas semanales para todos los canales antes de añadir el contenido a la cola.",
+    "posting_queue_full": "No hay horas libres en los próximos 90 días. Añade más horarios o mueve publicaciones.",
+    "posting_queue_not_ready": "Solo se admite contenido sin enviar para canales automáticos. Revisa los envíos actuales primero."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -2404,7 +2412,8 @@
     "previousPosition": "Párrafo anterior {number} (ya no disponible)",
     "discard": "Descartar cambios de imágenes",
     "saveFailed": "No se pudieron guardar las imágenes intercaladas.",
-    "reloadLatest": "Cargar imágenes actuales"
+    "reloadLatest": "Cargar imágenes actuales",
+    "refreshFailed": "Las imágenes se guardaron, pero no se pudo actualizar el artículo. Recarga la publicación antes de publicarla."
   },
   "Analytics": {
     "overviewTitle": "Resumen de actividad",
@@ -3128,5 +3137,41 @@
     "loading": "Cargando contenido…",
     "retry": "Reintentar",
     "retrying": "Reintentando…"
+  },
+  "PostingSchedule": {
+    "settingsAction": "Horas de publicación",
+    "title": "Horas de publicación · {channel}",
+    "intro": "Elige horas semanales para este canal. El contenido se añade solo después de revisar y aprobar su hora exacta de publicación.",
+    "timezone": "Zona horaria",
+    "weekday": "Día",
+    "time": "Hora",
+    "add": "Añadir",
+    "remove": "Eliminar",
+    "removeSlot": "Eliminar {day} a las {time}",
+    "save": "Guardar",
+    "saving": "Guardando…",
+    "saved": "Horas de publicación guardadas.",
+    "loading": "Cargando…",
+    "reload": "Recargar",
+    "reloaded": "Configuración guardada actualizada. Se conservaron tus cambios; revísalos antes de guardar.",
+    "unsaved": "Hay cambios sin guardar.",
+    "configured": "Guardadas: {count} horas semanales.",
+    "notConfigured": "No hay horas de publicación configuradas.",
+    "invalid": "Usa una zona horaria válida y combinaciones únicas de día y hora.",
+    "loadError": "No se pudieron cargar las horas. Recarga para reintentar.",
+    "saveError": "No se pudieron guardar las horas. Tus cambios siguen aquí.",
+    "existingJobs": "Cambiar estas horas no mueve el contenido ya programado. Se omiten las horas inexistentes por cambio horario; las repetidas se usan una vez.",
+    "addToQueue": "Añadir a la cola",
+    "configure": "Configurar horas",
+    "queueHint": "Revisa la próxima hora libre de cada canal y aprueba el contenido guardado para esas horas.",
+    "confirmTitle": "Confirma las horas de publicación",
+    "confirmHint": "La confirmación aprueba este contenido guardado y programa el envío en las horas indicadas.",
+    "confirm": "Aprobar",
+    "previewError": "No se pudo preparar la cola. Inténtalo de nuevo.",
+    "queued": "Contenido añadido a la cola.",
+    "refreshError": "El contenido se programó, pero no se pudo actualizar su estado. Recarga la publicación.",
+    "discardHint": "¿Descartar los cambios de horas sin guardar?",
+    "discard": "Descartar",
+    "keepEditing": "Seguir editando"
   }
 }

@@ -36,6 +36,7 @@ import { AppShell } from "@/components/app-shell";
 import { FeedEntryAction } from "@/components/feed-controls";
 import { MediaLibrary } from "@/components/media-library";
 import { OriginBadge } from "@/components/origin-badge";
+import { PostingQueueAction } from "@/components/posting-queue-action";
 import { Advanced } from "@/components/ui/advanced";
 import { Button, buttonClasses } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -151,6 +152,8 @@ type ContentItem = {
   richBody?: RichBody | null;
   richBodyHtml?: string | null;
   bodyRevision?: number;
+  postingReviewFingerprint?: string;
+  imagesRevision?: number | null;
   status: ContentStatus;
   archivedFromStatus: ContentStatus | null;
   isSafeToDelete: boolean;
@@ -327,6 +330,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [bodyDraft, setBodyDraft] = useState("");
   const [bodySaveBusy, setBodySaveBusy] = useState(false);
   const [overrideSaveBusy, setOverrideSaveBusy] = useState<Record<string, boolean>>({});
+  const [inlineImagesPending, setInlineImagesPending] = useState(false);
+  const [inlineImagesRevision, setInlineImagesRevision] = useState<number | null>(null);
+  const saveInlineImages = useRef<(() => Promise<boolean>) | null>(null);
   const [richDraft, setRichDraft] = useState<RichBody | null>(null);
   const [richMode, setRichMode] = useState(false);
   const [richError, setRichError] = useState<string | null>(null);
@@ -579,6 +585,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     if (!item || !requestedIntent || intentAvailable === null) return;
     const key = `${item.id}:${requestedIntent}`;
     if (handledIntent.current === key) return;
+    if (requestedIntent === "publish" && (bodyDraft !== item.body || inlineImagesPending)) return;
     handledIntent.current = key;
     if (!intentAvailable) return;
     const target = document.getElementById(
@@ -598,7 +605,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       target.scrollIntoView?.({ block: "center" });
       target.focus({ preventScroll: true });
     }
-  }, [item, requestedIntent, intentAvailable]);
+  }, [item, requestedIntent, intentAvailable, bodyDraft, inlineImagesPending]);
 
   /**
    * The editable drafts are seeded ONCE per item, not on every read.
@@ -1129,7 +1136,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function submitApproval(body: string) {
-    if (approvalBusy) return;
+    if (approvalBusy || approvalEditsPending) return;
     setApprovalBusy(true);
     try {
       await api(`/api/content/${id}/approve`, { method: "POST", body });
@@ -1144,6 +1151,10 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   async function approve(withSchedule: boolean, delayMinutes?: 30) {
     if (!canDecideDelivery || approvalBusy) return;
     setActionError(null);
+    if (approvalEditsPending) {
+      setActionError(t("saveBeforePublishing"));
+      return;
+    }
     const chosen =
       withSchedule && delayMinutes === undefined && scheduledAt ? new Date(scheduledAt) : null;
     /*
@@ -1167,9 +1178,16 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setActionError(te("schedule_in_past"));
       return;
     }
-    const body = JSON.stringify(
-      delayMinutes === 30 ? { delayMinutes } : chosen ? { scheduledAt: chosen.toISOString() } : {},
-    );
+    const body = JSON.stringify({
+      ...(delayMinutes === 30
+        ? { delayMinutes }
+        : chosen
+          ? { scheduledAt: chosen.toISOString() }
+          : {}),
+      ...(item?.postingReviewFingerprint
+        ? { expectedReviewFingerprint: item.postingReviewFingerprint }
+        : {}),
+    });
     const scheduled =
       item?.adaptations.filter((adaptation) => adaptation.status === "scheduled") ?? [];
     if (item && scheduled.length > 0) {
@@ -1188,6 +1206,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   async function confirmApproval() {
     if (!approvalConfirmation || !item || approvalBusy) return;
+    if (approvalEditsPending) {
+      setApprovalConfirmation(null);
+      setActionError(t("saveBeforePublishing"));
+      return;
+    }
     if (scheduledDeliveryFingerprint(item) !== approvalConfirmation.scheduledFingerprint) {
       setApprovalConfirmation(null);
       setActionError(t("approvalScheduleChanged"));
@@ -1949,22 +1972,51 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       );
     });
 
+  // A background read can update the server fingerprint while this editor retains
+  // the version the reviewer saw. Compare with current saved values as well as
+  // the edit baselines so that an unseen teammate change cannot be approved.
   const dirtyAdaptationIds = item.adaptations
     .filter((adaptation) => {
-      const baselineBody =
-        bodyBaselines.current[adaptation.id] ??
-        (adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags));
+      const savedBody =
+        adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
+      const baselineBody = bodyBaselines.current[adaptation.id] ?? savedBody;
       const baselineTags = tagBaselines.current[adaptation.id] ?? adaptation.hashtags;
       const baselineCta = ctaBaselines.current[adaptation.id] ?? adaptation.cta ?? "";
+      const body = overrideDrafts[adaptation.id] ?? baselineBody;
+      const tags = JSON.stringify(
+        normalizeHashtags((tagDrafts[adaptation.id] ?? baselineTags.join(", ")).split(",")),
+      );
+      const cta = ctaDrafts[adaptation.id] ?? baselineCta;
       return (
-        (overrideDrafts[adaptation.id] ?? baselineBody) !== baselineBody ||
-        JSON.stringify(
-          normalizeHashtags((tagDrafts[adaptation.id] ?? baselineTags.join(", ")).split(",")),
-        ) !== JSON.stringify(baselineTags) ||
-        (ctaDrafts[adaptation.id] ?? baselineCta) !== baselineCta
+        body !== baselineBody ||
+        body !== savedBody ||
+        tags !== JSON.stringify(baselineTags) ||
+        tags !== JSON.stringify(adaptation.hashtags) ||
+        cta !== baselineCta ||
+        cta !== (adaptation.cta ?? "")
       );
     })
     .map((adaptation) => adaptation.id);
+
+  const approvalSaveBusy = bodySaveBusy || Object.values(overrideSaveBusy).some(Boolean);
+  const approvalEditsPending =
+    draftMoved ||
+    richDirty ||
+    dirtyAdaptationIds.length > 0 ||
+    (item.imagesRevision != null && inlineImagesRevision !== item.imagesRevision) ||
+    inlineImagesPending ||
+    approvalSaveBusy;
+
+  async function saveReviewChanges() {
+    if (approvalSaveBusy) return;
+    if ((draftMoved || richDirty) && !(await saveBody())) return;
+    for (const adaptationId of dirtyAdaptationIds) {
+      if (!(await saveOverride(adaptationId))) return;
+    }
+    if (inlineImagesPending) await saveInlineImages.current?.();
+    else if (item?.imagesRevision != null && inlineImagesRevision !== item.imagesRevision)
+      await reload();
+  }
 
   return (
     <AppShell
@@ -1995,7 +2047,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             variant="primary"
             onClick={() => approve(false)}
             disabled={
-              isPublished || manualReadyWithoutApprovalTargets || archiveBusy || approvalBusy
+              isPublished ||
+              manualReadyWithoutApprovalTargets ||
+              archiveBusy ||
+              approvalBusy ||
+              approvalEditsPending
             }
           >
             {/*
@@ -2025,6 +2081,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {t("backToQueue")}
         </Link>
       </p>
+      {canDecideDelivery && approvalEditsPending && (
+        <Card className="mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p role="status" className="text-sm text-fg-secondary">
+              {t("saveBeforePublishing")}
+            </p>
+            <Button variant="secondary" onClick={saveReviewChanges} disabled={approvalSaveBusy}>
+              {t(
+                !draftMoved && !richDirty && dirtyAdaptationIds.length === 0 && !inlineImagesPending
+                  ? "reloadSavedContent"
+                  : "saveReviewChanges",
+              )}
+            </Button>
+          </div>
+        </Card>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-fg-secondary">
         {/*
           A badge, like every other status in the product. It was plain text
@@ -2332,6 +2404,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         editable={["draft", "rejected", "failed"].includes(item.status)}
         manualVc={manualAdaptations.length > 0}
         onReloadArticle={() => window.location.reload()}
+        expectedRevision={item.imagesRevision}
+        onRevisionChange={setInlineImagesRevision}
+        onPendingChange={setInlineImagesPending}
+        onSaved={reload}
+        saveRef={saveInlineImages}
       />
 
       <ClaimEvidence
@@ -2798,6 +2875,22 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             {isPublished && (
               <p className="mb-3 text-sm text-fg-secondary">{t("alreadyPublished")}</p>
             )}
+            {item.postingReviewFingerprint &&
+              ["draft", "rejected"].includes(item.status) &&
+              item.adaptations.length > 0 &&
+              item.adaptations.every(
+                (adaptation) => adaptation.status === "pending" && adaptation.attemptCount === 0,
+              ) &&
+              manualAdaptations.length === 0 &&
+              !channelsFailed && (
+                <PostingQueueAction
+                  contentItemId={item.id}
+                  brandId={item.brandId}
+                  reviewFingerprint={item.postingReviewFingerprint}
+                  disabled={approvalEditsPending || approvalBusy || archiveBusy}
+                  onScheduled={reload}
+                />
+              )}
             {partlyLive && !hasOutstanding && (
               <p className="mb-3 text-sm text-fg-secondary">{t("partlyLiveNothingToStop")}</p>
             )}
@@ -2819,7 +2912,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   !scheduledAt ||
                   scheduledAtIsPast ||
                   manualAdaptations.length > 0 ||
-                  approvalBusy
+                  approvalBusy ||
+                  approvalEditsPending
                 }
               >
                 {t("approveScheduled")}
@@ -2828,7 +2922,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 <Button
                   variant="secondary"
                   onClick={() => approve(true, 30)}
-                  disabled={approvalBusy}
+                  disabled={approvalBusy || approvalEditsPending}
                 >
                   {t("approveAfterThirtyMinutes")}
                 </Button>

@@ -376,6 +376,10 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // 0130: weekly slots/revision are relational bounds, rather than enum pins.
+  // posting-schedule.e2e.test.ts proves defaults and invalid direct SQL writes.
+  "channels_posting_revision_check",
+  "channels_posting_slots_check",
   // 0128 Telegram tables are absent from the pre-0009 historical seed, so the
   // generic PINNED_COLUMNS UPDATE loop cannot exercise even their enum pins.
   // schema-invariants.test.ts compares every enum check with its closed values;

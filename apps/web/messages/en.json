@@ -1045,7 +1045,10 @@
     "manualAssertionHint": "Recording this URL states that you published the post yourself. Pubrick does not ask {platform} to confirm it.",
     "manualPublicationAsserted": "Recorded by {name} on {date} — self reported; Pubrick did not ask {platform}.",
     "manualPublicationAssertedRemoved": "Recorded by a removed member on {date} — self reported; Pubrick did not ask {platform}.",
-    "versionExternal": "Imported text"
+    "versionExternal": "Imported text",
+    "saveBeforePublishing": "Save your changes before publishing or scheduling. The saved version is what will be sent.",
+    "saveReviewChanges": "Save changes",
+    "reloadSavedContent": "Reload saved content"
   },
   "Prompts": {
     "title": "Generation guidance",
@@ -1887,7 +1890,12 @@
     "editorial_plan_retention_capacity": "Retained occurrence history is full. Contact the operator; removing plans does not free history.",
     "editorial_plan_channels_missing": "A destination channel is missing. Check the plan’s channels.",
     "calendar_recurring_slot": "Edit or pause this slot’s weekly plan instead. You can skip this occurrence from Calendar.",
-    "editorial_plan_authority_revoked": "Your permission changed. Reload and check access to this brand."
+    "editorial_plan_authority_revoked": "Your permission changed. Reload and check access to this brand.",
+    "posting_preview_changed": "This preview changed or expired. Reload the post, review it and prepare a new preview.",
+    "posting_slot_occupied": "Another delivery occupies this time. Refresh the queue preview or choose a different time.",
+    "posting_schedule_missing": "Configure weekly posting times for every channel before adding this post to the queue.",
+    "posting_queue_full": "No free posting time in the next 90 days. Add more weekly times or move scheduled posts.",
+    "posting_queue_not_ready": "Only unsent native-channel posts can enter this queue. Inspect the current deliveries first."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -2404,7 +2412,8 @@
     "previousPosition": "Previous paragraph {number} (no longer available)",
     "discard": "Discard image changes",
     "saveFailed": "Could not save inline images.",
-    "reloadLatest": "Reload latest images"
+    "reloadLatest": "Reload latest images",
+    "refreshFailed": "Images saved, but the article could not be refreshed. Reload the post before publishing."
   },
   "Analytics": {
     "overviewTitle": "Activity overview",
@@ -3128,5 +3137,41 @@
     "loading": "Loading content…",
     "retry": "Retry",
     "retrying": "Retrying…"
+  },
+  "PostingSchedule": {
+    "settingsAction": "Posting times",
+    "title": "Posting times · {channel}",
+    "intro": "Choose weekly times for this channel. Content is added only after you review and approve its exact publication time.",
+    "timezone": "Time zone",
+    "weekday": "Weekday",
+    "time": "Time",
+    "add": "Add",
+    "remove": "Remove",
+    "removeSlot": "Remove {day} at {time}",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Posting times saved.",
+    "loading": "Loading…",
+    "reload": "Reload",
+    "reloaded": "Saved settings refreshed. Your unsaved changes are preserved; review them before saving.",
+    "unsaved": "You have unsaved posting times.",
+    "configured": "Saved: {count} weekly posting times.",
+    "notConfigured": "No posting times configured.",
+    "invalid": "Use a valid time zone and unique weekday/time pairs.",
+    "loadError": "Could not load posting times. Reload to try again.",
+    "saveError": "Could not save posting times. Your changes are still here.",
+    "existingJobs": "Changing these times does not move content already scheduled. Times skipped by daylight saving are omitted; repeated times are used once.",
+    "addToQueue": "Add to queue",
+    "configure": "Configure posting times",
+    "queueHint": "Preview the next free time for each channel, then approve the saved content for those times.",
+    "confirmTitle": "Confirm publication times",
+    "confirmHint": "Confirming approves this saved content and schedules delivery at the exact times below.",
+    "confirm": "Approve",
+    "previewError": "Could not prepare the posting queue. Try again.",
+    "queued": "Content added to the posting queue.",
+    "refreshError": "Content was scheduled, but its status could not be refreshed. Reload the post.",
+    "discardHint": "Discard your unsaved posting times?",
+    "discard": "Discard",
+    "keepEditing": "Keep editing"
   }
 }

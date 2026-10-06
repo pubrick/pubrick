@@ -63,6 +63,40 @@ const props = {
 };
 
 describe("article image slots", () => {
+  it("preserves dirty descriptions and exposes recovery when a newer image revision arrives", async () => {
+    const slot = {
+      id: "slot-1",
+      mediaId: image.id,
+      afterParagraph: 0,
+      alt: "Original description",
+      caption: null,
+      alignment: "center",
+    };
+    let revision = 0;
+    mockApi.mockImplementation((path: string) => {
+      if (path === "/api/content/post-1/images")
+        return Promise.resolve({ revision, images: [slot] });
+      if (path === "/api/ai-credentials/availability")
+        return Promise.resolve({ googleConfigured: false });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const view = render(<InlineImages {...props} expectedRevision={0} />);
+    const field = await screen.findByRole("textbox", { name: "Image description" });
+    await userEvent.setup().clear(field);
+    await userEvent.setup().type(field, "My retained description");
+    revision = 1;
+    view.rerender(<InlineImages {...props} expectedRevision={1} />);
+    expect(field).toHaveValue("My retained description");
+    expect(await screen.findByText(/Images changed in another editor/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save images" })).toBeDisabled();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Reload latest images" }));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Image description" })).toHaveValue(
+        "Original description",
+      ),
+    );
+  });
+
   it("does not upload on cancel and submits an explicit crop with current revision", async () => {
     const sourceId = "8c9c09d1-4f93-4716-956a-00ba0d4b047a";
     const slotId = "47d8c830-7c27-4386-8642-98a72543cfe1";

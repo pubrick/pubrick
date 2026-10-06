@@ -176,6 +176,14 @@ describe("brand settings for editorial roles", () => {
         "href",
         "/en/brands/b1/autopilot",
       );
+      if (role === "editor")
+        expect(
+          screen.getByRole("button", { name: en.PostingSchedule.settingsAction }),
+        ).toBeVisible();
+      else
+        expect(
+          screen.queryByRole("button", { name: en.PostingSchedule.settingsAction }),
+        ).not.toBeInTheDocument();
       for (const label of [
         en.Channels.add,
         en.Channels.test,

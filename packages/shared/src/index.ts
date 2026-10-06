@@ -69,6 +69,7 @@ export * from "./dto/media.js";
 export * from "./dto/memorable-dates.js";
 export * from "./dto/notifications.js";
 export * from "./dto/paid-replies.js";
+export * from "./dto/posting-schedule.js";
 export {
   PROMPT_ROLES,
   type PromptDecisionHistoryDto,

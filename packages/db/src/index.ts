@@ -25,6 +25,7 @@ export type {
   PaidReplyTransaction,
 } from "./paid-reply-admission.js";
 export { admitPaidReplyAttempt } from "./paid-reply-admission.js";
+export * from "./posting-slots.js";
 export * from "./resource-admission.js";
 export * as schema from "./schema/index.js";
 export * from "./telegram-fresh-draft.js";

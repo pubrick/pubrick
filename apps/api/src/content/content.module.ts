@@ -10,6 +10,8 @@ import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
+import { PostingQueueRepository } from "./posting-queue.repository";
+import { PostingScheduleController } from "./posting-schedule.controller";
 import { PublicationOperationsController } from "./publication-operations.controller";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller } from "./refine.caller";
@@ -28,9 +30,15 @@ import { RefineCaller } from "./refine.caller";
 @Module({
   imports: [AiCredentialsModule, MediaModule],
   exports: [ContentRepository],
-  controllers: [ContentController, PublicationOperationsController, ArchivedPublicationsController],
+  controllers: [
+    ContentController,
+    PublicationOperationsController,
+    ArchivedPublicationsController,
+    PostingScheduleController,
+  ],
   providers: [
     ContentRepository,
+    PostingQueueRepository,
     ArchivedPublicationsRepository,
     ContentCostRepository,
     ContentImagesRepository,

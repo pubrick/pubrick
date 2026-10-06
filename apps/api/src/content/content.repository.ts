@@ -96,6 +96,13 @@ import { assertImagesFitBody } from "./content-images.repository";
 import { deliveryOutcomeSql } from "./delivery-outcome.sql";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
+import {
+  assertPostingTimesAvailable,
+  lockPostingSchedule,
+  PostingQueueRepository,
+  postingDatabaseNow,
+} from "./posting-queue.repository";
+import { postingReviewFingerprint } from "./posting-review-fingerprint";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller, type RefineFailure, type RefineUsage } from "./refine.caller";
 import { REFINE_STEP } from "./refine.step";
@@ -1201,6 +1208,7 @@ export class ContentRepository {
     private readonly mediaImages: MediaImageService,
     private readonly media: MediaRepository,
     private readonly claimCorrector: ClaimCorrectionCaller,
+    private readonly postingQueue: PostingQueueRepository = new PostingQueueRepository(),
   ) {}
 
   /** Current per-channel operations, with the same receipt-derived verdict as item detail. */
@@ -1209,7 +1217,16 @@ export class ContentRepository {
     brandId: string,
     query: PublicationOperationsQuery,
   ): Promise<PublicationOperationsPageDto> {
-    const cursor = query.cursor === undefined ? null : decodeContentCursor(query.cursor);
+    const upcoming = query.filter === "scheduled";
+    const rawCursor = query.cursor;
+    const cursor =
+      rawCursor === undefined
+        ? null
+        : upcoming && rawCursor.startsWith("pq1.")
+          ? decodeContentCursor(rawCursor.slice(4))
+          : !upcoming
+            ? decodeContentCursor(rawCursor)
+            : null;
     if (query.cursor !== undefined && cursor === null) {
       throw badRequest("invalid_request", "Malformed publication cursor");
     }
@@ -1221,7 +1238,8 @@ export class ContentRepository {
           : query.filter === "published"
             ? eq(schema.adaptations.status, "published")
             : undefined;
-    const cursorAt = sql<string>`to_char(${schema.adaptations.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+    const sortAt = upcoming ? schema.adaptations.scheduledAt : schema.adaptations.createdAt;
+    const cursorAt = sql<string>`to_char(${sortAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
     const rows = await db
       .select({
         id: schema.adaptations.id,
@@ -1265,12 +1283,18 @@ export class ContentRepository {
         and(
           eq(schema.adaptations.orgId, orgId),
           filter,
+          upcoming ? isNotNull(schema.adaptations.scheduledAt) : undefined,
           cursor
-            ? sql`(${schema.adaptations.createdAt}, ${schema.adaptations.id}) < (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`
+            ? upcoming
+              ? sql`(${sortAt}, ${schema.adaptations.id}) > (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`
+              : sql`(${sortAt}, ${schema.adaptations.id}) < (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`
             : undefined,
         ),
       )
-      .orderBy(desc(schema.adaptations.createdAt), desc(schema.adaptations.id))
+      .orderBy(
+        upcoming ? asc(sortAt) : desc(sortAt),
+        upcoming ? asc(schema.adaptations.id) : desc(schema.adaptations.id),
+      )
       .limit(query.limit + 1);
     const page = rows.slice(0, query.limit);
     const last = page.at(-1);
@@ -1285,7 +1309,7 @@ export class ContentRepository {
       })),
       nextCursor:
         rows.length > query.limit && last
-          ? encodeContentCursor({ createdAt: last.cursorAt, id: last.id })
+          ? `${upcoming ? "pq1." : ""}${encodeContentCursor({ createdAt: last.cursorAt, id: last.id })}`
           : null,
     };
   }
@@ -1686,6 +1710,7 @@ export class ContentRepository {
           isSafeToDelete: schema.contentItems.isSafeToDelete,
           richBody: schema.contentItems.richBody,
           bodyRevision: schema.contentItems.bodyRevision,
+          imagesRevision: schema.contentItems.imagesRevision,
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
@@ -1721,6 +1746,18 @@ export class ContentRepository {
       richBody,
       richBodyHtml: richBody ? (safeRichHtmlBlocks(richBody, item.body)?.join("\n") ?? null) : null,
       bodyRevision: cover[0]?.bodyRevision ?? 0,
+      imagesRevision: cover[0]?.imagesRevision ?? null,
+      postingReviewFingerprint: postingReviewFingerprint({
+        title: item.title,
+        body: item.body,
+        richBody: cover[0]?.richBody ?? null,
+        bodyRevision: cover[0]?.bodyRevision ?? 0,
+        imagesRevision: cover[0]?.imagesRevision ?? null,
+        coverMediaId: cover[0]?.coverMediaId ?? null,
+        videoMediaId: cover[0]?.videoMediaId ?? null,
+        status: item.status,
+        adaptations,
+      }),
       adaptations,
       /**
        * The run that made this item, so the delivery receipt stays reachable
@@ -6223,6 +6260,8 @@ export class ContentRepository {
     id: string,
     requestedScheduledAt: Date | null,
     delayMinutes: 30 | null = null,
+    queuePreviewToken: string | null = null,
+    expectedReviewFingerprint: string | null = null,
   ) {
     // A SCHEDULE IN THE PAST, refused here rather than by `contentApproveSchema`.
     //
@@ -6248,6 +6287,9 @@ export class ContentRepository {
     await db.transaction(async (tx) => {
       await holdOrganization(tx, orgId);
       await this.requireItem(tx, orgId, id);
+      if (requestedScheduledAt !== null || delayMinutes !== null || queuePreviewToken !== null) {
+        await lockPostingSchedule(tx, orgId);
+      }
       const targets = await this.lockAdaptations(tx, orgId, id, [
         "pending",
         "failed",
@@ -6270,6 +6312,22 @@ export class ContentRepository {
         scheduledAt = new Date(clock.nowMs + delayMinutes * 60_000);
       }
       await this.requireNotPublished(tx, orgId, id, { of: "the item" });
+      if (expectedReviewFingerprint !== null)
+        await this.postingQueue.assertReviewed(tx, orgId, id, expectedReviewFingerprint);
+      const postingTimes =
+        queuePreviewToken !== null
+          ? await this.postingQueue.confirm(tx, orgId, id, queuePreviewToken)
+          : null;
+      if (postingTimes) scheduledAt = postingTimes.values().next().value ?? null;
+      if (
+        scheduledAt !== null &&
+        scheduledAt.getTime() <= (await postingDatabaseNow(tx, orgId)).getTime()
+      ) {
+        throw badRequest(
+          "schedule_in_past",
+          "scheduledAt must remain in the future after scheduling locks",
+        );
+      }
       const journalDecision = await this.shouldJournalDecision(
         tx,
         orgId,
@@ -6488,7 +6546,20 @@ export class ContentRepository {
         );
       }
 
+      if (scheduledAt !== null) {
+        await assertPostingTimesAvailable(
+          tx,
+          orgId,
+          sendable.map((adaptation) => ({
+            adaptationId: adaptation.id,
+            channelId: adaptation.channelId,
+            scheduledAt: postingTimes?.get(adaptation.id) ?? (scheduledAt as Date),
+          })),
+        );
+      }
+
       for (const adaptation of sendable) {
+        const deliveryTime = postingTimes?.get(adaptation.id) ?? scheduledAt;
         if (isManualPlatform(platformByChannel.get(adaptation.channelId) ?? "")) {
           await tx
             .update(schema.adaptations)
@@ -6514,7 +6585,7 @@ export class ContentRepository {
         await tx
           .update(schema.adaptations)
           .set({
-            status: scheduledAt ? "scheduled" : "queued",
+            status: deliveryTime ? "scheduled" : "queued",
             // `null` FOR "PUBLISH NOW", and that is load-bearing rather than
             // incidental. A row that missed its slot is `failed` with the slot
             // still on it; "Publish now" has to erase the slot, or the worker
@@ -6522,7 +6593,7 @@ export class ContentRepository {
             // bound again, and fail the row for ever — a post nobody could ever
             // send. Writing it conditionally (`...(scheduledAt && { scheduledAt })`)
             // is exactly that loop.
-            scheduledAt,
+            scheduledAt: deliveryTime,
             lastError: null,
             // Beside the `lastError` it already clears, for the same reason:
             // the row is outstanding again and the previous attempt's verdict
@@ -6537,7 +6608,7 @@ export class ContentRepository {
         await this.queue.enqueuePublish(
           tx,
           { id: adaptation.id, orgId, channelId: adaptation.channelId, attemptCount },
-          scheduledAt,
+          deliveryTime,
         );
       }
 
@@ -6591,6 +6662,7 @@ export class ContentRepository {
     scheduledAt: Date | null,
   ) {
     await db.transaction(async (tx) => {
+      await lockPostingSchedule(tx, orgId);
       // The publish worker claims this same row before any external call. A
       // second request must wait for the first reschedule, then compare the
       // time in a NEW statement under this lock (READ COMMITTED snapshot).
@@ -6722,6 +6794,11 @@ export class ContentRepository {
         );
       }
       if (scheduledAt?.getTime() === current.scheduledAt.getTime()) return;
+      if (scheduledAt) {
+        await assertPostingTimesAvailable(tx, orgId, [
+          { adaptationId, channelId: current.channelId, scheduledAt },
+        ]);
+      }
 
       // Cancellation and replacement share this transaction with the row.
       // The cancelled pg-boss id remains, so a fresh attempt count is required.

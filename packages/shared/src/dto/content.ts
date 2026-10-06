@@ -665,9 +665,18 @@ export const contentApproveSchema = z
     scheduledAt: z.string().datetime().optional(),
     /** Fixed, explicit shortcut; the database clock determines its actual time. */
     delayMinutes: z.literal(30).optional(),
+    /** Opaque confirmation of exact per-channel posting slots. */
+    queuePreviewToken: z.string().min(1).max(16_384).optional(),
+    expectedReviewFingerprint: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
   })
   .refine((body) => !(body.scheduledAt && body.delayMinutes), {
     message: "Choose either scheduledAt or delayMinutes",
+  })
+  .refine((body) => !(body.queuePreviewToken && (body.scheduledAt || body.delayMinutes)), {
+    message: "Choose a queue preview or an explicit schedule",
   });
 export type ContentApprove = z.infer<typeof contentApproveSchema>;
 

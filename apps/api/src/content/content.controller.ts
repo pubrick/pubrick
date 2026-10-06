@@ -52,6 +52,7 @@ import {
   type ManualPublication,
   manualPublicationSchema,
   NEXT_CURSOR_HEADER,
+  postingQueuePreviewRequestSchema,
   type RefineRequest,
   refineRequestSchema,
   type TopicBlock,
@@ -68,6 +69,7 @@ import { ContentRepository } from "./content.repository";
 import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
+import { PostingQueueRepository } from "./posting-queue.repository";
 
 @Controller("content")
 @UseGuards(ActiveOrgGuard)
@@ -78,6 +80,7 @@ export class ContentController {
     private readonly contentCost: ContentCostRepository,
     private readonly contentImages: ContentImagesRepository,
     private readonly editorialNotes: EditorialNotesRepository,
+    private readonly postingQueue: PostingQueueRepository,
   ) {}
 
   @Get(":id/claim-correction")
@@ -530,7 +533,22 @@ export class ContentController {
       id,
       body.scheduledAt ? new Date(body.scheduledAt) : null,
       body.delayMinutes ?? null,
+      body.queuePreviewToken ?? null,
+      body.expectedReviewFingerprint ?? null,
     );
+  }
+
+  @Post(":id/posting-queue/preview")
+  @EditorialCapability("editor")
+  @HttpCode(200)
+  postingPreview(
+    @OrgId() orgId: string,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(postingQueuePreviewRequestSchema)) body: {
+      reviewFingerprint: string;
+    },
+  ) {
+    return this.postingQueue.preview(orgId, id, body.reviewFingerprint);
   }
 
   @Post(":id/adaptations/:adaptationId/reschedule")

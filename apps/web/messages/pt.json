@@ -1045,7 +1045,10 @@
     "manualAssertionHint": "Ao registar este URL, afirma que publicou o conteúdo. O Pubrick não pede confirmação a {platform}.",
     "manualPublicationAsserted": "Registado por {name} em {date}; informação fornecida pela pessoa, sem consulta a {platform}.",
     "manualPublicationAssertedRemoved": "Registado por um membro removido em {date}; informação fornecida pela pessoa, sem consulta a {platform}.",
-    "versionExternal": "Texto importado"
+    "versionExternal": "Texto importado",
+    "saveBeforePublishing": "Salve as alterações antes de publicar ou agendar. A versão salva será enviada.",
+    "saveReviewChanges": "Salvar alterações",
+    "reloadSavedContent": "Recarregar conteúdo salvo"
   },
   "Prompts": {
     "title": "Orientações de geração",
@@ -1887,7 +1890,12 @@
     "editorial_plan_retention_capacity": "O histórico está cheio. Contate o operador; remover planos não libera histórico.",
     "editorial_plan_channels_missing": "Falta um canal de destino. Confira os canais.",
     "calendar_recurring_slot": "Edite ou pause o plano semanal do evento. Você pode ignorar este evento no Calendário.",
-    "editorial_plan_authority_revoked": "Suas permissões mudaram. Recarregue e confira o acesso à marca."
+    "editorial_plan_authority_revoked": "Suas permissões mudaram. Recarregue e confira o acesso à marca.",
+    "posting_preview_changed": "A prévia mudou ou expirou. Recarregue o conteúdo, revise e prepare uma nova prévia.",
+    "posting_slot_occupied": "Outro envio ocupa este horário. Atualize a prévia ou escolha outro horário.",
+    "posting_schedule_missing": "Configure horários semanais para todos os canais antes de adicionar o conteúdo à fila.",
+    "posting_queue_full": "Nenhum horário livre nos próximos 90 dias. Adicione horários ou mova publicações agendadas.",
+    "posting_queue_not_ready": "Esta fila aceita apenas conteúdo não enviado para canais automáticos. Revise os envios atuais primeiro."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -2404,7 +2412,8 @@
     "previousPosition": "Parágrafo anterior {number} (não disponível)",
     "discard": "Descartar alterações das imagens",
     "saveFailed": "Não foi possível salvar as imagens no texto.",
-    "reloadLatest": "Recarregar imagens atuais"
+    "reloadLatest": "Recarregar imagens atuais",
+    "refreshFailed": "As imagens foram salvas, mas não foi possível atualizar o artigo. Recarregue o post antes de publicar."
   },
   "Analytics": {
     "overviewTitle": "Resumo da atividade",
@@ -3128,5 +3137,41 @@
     "loading": "Carregando conteúdo…",
     "retry": "Tentar novamente",
     "retrying": "Tentando novamente…"
+  },
+  "PostingSchedule": {
+    "settingsAction": "Horários de publicação",
+    "title": "Horários de publicação · {channel}",
+    "intro": "Escolha horários semanais para este canal. O conteúdo só é adicionado após revisar e aprovar o horário exato de publicação.",
+    "timezone": "Fuso horário",
+    "weekday": "Dia da semana",
+    "time": "Horário",
+    "add": "Adicionar",
+    "remove": "Remover",
+    "removeSlot": "Remover {day} às {time}",
+    "save": "Salvar",
+    "saving": "Salvando…",
+    "saved": "Horários de publicação salvos.",
+    "loading": "Carregando…",
+    "reload": "Recarregar",
+    "reloaded": "Configurações salvas atualizadas. Suas alterações foram preservadas; revise antes de salvar.",
+    "unsaved": "Há horários com alterações não salvas.",
+    "configured": "Salvos: {count} horários semanais.",
+    "notConfigured": "Nenhum horário de publicação configurado.",
+    "invalid": "Use um fuso horário válido e pares únicos de dia e horário.",
+    "loadError": "Não foi possível carregar os horários. Recarregue para tentar novamente.",
+    "saveError": "Não foi possível salvar os horários. Suas alterações continuam aqui.",
+    "existingJobs": "Alterar esses horários não move o conteúdo já agendado. Horários inexistentes na mudança de horário são omitidos; horários repetidos são usados uma vez.",
+    "addToQueue": "Adicionar à fila",
+    "configure": "Configurar horários",
+    "queueHint": "Veja o próximo horário livre de cada canal e aprove o conteúdo salvo para esses horários.",
+    "confirmTitle": "Confirme os horários de publicação",
+    "confirmHint": "A confirmação aprova este conteúdo salvo e agenda o envio nos horários abaixo.",
+    "confirm": "Aprovar",
+    "previewError": "Não foi possível preparar a fila. Tente novamente.",
+    "queued": "Conteúdo adicionado à fila de publicação.",
+    "refreshError": "O conteúdo foi agendado, mas seu status não pôde ser atualizado. Recarregue a publicação.",
+    "discardHint": "Descartar os horários com alterações não salvas?",
+    "discard": "Descartar",
+    "keepEditing": "Continuar editando"
   }
 }

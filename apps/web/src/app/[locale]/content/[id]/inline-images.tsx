@@ -2,7 +2,7 @@
 
 import type { ContentImageAlignment, MediaAssetDto } from "@pubrick/shared";
 import { useTranslations } from "next-intl";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { Area } from "react-easy-crop";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -43,6 +43,11 @@ export function InlineImages({
   editable,
   manualVc,
   onReloadArticle,
+  expectedRevision,
+  onRevisionChange,
+  onPendingChange,
+  onSaved,
+  saveRef,
 }: {
   itemId: string;
   brandId: string;
@@ -51,6 +56,11 @@ export function InlineImages({
   editable: boolean;
   manualVc: boolean;
   onReloadArticle: () => void;
+  expectedRevision?: number | null;
+  onRevisionChange?: (revision: number) => void;
+  onPendingChange?: (pending: boolean) => void;
+  onSaved?: () => Promise<void>;
+  saveRef?: RefObject<(() => Promise<boolean>) | null>;
 }) {
   const t = useTranslations("InlineImages");
   const te = useTranslations("Errors");
@@ -85,7 +95,16 @@ export function InlineImages({
   const uploadRef = useRef<HTMLInputElement>(null);
   const nextKey = useRef(0);
   const lastSavedBody = useRef(savedBody);
+  const lastExpectedRevision = useRef(expectedRevision);
   const requestVersion = useRef(0);
+
+  useEffect(() => {
+    onPendingChange?.(dirty || busy || loading || loadError !== null);
+  }, [dirty, busy, loading, loadError, onPendingChange]);
+
+  useEffect(() => {
+    onRevisionChange?.(revision);
+  }, [revision, onRevisionChange]);
 
   const loadSlots = useCallback(async () => {
     const version = ++requestVersion.current;
@@ -116,14 +135,22 @@ export function InlineImages({
   }, [loadSlots]);
 
   useEffect(() => {
-    if (lastSavedBody.current === savedBody) return;
+    if (lastSavedBody.current === savedBody && lastExpectedRevision.current === expectedRevision)
+      return;
+    const revisionChanged = lastExpectedRevision.current !== expectedRevision;
+    const bodyChanged = lastSavedBody.current !== savedBody;
     lastSavedBody.current = savedBody;
+    lastExpectedRevision.current = expectedRevision;
     if (dirty) {
-      setBodyChangedWhileEditing(true);
+      if (bodyChanged) setBodyChangedWhileEditing(true);
+      if (revisionChanged) {
+        setStale(true);
+        setError(te("content_images_changed"));
+      }
     } else {
       void loadSlots();
     }
-  }, [savedBody, dirty, loadSlots]);
+  }, [savedBody, expectedRevision, dirty, loadSlots, te]);
 
   const loadAssets = useCallback(async () => {
     setMediaLoading(true);
@@ -320,7 +347,7 @@ export function InlineImages({
     }
   }
 
-  async function save() {
+  async function save(): Promise<boolean> {
     if (
       !editable ||
       bodyHasUnsavedChanges ||
@@ -332,7 +359,7 @@ export function InlineImages({
       invalidPosition ||
       unacknowledgedReview
     )
-      return;
+      return false;
     setBusy(true);
     setError(null);
     try {
@@ -356,13 +383,22 @@ export function InlineImages({
       setReviewedSlots(new Set());
       setStale(false);
       setBodyChangedWhileEditing(false);
+      try {
+        await onSaved?.();
+      } catch {
+        setError(t("refreshFailed"));
+      }
+      return true;
     } catch (cause) {
       if (cause instanceof ApiError && cause.code === "content_images_changed") setStale(true);
       setError(errorMessage(cause, t("saveFailed"), te));
+      return false;
     } finally {
       setBusy(false);
     }
   }
+
+  if (saveRef) saveRef.current = save;
 
   const canAdd =
     editable &&

@@ -1,9 +1,15 @@
-import { type BrandLinkPolicy, MANUAL_PLATFORM_IDS, PLATFORM_IDS } from "@pubrick/shared";
+import {
+  type BrandLinkPolicy,
+  MANUAL_PLATFORM_IDS,
+  PLATFORM_IDS,
+  type PostingSlot,
+} from "@pubrick/shared";
 import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -55,6 +61,9 @@ export const channels = pgTable(
     name: text("name").notNull(),
     /** Explicit per-channel opt-in. Only VK supports automatic metric reads. */
     metricsAutoRefresh: boolean("metrics_auto_refresh").default(false).notNull(),
+    postingTimezone: text("posting_timezone"),
+    postingSlots: jsonb("posting_slots").$type<PostingSlot[]>().default([]).notNull(),
+    postingRevision: integer("posting_revision").default(0).notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
     credentialsEncrypted: text("credentials_encrypted"),
     /** Last real platform verification, invalidated when credentials change. */
@@ -69,6 +78,11 @@ export const channels = pgTable(
   (t) => [
     index("channels_org_id_idx").on(t.orgId),
     index("channels_brand_id_idx").on(t.brandId),
+    check("channels_posting_revision_check", sql`${t.postingRevision} >= 0`),
+    check(
+      "channels_posting_slots_check",
+      sql`jsonb_typeof(${t.postingSlots}) = 'array' and jsonb_array_length(${t.postingSlots}) <= 70 and (jsonb_array_length(${t.postingSlots}) = 0 or ${t.postingTimezone} is not null)`,
+    ),
     index("channels_health_due_idx").on(t.healthCheckedAt, t.id),
     check(
       "channels_health_result_pair_check",

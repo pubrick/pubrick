@@ -85,6 +85,8 @@ type ContentItem = {
   richBody?: RichBody | null;
   richBodyHtml?: string | null;
   bodyRevision?: number;
+  imagesRevision?: number | null;
+  postingReviewFingerprint?: string;
   status: ContentStatus;
   archivedFromStatus: ContentStatus | null;
   isSafeToDelete: boolean;
@@ -277,6 +279,148 @@ beforeEach(() => {
     },
     isPending: false,
   } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+});
+
+describe("saved content before publication", () => {
+  it("offers a refresh when the clean image read is newer than the parent post", async () => {
+    const served = { current: makeItem({ imagesRevision: 0, adaptations: [makeAdaptation()] }) };
+    installBaseHandlers(served, [], (path, method) => {
+      if (path === "/api/content/c1/images" && method === "GET") return { revision: 1, images: [] };
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const refresh = await screen.findByRole("button", { name: en.Publish.reloadSavedContent });
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
+    served.current = { ...served.current, imagesRevision: 1 };
+    await userEvent.setup().click(refresh);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled(),
+    );
+  });
+
+  it("blocks publication while image changes are unsaved and saves them before enabling approval", async () => {
+    const served = {
+      current: makeItem({
+        body: "An article paragraph",
+        imagesRevision: 0,
+        adaptations: [makeAdaptation()],
+      }),
+    };
+    const calls: Call[] = [];
+    let images = {
+      revision: 0,
+      images: [
+        {
+          id: "image-1",
+          mediaId: "media-1",
+          afterParagraph: 0,
+          alt: "Original image",
+          caption: null,
+          alignment: "center",
+        },
+      ],
+    };
+    installBaseHandlers(served, calls, (path, method, options) => {
+      if (path === "/api/content/c1/images" && method === "GET") return images;
+      if (path === "/api/content/c1/images" && method === "PUT") {
+        const payload = JSON.parse(String(options?.body));
+        const changedImages: typeof images.images = payload.images;
+        images = {
+          revision: 1,
+          images: changedImages.map((image) => ({ ...image, id: "image-1" })),
+        };
+        served.current = { ...served.current, imagesRevision: 1 };
+        return images;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const field = await screen.findByDisplayValue("Original image");
+    fireEvent.change(field, { target: { value: "Reviewed image description" } });
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Publish.saveReviewChanges }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeEnabled(),
+    );
+    expect(
+      calls.filter((call) => call.path === "/api/content/c1/images" && call.method === "PUT"),
+    ).toHaveLength(1);
+    expect(calls.filter((call) => call.path.endsWith("/approve"))).toEqual([]);
+  });
+
+  it.each(["body", "hashtags", "cta"])(
+    "blocks approval after a refresh discovers an unseen channel %s",
+    async (field) => {
+      const served = {
+        current: makeItem({ adaptations: [makeAdaptation({ body: "Original channel text" })] }),
+      };
+      const calls: Call[] = [];
+      installBaseHandlers(served, calls, (path, method) => {
+        if (method === "PATCH" && path === "/api/content/c1") {
+          const remote =
+            field === "body"
+              ? { body: "Changed by another editor" }
+              : field === "hashtags"
+                ? { hashtags: ["unseen"] }
+                : { cta: "Unseen call to action" };
+          served.current = {
+            ...served.current,
+            body: "My saved master edit",
+            adaptations: [makeAdaptation({ body: "Original channel text", ...remote })],
+          };
+          return served.current;
+        }
+        return undefined;
+      });
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      fireEvent.change(screen.getByLabelText(en.Publish.bodyLabel), {
+        target: { value: "My saved master edit" },
+      });
+      await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.saveBody }));
+      await waitFor(() =>
+        expect(
+          calls.filter((call) => call.path === "/api/content/c1" && call.method === "GET").length,
+        ).toBeGreaterThan(1),
+      );
+      expect(screen.getByPlaceholderText(en.Publish.overridePlaceholder)).toHaveValue(
+        "Original channel text",
+      );
+      expect(await screen.findByText(en.Publish.saveBeforePublishing)).toBeVisible();
+      expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
+      expect(calls.filter((call) => call.path.endsWith("/approve"))).toEqual([]);
+    },
+  );
+
+  it.each(["master", "adaptation"])(
+    "blocks all approval shortcuts with unsaved %s edits",
+    async (level) => {
+      const served = { current: makeItem({ adaptations: [makeAdaptation()] }) };
+      const calls: Call[] = [];
+      installBaseHandlers(served, calls);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      await screen.findByRole("button", { name: en.Publish.approveNow });
+      const field =
+        level === "master"
+          ? screen.getByRole("textbox", { name: en.Publish.bodyLabel })
+          : screen.getByRole("textbox", {
+              name: en.Publish.overrideLabel.replace("{channel}", "Telegram · Main channel"),
+            });
+      fireEvent.change(field, { target: { value: "Visible unsaved changes" } });
+      expect(await screen.findByText(en.Publish.saveBeforePublishing)).toBeVisible();
+      expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),
+      ).toBeDisabled();
+      fireEvent.change(screen.getByLabelText(en.Publish.scheduleLabel), {
+        target: { value: scheduleValue() },
+      });
+      expect(screen.getByRole("button", { name: en.Publish.approveScheduled })).toBeDisabled();
+      expect(screen.getByRole("button", { name: en.Publish.saveReviewChanges })).toBeEnabled();
+      expect(calls.filter((call) => call.path.endsWith("/approve"))).toEqual([]);
+    },
+  );
 });
 
 describe("Telegram review links", () => {
