@@ -939,6 +939,13 @@
       "when": 1791322330050,
       "tag": "0134_telegram_inbox",
       "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1791323937865,
+      "tag": "0135_meta_publication_stages",
+      "breakpoints": true
     }
   ]
 }

@@ -220,6 +220,11 @@ const ZONED_COLUMNS = [
   "media_cleanup_work.next_attempt_at",
   "memorable_dates.created_at",
   "memorable_dates.updated_at",
+  "meta_publication_stages.created_at",
+  "meta_publication_stages.lease_until",
+  "meta_publication_stages.next_poll_at",
+  "meta_publication_stages.preparation_deadline",
+  "meta_publication_stages.updated_at",
   "news_comment_analyses.created_at",
   "news_comment_analyses.sample_checked_at",
   "news_comment_collection_configs.last_scanned_at",
@@ -426,6 +431,21 @@ const NON_ENUM_CHECKS = [
   "linkedin_authorization_requests_locale_check",
   "linkedin_authorization_intent_check",
   "linkedin_authorization_expiry_check",
+  // 0135: the checkpoint table is absent from the historical enum seed.
+  // schema-invariants.test.ts pins its enums; meta-publications.foundation.e2e.test.ts
+  // exercises its exact payload, authority lease and real-receipt constraints.
+  "meta_publication_stages_platform_check",
+  "meta_publication_stages_phase_check",
+  "meta_publication_stages_failure_reason_check",
+  "meta_publication_stages_attempt_check",
+  "meta_publication_stages_input_hash_check",
+  "meta_publication_stages_target_check",
+  "meta_publication_stages_input_check",
+  "meta_publication_stages_lease_pair_check",
+  "meta_publication_stages_container_check",
+  "meta_publication_stages_receipt_check",
+  "meta_publication_stages_checkpoint_check",
+  "meta_publication_stages_deadline_check",
   // 0130: weekly slots/revision are relational bounds, rather than enum pins.
   // posting-schedule.e2e.test.ts proves defaults and invalid direct SQL writes.
   "channels_posting_revision_check",
