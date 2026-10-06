@@ -885,6 +885,14 @@ function expectNoRowRewritten(
           if (table === "channels" && key === "metrics_auto_refresh") {
             return afterRow[key] !== false;
           }
+          // 0130 adds inactive metadata defaults; historical channels keep no
+          // posting timezone or slots, and no approved delivery is retimed.
+          if (table === "channels" && key === "posting_slots") {
+            return JSON.stringify(afterRow[key]) !== "[]";
+          }
+          if (table === "channels" && key === "posting_revision") {
+            return afterRow[key] !== 0;
+          }
           // 0060 intentionally makes historical items ineligible for deletion:
           // an orphaned receipt may already have lost its item link.
           if (table === "content_items" && key === "is_safe_to_delete") {

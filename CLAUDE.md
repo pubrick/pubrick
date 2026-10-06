@@ -11,7 +11,7 @@ pnpm + Turborepo. Everything — code, comments, commits, docs — is in English
 - Lint/format: `pnpm lint` / `pnpm format` (Biome; formatting is hook-enforced, don't hand-format)
 - Test all: `pnpm test`; single package: `pnpm --filter @pubrick/db test`;
   single file: `pnpm --filter @pubrick/db exec vitest run src/migrate.test.ts --reporter=dot`
-- DB integration tests need `TEST_DATABASE_URL` (any Postgres with pgvector, e.g. a throwaway docker container), plus `BETTER_AUTH_SECRET` and `APP_ENCRYPTION_KEY` (auth/crypto e2e specs); all three are declared in turbo.json's test env — declare any new env-gated test vars there too.
+- DB integration tests need `TEST_DATABASE_URL` (loopback Postgres with pgvector and a disposable database named `pubrick_*_test`, e.g. `pubrick_parity_test`), plus `BETTER_AUTH_SECRET` and `APP_ENCRYPTION_KEY` (auth/crypto e2e specs); all three are declared in turbo.json's test env — declare any new env-gated test vars there too. The test command checks the disposable URL before running the suite; never point it at a retained database.
 - Proving a guard is pinned (break the line, watch the suite go red): never from ONE run — `node scripts/mutation-check.mjs @pubrick/api --runs 3` reports a verdict only when every run agreed. See `docs/mutation-testing.md`, including what a unanimous verdict does not prove and the isolation rules a new database-backed test has to earn.
 - Dev stack: `./init.sh` (starts postgres via docker, runs migrations, boots web+api+worker)
 
