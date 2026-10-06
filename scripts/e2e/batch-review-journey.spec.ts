@@ -110,7 +110,10 @@ test("mobile batch review requires every saved version and refuses a changed sel
     true,
   );
   await page.screenshot({ path: "/tmp/pubrick-batch-review-mobile.png", fullPage: true });
-  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Close", exact: true })
+    .filter({ hasText: /^Close$/ })
+    .click();
   for (const id of ids) {
     const response = await page.request.get(`/api/content/${id}`);
     expect(response.ok()).toBeTruthy();
