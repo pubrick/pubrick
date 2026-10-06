@@ -191,10 +191,8 @@ test("account, manual approval, verified channel, worker publication and UI tena
   });
   expect((await fixtureState()).calls).toEqual(["getMe", "getChat", "getChatMember"]);
   await page.goto(`${brandPath}/publications`);
-  await page.getByRole("button", { name: "Scheduled", exact: true }).click();
-  await expect(
-    page.getByRole("link", { name: "A queued creative post", exact: true }),
-  ).toBeVisible();
+  await page.getByRole("tab", { name: "Scheduled", exact: true }).click();
+  await expect(page.getByRole("link", { name: /^A queued creative post\s/ })).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/en/content/new");
   await page.getByLabel("Brand", { exact: true }).selectOption({ label: "Browser brand" });
