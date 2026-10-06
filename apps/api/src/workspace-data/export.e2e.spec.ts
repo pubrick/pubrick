@@ -67,9 +67,13 @@ describe.skipIf(!databaseUrl)("workspace data export against PostgreSQL", () => 
     await connection.db.insert(schema.channels).values({
       orgId,
       brandId,
-      platform: "telegram",
+      platform: "wordpress",
       name: "Credential fixture",
       credentialsEncrypted: ciphertext,
+      connectionTarget: "https://journal.example.com/creators/",
+      postingTimezone: "Europe/London",
+      postingSlots: [{ weekday: 1, localTime: "09:30" }],
+      postingRevision: 3,
     });
     await connection.db
       .insert(schema.searchCredentials)
@@ -191,6 +195,19 @@ describe.skipIf(!databaseUrl)("workspace data export against PostgreSQL", () => 
     expect(contents).not.toContain(forbiddenContent);
     expect(contents).not.toContain(secret);
     expect(contents).not.toContain(ciphertext);
+    const channelExport = [...files.entries()].find(
+      ([name]) => name.startsWith("data/channels/") && name.endsWith(".ndjson"),
+    );
+    if (!channelExport) throw new Error("Missing channel export fixture");
+    const exportedChannel = JSON.parse(channelExport[1].trim());
+    expect(exportedChannel).toMatchObject({
+      platform: "wordpress",
+      connectionTarget: "https://journal.example.com/creators/",
+      postingTimezone: "Europe/London",
+      postingSlots: [{ weekday: 1, localTime: "09:30" }],
+      postingRevision: 3,
+    });
+    expect(exportedChannel).not.toHaveProperty("credentialsEncrypted");
     expect(JSON.parse(files.get("manifest.json") ?? "null")).toMatchObject({
       complete: true,
       rowCounts: { contentItems: 1, aiCredentials: 1, channels: 1 },

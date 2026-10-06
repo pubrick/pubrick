@@ -29,6 +29,7 @@ export type LoadedAdaptation = {
   itemTitle: string | null;
   itemBrandId: string;
   channelBrandId: string;
+  connectionTarget: string | null;
   coverMediaId: string | null;
   coverAuthorizedId: string | null;
   videoMediaId?: string | null;
@@ -590,6 +591,7 @@ export class PublishRepository {
         itemTitle: schema.contentItems.title,
         itemBrandId: schema.contentItems.brandId,
         channelBrandId: schema.channels.brandId,
+        connectionTarget: schema.channels.connectionTarget,
         coverMediaId: schema.contentItems.coverMediaId,
         coverAuthorizedId: schema.mediaAssets.id,
         videoMediaId: schema.contentItems.videoMediaId,

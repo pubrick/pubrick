@@ -277,6 +277,7 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   refine_anchor_lost: "refine_anchor_lost",
   channels_not_in_brand: "channels_not_in_brand",
   channel_not_found: "channel_not_found",
+  channel_target_changed: "channel_target_changed",
   unreadable_credentials: "unreadable_credentials",
   run_not_found: "run_not_found",
   run_redacted: "run_redacted",

@@ -181,9 +181,14 @@ describe.skipIf(!url)("channels e2e", () => {
             brandId: brand.body.id,
             platform,
             name: `${platform} channel`,
-            credentials: Object.fromEntries(
-              PLATFORM_FIELDS[platform].map((f) => [f, "credential-value"]),
-            ),
+            credentials:
+              platform === "wordpress"
+                ? {
+                    siteUrl: "https://publisher.example.com/blog",
+                    username: "editor",
+                    applicationPassword: "disposable-password",
+                  }
+                : Object.fromEntries(PLATFORM_FIELDS[platform].map((f) => [f, "credential-value"])),
           })
           .expect(201);
 

@@ -60,6 +60,8 @@ export interface Publisher<C = Record<string, string>> {
   readonly platform: string;
   readonly maxTextLength: number;
   readonly credentialsSchema: z.ZodType<C>;
+  /** Canonical non-secret destination; rotating credentials must preserve it. */
+  credentialTarget?(credentials: C): string;
   publish(credentials: C, input: PublishInput, options?: PublisherOptions): Promise<PublishResult>;
   verify(credentials: C, options?: PublisherOptions): Promise<VerifyResult>;
 }

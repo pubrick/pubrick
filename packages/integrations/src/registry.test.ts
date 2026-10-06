@@ -6,6 +6,7 @@ import { maxPublisher } from "./max.js";
 import { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
 import { telegramPublisher } from "./telegram.js";
 import { vkPublisher } from "./vk.js";
+import { wordpressPublisher } from "./wordpress.js";
 
 describe("getPublisher", () => {
   it("returns the adapter for an implemented platform", () => {
@@ -14,6 +15,7 @@ describe("getPublisher", () => {
     expect(getPublisher("max")).toBe(maxPublisher);
     expect(getPublisher("bluesky")).toBe(blueskyPublisher);
     expect(getPublisher("mastodon")).toBe(mastodonPublisher);
+    expect(getPublisher("wordpress")).toBe(wordpressPublisher);
   });
 
   it("returns undefined for a platform with no adapter yet", () => {

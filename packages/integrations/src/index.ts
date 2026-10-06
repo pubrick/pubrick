@@ -20,3 +20,4 @@ export {
   type VerifyResult,
 } from "./types.js";
 export { readVkPostMetrics, VK_REQUEST_TIMEOUT_MS, vkPublisher } from "./vk.js";
+export { WORDPRESS_REQUEST_TIMEOUT_MS, wordpressPublisher } from "./wordpress.js";

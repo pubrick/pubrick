@@ -960,6 +960,48 @@ describe("a failed channels read is not an empty brand", () => {
  * the schema half asserts the ROUND TRIP — `z.object()` strips unknown keys, so
  * a renamed field would parse happily and silently yield `{}`.
  */
+describe("WordPress saved destination", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+
+  it("shows the persisted destination and retains a refused replacement with a localized recovery", async () => {
+    const target = "https://journal.example.com/creators/";
+    const channel = { id: "c1", platform: "wordpress", name: "Journal", connectionTarget: target };
+    const patches: unknown[] = [];
+    installHandlers([channel], (url, init) => {
+      if (url.endsWith("/api/channels/c1") && init?.method === "PATCH") {
+        patches.push(JSON.parse(String(init.body)));
+        return jsonResponse(
+          409,
+          refusalBody(409, "channel_target_changed", "Internal destination refusal"),
+        );
+      }
+      return undefined;
+    });
+    await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />, { locale: "ru" });
+    expect(
+      await screen.findByText(ru.Channels.connectedTarget.replace("{target}", target)),
+    ).toBeVisible();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: ru.Channels.edit }));
+    const dialog = within(screen.getByRole("dialog", { name: ru.Channels.editTitle }));
+    expect(dialog.getByText(ru.Channels.wordpressHint)).toBeVisible();
+    const replacement = {
+      siteUrl: "https://different.example.com/creators/",
+      username: "editor",
+      applicationPassword: "synthetic-application-password",
+    };
+    for (const [field, value] of Object.entries(replacement)) {
+      await user.type(dialog.getByLabelText(credentialFieldLabel(field)), value);
+    }
+    await user.click(dialog.getByRole("button", { name: ru.Channels.editSave }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent(ru.Errors.channel_target_changed);
+    expect(patches).toEqual([{ name: "Journal", credentials: replacement }]);
+    expect(channelUpdateSchema.parse(patches[0])).toEqual(patches[0]);
+    expect(dialog.getByLabelText(credentialFieldLabel("siteUrl"))).toHaveValue(replacement.siteUrl);
+    expect(screen.getByText(ru.Channels.connectedTarget.replace("{target}", target))).toBeVisible();
+  });
+});
+
 describe("BrandPage edit() — rotating credentials", () => {
   const channel = { id: "c1", platform: "telegram", name: "My channel" };
 

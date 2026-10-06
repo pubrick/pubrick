@@ -657,7 +657,9 @@
     "mastodonTokenHint": "Introduce el origen HTTPS público de tu servidor Mastodon y un token con permiso write:statuses. Las publicaciones son públicas por defecto; las portadas aún no se admiten.",
     "manualHint": "{platform} es un canal manual. Aprueba una publicación, copia el texto revisado en {platform} y registra aquí su URL pública. No hace falta un token.",
     "manualMeta": "Publicación manual — sin prueba de conexión",
-    "removeManualBody": "Al eliminar {channel}, se quitan de Pubrick sus publicaciones manuales pendientes. Las publicaciones ya hechas en la plataforma permanecen allí."
+    "removeManualBody": "Al eliminar {channel}, se quitan de Pubrick sus publicaciones manuales pendientes. Las publicaciones ya hechas en la plataforma permanecen allí.",
+    "wordpressHint": "Usa la URL HTTPS pública de WordPress, incluido el subdirectorio de instalación, tu nombre de usuario y una contraseña de aplicación de tu perfil de WordPress. La cuenta necesita permiso para publicar entradas. Pubrick publica el título y el texto guardados; este conector aún no admite imágenes ni vídeo.",
+    "connectedTarget": "Destino: {target}"
   },
   "Content": {
     "title": "Cola",
@@ -1895,7 +1897,8 @@
     "posting_slot_occupied": "Otro envío ocupa esta hora. Actualiza la vista previa o elige otra hora.",
     "posting_schedule_missing": "Configura horas semanales para todos los canales antes de añadir el contenido a la cola.",
     "posting_queue_full": "No hay horas libres en los próximos 90 días. Añade más horarios o mueve publicaciones.",
-    "posting_queue_not_ready": "Solo se admite contenido sin enviar para canales automáticos. Revisa los envíos actuales primero."
+    "posting_queue_not_ready": "Solo se admite contenido sin enviar para canales automáticos. Revisa los envíos actuales primero.",
+    "channel_target_changed": "Esta conexión tiene otro destino. Añade un canal nuevo para usar un destino diferente."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",

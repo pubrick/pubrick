@@ -41,6 +41,36 @@ beforeEach(() => {
 });
 
 describe("WordPress connection verification", () => {
+  it.each([
+    [
+      "trailing slash",
+      `https://writer.pubrick.org/${"a".repeat(2048 - "https://writer.pubrick.org/".length)}`,
+    ],
+    ["URL encoding", `https://writer.pubrick.org/${"あ".repeat(500)}`],
+  ])(
+    "refuses an oversized canonical destination caused by %s before any request",
+    async (_, siteUrl) => {
+      expect(siteUrl.length).toBeLessThanOrEqual(2048);
+      const input = { ...credentials, siteUrl };
+      await expect(wordpressPublisher.verify(input)).resolves.toMatchObject({ ok: false });
+      await expect(
+        wordpressPublisher.publish(input, { text: "Reviewed text" }),
+      ).rejects.toBeInstanceOf(PermanentPublishError);
+      expect(mockGuardedFetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts a canonical destination exactly at the persisted target bound", async () => {
+    const prefix = "https://writer.pubrick.org/";
+    const siteUrl = `${prefix}${"a".repeat(2048 - prefix.length - 1)}/`;
+    expect(siteUrl).toHaveLength(2048);
+    mockGuardedFetch.mockResolvedValue(answer(account));
+    await expect(wordpressPublisher.verify({ ...credentials, siteUrl })).resolves.toMatchObject({
+      ok: true,
+      target: siteUrl,
+    });
+  });
+
   it("checks publish_posts on the current user through the connected subdirectory without creating a post", async () => {
     mockGuardedFetch.mockResolvedValue(answer(account));
     await expect(wordpressPublisher.verify(credentials)).resolves.toEqual({

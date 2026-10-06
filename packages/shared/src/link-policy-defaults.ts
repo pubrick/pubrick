@@ -17,4 +17,5 @@ export const DEFAULT_UTM: Record<PlatformId, { source: string; medium: string }>
   bluesky: { source: "bluesky", medium: "post" },
   mastodon: { source: "mastodon", medium: "post" },
   x: { source: "x", medium: "post" },
+  wordpress: { source: "wordpress", medium: "article" },
 };

@@ -82,6 +82,8 @@ function siteRoot(credentials: WordPressCredentials, options?: PublisherOptions)
     );
   }
   if (!url.pathname.endsWith("/")) url.pathname += "/";
+  if (url.href.length > 2048)
+    throw new PermanentPublishError("WordPress canonical site URL must be at most 2048 characters");
   if (options?.baseUrl) {
     let override: URL;
     try {
@@ -272,6 +274,9 @@ export const wordpressPublisher: Publisher<WordPressCredentials> = {
   // Pubrick's current text-product bound, not a claim about WordPress's database capacity.
   maxTextLength: MAX_BODY_LENGTH,
   credentialsSchema,
+  credentialTarget(credentials) {
+    return siteRoot(checkedCredentials(credentials)).href;
+  },
 
   async verify(rawCredentials, options): Promise<VerifyResult> {
     try {

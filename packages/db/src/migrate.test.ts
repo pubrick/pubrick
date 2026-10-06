@@ -538,6 +538,11 @@ const NON_ENUM_CHECKS = [
   // A cached verdict must identify when the platform was checked. A null
   // verdict may still carry the time of an inconclusive attempt for backoff.
   "channels_health_result_pair_check",
+  // 0131's immutable native destination remains nullable for legacy channels.
+  // The dedicated upgrade test below proves both target checks against a
+  // populated valid channel; the historical enum loop has no target scalar.
+  "channels_connection_target_check",
+  "channels_wordpress_target_check",
   // 0015's: non-null exactly when `scope = 'fragment'`. Not an enum pin at all
   // — it pins a value into a RELATIONSHIP with another column, so there is no
   // single `bogus` scalar the loop could try. Proved directly by "adds the
@@ -5068,6 +5073,92 @@ describe.skipIf(!url)("runMigrations", () => {
             proposed_title: null,
           },
         ]);
+      } finally {
+        await upgraded.end();
+      }
+    } finally {
+      await fs.rm(before, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("0131 preserves legacy channels and requires bounded WordPress destinations", async () => {
+    const fresh = await withFreshDatabase(url as string);
+    const before = await migrationsFolderBefore("0131_native_channel_targets");
+    try {
+      const old = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      let channelId: string;
+      let manualId: string;
+      try {
+        await migrate(drizzle(old), { migrationsFolder: before });
+        await old.query(
+          "INSERT INTO organization (id, name, slug) VALUES ('native_target_upgrade', 'Native targets', 'native-target-upgrade')",
+        );
+        const brand = await old.query<{ id: string }>(
+          "INSERT INTO brands (org_id, name) VALUES ('native_target_upgrade', 'Journal') RETURNING id",
+        );
+        const native = await old.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name, credentials_encrypted) VALUES ('native_target_upgrade', $1, 'telegram', 'Announcements', 'existing-ciphertext') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        const manual = await old.query<{ id: string }>(
+          "INSERT INTO channels (org_id, brand_id, platform, name) VALUES ('native_target_upgrade', $1, 'instagram', 'Manual handoff') RETURNING id",
+          [brand.rows[0]?.id],
+        );
+        channelId = native.rows[0]?.id as string;
+        manualId = manual.rows[0]?.id as string;
+      } finally {
+        await old.end();
+      }
+      await runMigrations(fresh.url);
+      const upgraded = new pg.Pool({ connectionString: fresh.url, max: 1 });
+      try {
+        const preserved = await upgraded.query(
+          "SELECT platform, credentials_encrypted, connection_target FROM channels WHERE id = $1",
+          [channelId],
+        );
+        expect(preserved.rows).toEqual([
+          {
+            platform: "telegram",
+            credentials_encrypted: "existing-ciphertext",
+            connection_target: null,
+          },
+        ]);
+        expect(
+          (
+            await upgraded.query(
+              "SELECT platform, credentials_encrypted, connection_target FROM channels WHERE id = $1",
+              [manualId],
+            )
+          ).rows,
+        ).toEqual([
+          { platform: "instagram", credentials_encrypted: null, connection_target: null },
+        ]);
+        expect(
+          await refusal(upgraded, "UPDATE channels SET platform = 'wordpress' WHERE id = $1", [
+            channelId,
+          ]),
+        ).toBe(CHECK_VIOLATION);
+        for (const target of ["", "a".repeat(2049)]) {
+          expect(
+            await refusal(upgraded, "UPDATE channels SET connection_target = $1 WHERE id = $2", [
+              target,
+              channelId,
+            ]),
+          ).toBe(CHECK_VIOLATION);
+        }
+        await upgraded.query(
+          "UPDATE channels SET platform = 'wordpress', connection_target = $1 WHERE id = $2",
+          ["a".repeat(2048), channelId],
+        );
+        expect(
+          (
+            await upgraded.query(
+              "SELECT platform, length(connection_target) AS length FROM channels WHERE id = $1",
+              [channelId],
+            )
+          ).rows,
+        ).toEqual([{ platform: "wordpress", length: 2048 }]);
       } finally {
         await upgraded.end();
       }

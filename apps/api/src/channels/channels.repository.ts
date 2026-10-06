@@ -29,6 +29,7 @@ const PUBLIC_COLUMNS = {
   brandId: schema.channels.brandId,
   platform: schema.channels.platform,
   name: schema.channels.name,
+  connectionTarget: schema.channels.connectionTarget,
   metricsAutoRefresh: schema.channels.metricsAutoRefresh,
   createdAt: schema.channels.createdAt,
   /**
@@ -53,6 +54,32 @@ const PUBLIC_COLUMNS = {
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function credentialTarget(platform: string, credentials: Record<string, string>): string | null {
+  const publisher = getPublisher(platform);
+  if (!publisher?.credentialTarget) return null;
+  const parsed = publisher.credentialsSchema.safeParse(credentials);
+  if (!parsed.success) throw new BadRequestException("Required connection fields are invalid");
+  try {
+    return publisher.credentialTarget(parsed.data);
+  } catch {
+    throw new BadRequestException("The connection destination is invalid");
+  }
+}
+
+function openCredentialSnapshot(stored: string | null): Record<string, string> {
+  if (stored === null)
+    throw conflict(
+      "unreadable_credentials",
+      "This channel has no automatic publishing credentials",
+    );
+  try {
+    return decryptJson(stored, env.APP_ENCRYPTION_KEY);
+  } catch (error) {
+    if (!isUnreadableCiphertext(error)) throw error;
+    throw conflict("unreadable_credentials", UNREADABLE_CREDENTIALS_MESSAGE);
+  }
+}
 
 @Injectable()
 export class ChannelsRepository {
@@ -122,11 +149,13 @@ export class ChannelsRepository {
       );
     }
     let credentialsEncrypted: string | null = null;
+    let connectionTarget: string | null = null;
     if (!isManualPlatform(data.platform)) {
       if (!data.credentials) {
         throw new BadRequestException("Automatic channels require credentials");
       }
       credentialsEncrypted = encryptJson(data.credentials, env.APP_ENCRYPTION_KEY);
+      connectionTarget = credentialTarget(data.platform, data.credentials);
     }
     return withQuotaErrors(() =>
       withTenantResourceAdmission(
@@ -149,6 +178,7 @@ export class ChannelsRepository {
               platform: data.platform,
               name: data.name,
               credentialsEncrypted,
+              connectionTarget,
             })
             .returning(PUBLIC_COLUMNS);
           return rows[0];
@@ -188,39 +218,50 @@ export class ChannelsRepository {
    * and `updated_at` always moves.
    */
   async update(orgId: string, id: string, data: ChannelUpdate) {
-    if (data.credentials !== undefined || data.metricsAutoRefresh === true) {
-      const channel = await db
-        .select({ platform: schema.channels.platform })
+    return db.transaction(async (tx) => {
+      // No adaptation write follows: NO KEY UPDATE stays compatible with
+      // publication FK checks while serializing credential rotations.
+      const [channel] = await tx
+        .select({
+          platform: schema.channels.platform,
+          connectionTarget: schema.channels.connectionTarget,
+        })
         .from(schema.channels)
         .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
-        .limit(1);
-      if (channel[0] && isManualPlatform(channel[0].platform)) {
-        if (data.credentials !== undefined)
-          throw new BadRequestException("Manual channels do not use credentials");
-      }
-      if (channel[0] && data.metricsAutoRefresh === true && channel[0].platform !== "vk") {
+        .for("no key update");
+      if (!channel) throw notFound("channel_not_found", "Channel not found");
+      if (data.credentials !== undefined && isManualPlatform(channel.platform))
+        throw new BadRequestException("Manual channels do not use credentials");
+      if (data.metricsAutoRefresh === true && channel.platform !== "vk")
         throw new BadRequestException("Automatic metric checks are only available for VK channels");
+      if (data.credentials !== undefined) {
+        const nextTarget = credentialTarget(channel.platform, data.credentials);
+        if (nextTarget !== null && nextTarget !== channel.connectionTarget)
+          throw conflict(
+            "channel_target_changed",
+            "A different destination needs a new channel; credential rotation preserves this target",
+          );
       }
-    }
-    const rows = await db
-      .update(schema.channels)
-      .set({
-        ...(data.name === undefined ? {} : { name: data.name }),
-        ...(data.metricsAutoRefresh === undefined
-          ? {}
-          : { metricsAutoRefresh: data.metricsAutoRefresh }),
-        ...(data.credentials === undefined
-          ? {}
-          : {
-              credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY),
-              healthOk: null,
-              healthCheckedAt: null,
-            }),
-      })
-      .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
-      .returning(PUBLIC_COLUMNS);
-    if (rows.length === 0) throw notFound("channel_not_found", "Channel not found");
-    return rows[0];
+      const [updated] = await tx
+        .update(schema.channels)
+        .set({
+          ...(data.name === undefined ? {} : { name: data.name }),
+          ...(data.metricsAutoRefresh === undefined
+            ? {}
+            : { metricsAutoRefresh: data.metricsAutoRefresh }),
+          ...(data.credentials === undefined
+            ? {}
+            : {
+                credentialsEncrypted: encryptJson(data.credentials, env.APP_ENCRYPTION_KEY),
+                healthOk: null,
+                healthCheckedAt: null,
+              }),
+        })
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
+        .returning(PUBLIC_COLUMNS);
+      if (!updated) throw notFound("channel_not_found", "Channel not found");
+      return updated;
+    });
   }
 
   /**
@@ -363,26 +404,10 @@ export class ChannelsRepository {
       .limit(1);
     const row = rows[0];
     if (!row) throw notFound("channel_not_found", "Channel not found");
-    if (row.credentialsEncrypted === null) {
-      throw conflict(
-        "unreadable_credentials",
-        "This channel has no automatic publishing credentials",
-      );
-    }
+    const credentials = openCredentialSnapshot(row.credentialsEncrypted);
 
-    let credentials: Record<string, string>;
-    try {
-      credentials = decryptJson(row.credentialsEncrypted, env.APP_ENCRYPTION_KEY);
-    } catch (error) {
-      if (!isUnreadableCiphertext(error)) throw error;
-      // The org owns this row and may be told the truth about it. The sentence
-      // is `@pubrick/shared`'s, so the api's body, the worker's `last_error`
-      // and the generate pipeline's run failure are one answer rather than
-      // three; the CODE is what the web renders in four languages.
-      throw conflict("unreadable_credentials", UNREADABLE_CREDENTIALS_MESSAGE);
-    }
-
-    await this.rewrapIfStale(orgId, id, row.credentialsEncrypted);
+    // openCredentialSnapshot throws for a missing ciphertext.
+    await this.rewrapIfStale(orgId, id, row.credentialsEncrypted as string);
     return credentials;
   }
 
@@ -430,11 +455,11 @@ export class ChannelsRepository {
    * rolling deploy into a channel whose posts failed permanently until the
    * worker caught up. Rows change shape only once a rotation has begun.
    */
-  private async rewrapIfStale(orgId: string, id: string, stored: string): Promise<void> {
+  private async rewrapIfStale(orgId: string, id: string, stored: string): Promise<string> {
     try {
       const rewrapped = rewrapJson(stored, env.APP_ENCRYPTION_KEY);
-      if (rewrapped === null) return;
-      await db
+      if (rewrapped === null) return stored;
+      const rows = await db
         .update(schema.channels)
         .set({ credentialsEncrypted: rewrapped, updatedAt: sql`updated_at` })
         .where(
@@ -443,13 +468,15 @@ export class ChannelsRepository {
             eq(schema.channels.id, id),
             eq(schema.channels.credentialsEncrypted, stored),
           ),
-        );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+        )
+        .returning({ ciphertext: schema.channels.credentialsEncrypted });
+      return rows[0]?.ciphertext ?? stored;
+    } catch {
       this.logger.warn(
         `Could not move channel ${id} onto the active encryption key; it stays readable on an ` +
-          `older one. orgId=${orgId} error=${message}`,
+          `older one. orgId=${orgId}`,
       );
+      return stored;
     }
   }
 
@@ -489,7 +516,7 @@ export class ChannelsRepository {
    * can ever be. A blob that will not decrypt is not that: no publisher is
    * consulted, nothing is asked of Telegram, and the answer is the same
    * whatever the platform would have said. It leaves as a coded 409 through
-   * `getDecryptedCredentials`, which is the shape the web can render in four
+   * `openCredentialSnapshot`, which is the shape the web can render in four
    * languages.
    */
   async verify(orgId: string, id: string): Promise<VerifyResult> {
@@ -497,6 +524,7 @@ export class ChannelsRepository {
       .select({
         platform: schema.channels.platform,
         credentialsEncrypted: schema.channels.credentialsEncrypted,
+        connectionTarget: schema.channels.connectionTarget,
       })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
@@ -517,11 +545,29 @@ export class ChannelsRepository {
       return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
     }
 
-    const credentials = await this.getDecryptedCredentials(orgId, id);
+    // Verify one captured credential generation, not a second unrelated read.
+    const credentials = openCredentialSnapshot(channel.credentialsEncrypted);
+    const checkedCiphertext = await this.rewrapIfStale(
+      orgId,
+      id,
+      channel.credentialsEncrypted as string,
+    );
     const parsed = publisher.credentialsSchema.safeParse(credentials);
     if (!parsed.success) {
-      await this.saveHealth(orgId, id, channel.credentialsEncrypted, false);
+      await this.saveHealth(orgId, id, checkedCiphertext, false);
       return { ok: false, reason: "Stored credentials are missing required fields" };
+    }
+    if (publisher.credentialTarget) {
+      let target: string | null = null;
+      try {
+        target = publisher.credentialTarget(parsed.data);
+      } catch {
+        // A malformed destination must not reach the provider.
+      }
+      if (!target || target !== channel.connectionTarget) {
+        await this.saveHealth(orgId, id, checkedCiphertext, false);
+        return { ok: false, reason: "Stored credentials do not match this channel's destination" };
+      }
     }
 
     // Defense in depth: a failed connection test is a result, never a 5xx.
@@ -547,7 +593,7 @@ export class ChannelsRepository {
     await this.saveHealth(
       orgId,
       id,
-      channel.credentialsEncrypted,
+      checkedCiphertext,
       result.ok ? true : result.indeterminate ? null : false,
     );
     // The endpoint's existing contract remains {ok, reason}; the extra bit is

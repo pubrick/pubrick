@@ -23,6 +23,7 @@ const PLATFORM_NAMES: Record<string, string> = {
   bluesky: "Bluesky",
   mastodon: "Mastodon",
   x: "X",
+  wordpress: "WordPress",
 };
 
 export function platformName(id: string): string {

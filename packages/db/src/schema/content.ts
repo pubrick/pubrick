@@ -66,6 +66,8 @@ export const channels = pgTable(
     postingRevision: integer("posting_revision").default(0).notNull(),
     // AES-256-GCM blob produced by @pubrick/shared encryptJson; never exposed via API.
     credentialsEncrypted: text("credentials_encrypted"),
+    /** Non-secret immutable destination for adapters with a canonical target. */
+    connectionTarget: text("connection_target"),
     /** Last real platform verification, invalidated when credentials change. */
     healthOk: boolean("health_ok"),
     healthCheckedAt: timestamp("health_checked_at", { withTimezone: true }),
@@ -78,6 +80,14 @@ export const channels = pgTable(
   (t) => [
     index("channels_org_id_idx").on(t.orgId),
     index("channels_brand_id_idx").on(t.brandId),
+    check(
+      "channels_connection_target_check",
+      sql`${t.connectionTarget} is null or length(${t.connectionTarget}) between 1 and 2048`,
+    ),
+    check(
+      "channels_wordpress_target_check",
+      sql`${t.platform} <> 'wordpress' or ${t.connectionTarget} is not null`,
+    ),
     check("channels_posting_revision_check", sql`${t.postingRevision} >= 0`),
     check(
       "channels_posting_slots_check",

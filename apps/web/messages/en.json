@@ -657,7 +657,9 @@
     "mastodonTokenHint": "Enter the public HTTPS origin of your Mastodon server and an access token with write:statuses permission. Posts are public by default; covers are not supported yet.",
     "manualHint": "{platform} is a manual channel. Approve a post, copy the reviewed text into {platform}, then record its public URL here. No token is needed.",
     "manualMeta": "Manual publishing — no connection test",
-    "removeManualBody": "Removing {channel} removes its pending manual posts from Pubrick. Posts already published on the platform remain there."
+    "removeManualBody": "Removing {channel} removes its pending manual posts from Pubrick. Posts already published on the platform remain there.",
+    "wordpressHint": "Use a public HTTPS WordPress site URL, including its installation subdirectory, your username and an application password from your WordPress profile. The account needs permission to publish posts. Pubrick publishes the saved title and text; images and video are not supported by this connector yet.",
+    "connectedTarget": "Destination: {target}"
   },
   "Content": {
     "title": "Queue",
@@ -1895,7 +1897,8 @@
     "posting_slot_occupied": "Another delivery occupies this time. Refresh the queue preview or choose a different time.",
     "posting_schedule_missing": "Configure weekly posting times for every channel before adding this post to the queue.",
     "posting_queue_full": "No free posting time in the next 90 days. Add more weekly times or move scheduled posts.",
-    "posting_queue_not_ready": "Only unsent native-channel posts can enter this queue. Inspect the current deliveries first."
+    "posting_queue_not_ready": "Only unsent native-channel posts can enter this queue. Inspect the current deliveries first.",
+    "channel_target_changed": "This connection has a different destination. Add a new channel to use another destination."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",

@@ -282,6 +282,33 @@ describe.skipIf(!url)("credential decryption e2e", () => {
       expect(decryptJson(after, ACTIVE_KEY)).toEqual(CREDENTIALS);
     });
 
+    it("caches the real connection verdict after rewrapping a legacy blob from a demoted key", async () => {
+      const { agent, orgId } = await orgAgent();
+      const legacy = legacyBlob(CREDENTIALS, DEMOTED_KEY);
+      const channel = await channelHolding(agent, legacy);
+      const verified = await agent.post(`/api/channels/${channel.id}/test`).send({}).expect(200);
+      expect(verified.body).toEqual({ ok: true, account: "@my_bot", target: "My Channel" });
+      const [stored] = await direct.db
+        .select({
+          ciphertext: schema.channels.credentialsEncrypted,
+          healthOk: schema.channels.healthOk,
+          checkedAt: schema.channels.healthCheckedAt,
+          updatedAt: schema.channels.updatedAt,
+        })
+        .from(schema.channels)
+        .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, channel.id)));
+      expect(stored?.ciphertext).not.toBe(legacy);
+      expect(stored?.ciphertext).toMatch(/^p1\./);
+      expect(decryptJson(stored?.ciphertext as string, ACTIVE_KEY)).toEqual(CREDENTIALS);
+      expect(stored?.healthOk).toBe(true);
+      expect(stored?.checkedAt).toBeInstanceOf(Date);
+      expect(stored?.updatedAt).toEqual(channel.updatedAt);
+      const list = await agent.get("/api/channels").expect(200);
+      const listed = list.body.find((row: { id: string }) => row.id === channel.id);
+      expect(listed?.health).toEqual({ state: "ok", checkedAt: stored?.checkedAt?.toISOString() });
+      expect(JSON.stringify(listed)).not.toContain(CREDENTIALS.botToken);
+    });
+
     it("does not rewrite a row that is already on the active key", async () => {
       const { agent } = await orgAgent();
       const brand = await agent.post("/api/brands").send({ name: "B" }).expect(201);

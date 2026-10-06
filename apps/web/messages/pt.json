@@ -657,7 +657,9 @@
     "mastodonTokenHint": "Informe a origem HTTPS pública do seu servidor Mastodon e um token com permissão write:statuses. As publicações são públicas por padrão; capas ainda não são aceitas.",
     "manualHint": "{platform} é um canal manual. Aprove a publicação, copie o texto revisto para {platform} e registe aqui o URL público. Não é necessário token.",
     "manualMeta": "Publicação manual — sem teste de ligação",
-    "removeManualBody": "Remover {channel} elimina do Pubrick as publicações manuais pendentes. As publicações já feitas na plataforma permanecem lá."
+    "removeManualBody": "Remover {channel} elimina do Pubrick as publicações manuais pendentes. As publicações já feitas na plataforma permanecem lá.",
+    "wordpressHint": "Use a URL HTTPS pública do WordPress, incluindo o subdiretório de instalação, seu nome de usuário e uma senha de aplicativo do perfil do WordPress. A conta precisa de permissão para publicar posts. Pubrick publica o título e o texto salvos; este conector ainda não aceita imagens nem vídeos.",
+    "connectedTarget": "Destino: {target}"
   },
   "Content": {
     "title": "Fila",
@@ -1895,7 +1897,8 @@
     "posting_slot_occupied": "Outro envio ocupa este horário. Atualize a prévia ou escolha outro horário.",
     "posting_schedule_missing": "Configure horários semanais para todos os canais antes de adicionar o conteúdo à fila.",
     "posting_queue_full": "Nenhum horário livre nos próximos 90 dias. Adicione horários ou mova publicações agendadas.",
-    "posting_queue_not_ready": "Esta fila aceita apenas conteúdo não enviado para canais automáticos. Revise os envios atuais primeiro."
+    "posting_queue_not_ready": "Esta fila aceita apenas conteúdo não enviado para canais automáticos. Revise os envios atuais primeiro.",
+    "channel_target_changed": "Esta conexão tem outro destino. Adicione um novo canal para usar um destino diferente."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",

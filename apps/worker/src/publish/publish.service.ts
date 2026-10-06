@@ -493,6 +493,22 @@ export class PublishService {
           "credentials_invalid",
         );
       }
+      if (publisher.credentialTarget) {
+        let target: string;
+        try {
+          target = publisher.credentialTarget(parsed.data);
+        } catch {
+          throw new ClassifiedPermanentError(
+            "The connection destination is invalid",
+            "credentials_invalid",
+          );
+        }
+        if (!adaptation.connectionTarget || target !== adaptation.connectionTarget)
+          throw new ClassifiedPermanentError(
+            "Stored credentials no longer match this channel's destination",
+            "credentials_invalid",
+          );
+      }
       const baseUrl =
         adaptation.platform === "vk"
           ? env.VK_API_BASE_URL

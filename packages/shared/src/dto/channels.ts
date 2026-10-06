@@ -14,6 +14,7 @@ export const PLATFORM_IDS = [
   "bluesky",
   "mastodon",
   "x",
+  "wordpress",
 ] as const;
 
 /**
@@ -50,7 +51,14 @@ export type PlatformId = (typeof PLATFORM_IDS)[number];
  * the adapters that actually exist. This constant is what lets the picker say
  * the same thing before the request is made.
  */
-export const PUBLISHABLE_PLATFORM_IDS = ["telegram", "vk", "max", "bluesky", "mastodon"] as const;
+export const PUBLISHABLE_PLATFORM_IDS = [
+  "telegram",
+  "vk",
+  "max",
+  "bluesky",
+  "mastodon",
+  "wordpress",
+] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
 /** Channels that prepare a post for a person to publish outside Pubrick. */
@@ -97,10 +105,18 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   bluesky: ["handle", "appPassword"],
   mastodon: ["instanceUrl", "accessToken"],
   x: ["apiKey", "apiSecret", "accessToken", "accessSecret"],
+  wordpress: ["siteUrl", "username", "applicationPassword"],
 };
 
 /** Fields that are not secrets — everything else renders as type="password". */
-export const NON_SECRET_FIELDS = new Set(["chatId", "groupId", "handle", "instanceUrl"]);
+export const NON_SECRET_FIELDS = new Set([
+  "chatId",
+  "groupId",
+  "handle",
+  "instanceUrl",
+  "siteUrl",
+  "username",
+]);
 
 /** A channel's display name, bounded identically wherever it is written. */
 const channelName = z.string().min(1).max(200);

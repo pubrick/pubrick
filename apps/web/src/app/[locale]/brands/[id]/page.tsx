@@ -44,6 +44,7 @@ type Channel = {
   metricsAutoRefresh?: boolean;
   scheduledCount?: number;
   health?: { state: "ok" | "failed" | "unknown"; checkedAt: string | null };
+  connectionTarget?: string | null;
 };
 /**
  * Voice, audience and language shape generation. Description is used for
@@ -832,6 +833,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                       >
                         {t(`health.${health}`)}
                       </StatusBadge>
+                      {c.connectionTarget && (
+                        <span className="break-all">
+                          {t("connectedTarget", { target: c.connectionTarget })}
+                        </span>
+                      )}
                       {result === "loading" ? (
                         "…"
                       ) : result && !result.ok ? (
@@ -974,6 +980,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             {platform === "mastodon" && (
               <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
             )}
+            {platform === "wordpress" && (
+              <p className="text-sm text-fg-secondary">{t("wordpressHint")}</p>
+            )}
             {isManualPlatform(platform) && (
               <p className="text-sm text-fg-secondary">
                 {t("manualHint", { platform: platformName(platform) })}
@@ -1094,6 +1103,9 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           )}
           {editing?.platform === "mastodon" && (
             <p className="text-sm text-fg-secondary">{t("mastodonTokenHint")}</p>
+          )}
+          {editing?.platform === "wordpress" && (
+            <p className="text-sm text-fg-secondary">{t("wordpressHint")}</p>
           )}
           {(editing === null ? [] : (PLATFORM_FIELDS[editing.platform as PlatformId] ?? [])).map(
             (f) => (

@@ -1,0 +1,7 @@
+ALTER TABLE "editorial_placeholders" DROP CONSTRAINT "editorial_placeholders_platform_check";--> statement-breakpoint
+ALTER TABLE "channels" DROP CONSTRAINT "channels_platform_check";--> statement-breakpoint
+ALTER TABLE "channels" ADD COLUMN "connection_target" text;--> statement-breakpoint
+ALTER TABLE "editorial_placeholders" ADD CONSTRAINT "editorial_placeholders_platform_check" CHECK ("editorial_placeholders"."platform" in ('telegram', 'vk', 'dzen', 'vc_ru', 'instagram', 'youtube', 'rutube', 'tenchat', 't_j', 'max', 'bluesky', 'mastodon', 'x', 'wordpress'));--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_connection_target_check" CHECK ("channels"."connection_target" is null or length("channels"."connection_target") between 1 and 2048);--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_wordpress_target_check" CHECK ("channels"."platform" <> 'wordpress' or "channels"."connection_target" is not null);--> statement-breakpoint
+ALTER TABLE "channels" ADD CONSTRAINT "channels_platform_check" CHECK ("channels"."platform" in ('telegram', 'vk', 'dzen', 'vc_ru', 'instagram', 'youtube', 'rutube', 'tenchat', 't_j', 'max', 'bluesky', 'mastodon', 'x', 'wordpress'));

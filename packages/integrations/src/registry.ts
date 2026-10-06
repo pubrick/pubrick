@@ -5,6 +5,7 @@ import { maxPublisher } from "./max.js";
 import { telegramPublisher } from "./telegram.js";
 import type { Publisher } from "./types.js";
 import { vkPublisher } from "./vk.js";
+import { wordpressPublisher } from "./wordpress.js";
 
 /**
  * Every platform Pubrick can deliver a post to — one entry per implemented
@@ -31,6 +32,7 @@ const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   max: maxPublisher as unknown as Publisher<never>,
   bluesky: blueskyPublisher as unknown as Publisher<never>,
   mastodon: mastodonPublisher as unknown as Publisher<never>,
+  wordpress: wordpressPublisher as unknown as Publisher<never>,
 };
 
 /**
