@@ -1050,7 +1050,16 @@
     "versionExternal": "Texto importado",
     "saveBeforePublishing": "Salve as alterações antes de publicar ou agendar. A versão salva será enviada.",
     "saveReviewChanges": "Salvar alterações",
-    "reloadSavedContent": "Recarregar conteúdo salvo"
+    "reloadSavedContent": "Recarregar conteúdo salvo",
+    "acceptedRecordWarning": "{channel} aceitou um registro, mas a publicação não foi confirmada. Ele pode estar pendente ou privado. Verifique o registro no provedor antes de decidir.",
+    "acceptedRecordInspect": "Verificar registro no provedor",
+    "acceptedRecordId": "ID do registro aceito: {id}",
+    "acceptedRecordRecoveryHint": "Confirme a entrega somente após verificar a publicação pública. Antes de enviar novamente, remova o registro mantido pelo provedor.",
+    "acceptedRecordRemoved": "Confirmar remoção",
+    "acceptedRecordRemovalTitle": "O registro do provedor foi removido?",
+    "acceptedRecordRemovalBody": "O provedor ainda mantém um registro pendente, rascunho ou privado. Confirme somente após removê-lo lá. Isso registra sua decisão e permite um envio futuro; Pubrick não remove nem envia nada agora.",
+    "acceptedRecordConfirmRemoved": "Removi o registro",
+    "reloadDeliveryRecord": "Recarregar"
   },
   "Prompts": {
     "title": "Orientações de geração",
@@ -1898,7 +1907,9 @@
     "posting_schedule_missing": "Configure horários semanais para todos os canais antes de adicionar o conteúdo à fila.",
     "posting_queue_full": "Nenhum horário livre nos próximos 90 dias. Adicione horários ou mova publicações agendadas.",
     "posting_queue_not_ready": "Esta fila aceita apenas conteúdo não enviado para canais automáticos. Revise os envios atuais primeiro.",
-    "channel_target_changed": "Esta conexão tem outro destino. Adicione um novo canal para usar um destino diferente."
+    "channel_target_changed": "Esta conexão tem outro destino. Adicione um novo canal para usar um destino diferente.",
+    "delivery_receipt_changed": "O registro de entrega mudou ou não pôde ser identificado. Recarregue e verifique a tentativa atual antes de decidir.",
+    "accepted_record_removal_required": "Verifique o registro aceito no provedor e confirme sua remoção antes de enviar novamente."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -2759,7 +2770,10 @@
       "retries_exhausted": "As tentativas de entrega se esgotaram.",
       "send_abandoned": "A entrega parou antes de alcançar a plataforma.",
       "outcome_unknown": "O resultado da entrega é desconhecido."
-    }
+    },
+    "archiveNotDeliveredAt": "Uma pessoa marcou como não entregue em {date}.",
+    "archiveInspectRecord": "Verificar registro no provedor",
+    "archiveRecordId": "ID do registro do provedor: {id}"
   },
   "BillingCard": {
     "title": "Assinatura",

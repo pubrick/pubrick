@@ -180,6 +180,7 @@ describe("publication operations inbox", () => {
                 channelName: "Old feed",
                 channelPlatform: "telegram",
                 status: second ? "in_flight" : "published",
+                externalId: null,
                 externalUrl: second ? "javascript:alert(1)" : "https://t.me/old/1",
                 assertedAt: null,
                 createdAt: at,
@@ -208,5 +209,53 @@ describe("publication operations inbox", () => {
     expect(screen.queryByRole("link", { name: "javascript:alert(1)" })).not.toBeInTheDocument();
     expect(requests.some((url) => url.includes("/publications/archive?cursor=next"))).toBe(true);
     expect(screen.queryByRole("link", { name: /Old feed/ })).not.toBeInTheDocument();
+  });
+
+  it("labels archived accepted records as inspection links and distinguishes negative human verdicts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input) => {
+        const url = String(input);
+        if (url.endsWith(`/api/brands/${brandId}`)) return response({ name: "Acme" });
+        if (url.includes("/publications/archive"))
+          return response({
+            rows: [
+              {
+                id: adaptationId,
+                channelName: "Old feed",
+                channelPlatform: "telegram",
+                status: "unknown",
+                externalId: "71",
+                externalUrl: "https://example.com/posts/71",
+                assertedAt: null,
+                createdAt: at,
+              },
+              {
+                id: "774e2932-6f07-4a6b-a0da-dbc6d63d3ca1",
+                channelName: "Removed record",
+                channelPlatform: "telegram",
+                status: "failed",
+                externalId: null,
+                externalUrl: null,
+                assertedAt: at,
+                createdAt: at,
+              },
+            ],
+            nextCursor: null,
+          });
+        return response({ rows: [], nextCursor: null });
+      }),
+    );
+    await renderAsync(<PublicationOperationsPage params={Promise.resolve({ id: brandId })} />);
+    const link = await screen.findByRole("link", {
+      name: en.PublicationOperations.archiveInspectRecord,
+    });
+    expect(link).toHaveAttribute("href", "https://example.com/posts/71");
+    expect(screen.getByText("Provider record ID: 71")).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: en.PublicationOperations.archiveOpenPublication }),
+    ).toBeNull();
+    expect(screen.getByText(/Marked not delivered by a person/)).toBeVisible();
+    expect(screen.queryByText(/Marked published by a person/)).toBeNull();
   });
 });

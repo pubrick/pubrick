@@ -270,7 +270,17 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
                         {t("archiveRecordedAt", { date: date(row.createdAt) })}
                         {row.assertedAt && (
                           <span className="block whitespace-normal">
-                            {t("archiveAssertedAt", { date: date(row.assertedAt) })}
+                            {t(
+                              row.status === "published"
+                                ? "archiveAssertedAt"
+                                : "archiveNotDeliveredAt",
+                              { date: date(row.assertedAt) },
+                            )}
+                          </span>
+                        )}
+                        {row.externalId && (
+                          <span className="block break-words whitespace-normal">
+                            {t("archiveRecordId", { id: row.externalId })}
                           </span>
                         )}
                         {row.externalUrl && (
@@ -282,7 +292,11 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
                                 rel="noopener noreferrer"
                                 className="text-accent underline"
                               >
-                                {t("archiveOpenPublication")}
+                                {t(
+                                  row.status === "published"
+                                    ? "archiveOpenPublication"
+                                    : "archiveInspectRecord",
+                                )}
                               </a>
                             ) : (
                               row.externalUrl

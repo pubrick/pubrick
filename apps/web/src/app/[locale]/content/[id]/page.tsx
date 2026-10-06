@@ -4,6 +4,7 @@ import type {
   AdaptationProposal,
   ContentImagesState,
   ContentReuseAttribution,
+  DeliveryAssertion,
   DraftRevisionProposal,
   RichBody,
   StoredRunInput,
@@ -101,6 +102,12 @@ type Adaptation = {
    * send may actually have landed reads `unknown`.
    */
   deliveryOutcome: DeliveryOutcome;
+  deliveryReceipt?: {
+    id: string;
+    attempt: number;
+    externalId: string | null;
+    externalUrl: string | null;
+  } | null;
   partialTelegram?: {
     primaryKind?: "photo" | "message" | null;
     photoId: string | null;
@@ -142,6 +149,17 @@ type Adaptation = {
   assertedByName: string | null;
   assertedAt: string | null;
 };
+
+function hasAcceptedRecord(adaptation: Adaptation): adaptation is Adaptation & {
+  deliveryReceipt: NonNullable<Adaptation["deliveryReceipt"]>;
+} {
+  return (
+    adaptation.deliveryReceipt != null &&
+    !adaptation.partialTelegram &&
+    (adaptation.deliveryReceipt.externalId !== null ||
+      adaptation.deliveryReceipt.externalUrl !== null)
+  );
+}
 
 type ContentItem = {
   id: string;
@@ -464,6 +482,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [refineBusy, setRefineBusy] = useState<RefineAction | null>(null);
   /** The adaptation whose verdict is in flight, if any — see `assertDelivery`. */
   const [deliveryBusy, setDeliveryBusy] = useState<string | null>(null);
+  const [deliveryError, setDeliveryError] = useState<{
+    adaptationId: string;
+    message: string;
+    needsReload: boolean;
+  } | null>(null);
+  const [acceptedRemoval, setAcceptedRemoval] = useState<Adaptation | null>(null);
   const [manualUrlDrafts, setManualUrlDrafts] = useState<Record<string, string>>({});
   const [manualBusy, setManualBusy] = useState<string | null>(null);
   const [copiedManualField, setCopiedManualField] = useState<string | null>(null);
@@ -1583,10 +1607,18 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
    * the api returns all three together.
    */
   async function assertDelivery(
-    adaptationId: string,
+    adaptation: Adaptation,
     delivered: boolean,
     partialResolution?: "completed" | "removed",
+    acceptedResolution?: "removed",
   ) {
+    const receipt = adaptation.deliveryReceipt;
+    if (!receipt) {
+      setActionError(te("delivery_receipt_changed"));
+      return;
+    }
+    const adaptationId = adaptation.id;
+    setDeliveryError(null);
     setActionError(null);
     // BOTH VERDICTS CLOSE WHILE ONE IS IN FLIGHT, per row. They are
     // contradictory answers to one question, so a second press of EITHER is a
@@ -1599,12 +1631,29 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     try {
       await api(`/api/content/${id}/adaptations/${adaptationId}/delivery`, {
         method: "POST",
-        body: JSON.stringify({ delivered, ...(partialResolution ? { partialResolution } : {}) }),
+        body: JSON.stringify({
+          delivered,
+          expectedReceipt: { id: receipt.id, attempt: receipt.attempt },
+          ...(partialResolution ? { partialResolution } : {}),
+          ...(acceptedResolution ? { acceptedResolution } : {}),
+        } satisfies DeliveryAssertion),
       });
       await reload();
     } catch (err) {
-      handleError(err);
+      if (err instanceof ApiError && err.noActiveOrg) {
+        handleError(err);
+      } else {
+        setDeliveryError({
+          adaptationId,
+          message: errorMessage(err, t("genericError"), te),
+          needsReload:
+            err instanceof ApiError &&
+            (err.code === "delivery_receipt_changed" ||
+              err.code === "accepted_record_removal_required"),
+        });
+      }
     } finally {
+      setAcceptedRemoval(null);
       // In `finally`, so a refusal gives the buttons back: the row is still
       // unknown after one, and the reader must be able to answer again.
       setDeliveryBusy(null);
@@ -3320,6 +3369,42 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
 
       <Modal
+        open={acceptedRemoval !== null}
+        onClose={() => {
+          if (deliveryBusy === null) setAcceptedRemoval(null);
+        }}
+        title={t("acceptedRecordRemovalTitle")}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setAcceptedRemoval(null)}
+              disabled={deliveryBusy !== null}
+            >
+              {t("approvalConfirmCancel")}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (acceptedRemoval)
+                  void assertDelivery(acceptedRemoval, false, undefined, "removed");
+              }}
+              disabled={deliveryBusy !== null}
+            >
+              {t("acceptedRecordConfirmRemoved")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("acceptedRecordRemovalBody")}</p>
+        {acceptedRemoval?.deliveryReceipt?.externalId && (
+          <p className="mt-3 break-words text-sm text-fg-secondary">
+            {t("acceptedRecordId", { id: acceptedRemoval.deliveryReceipt.externalId })}
+          </p>
+        )}
+      </Modal>
+
+      <Modal
         open={reloadComposerTarget !== null}
         onClose={() => {
           if (!reloadComposerBusy) setReloadComposerTarget(null);
@@ -3609,10 +3694,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               act on: look at the channel first, because approving again sends
               a second copy.
 
-              It NAMES the channel, and that is the whole of what this screen
-              can say about where the post went for a generic unknown: its
-              answer never returned with a link. A partial Telegram receipt has
-              its accepted first-message link and frozen suffix in the separate branch.
+              Acceptance can return an inspection link while publication stays
+              unconfirmed. The accepted record and Telegram partial checkpoint
+              have separate recovery controls; neither link claims publication.
             */}
             {(a.deliveryOutcome === "unknown" || a.deliveryOutcome === "partial") && (
               <>
@@ -3699,6 +3783,32 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                             )}
                     </p>
                   </div>
+                ) : hasAcceptedRecord(a) ? (
+                  <div className="space-y-3">
+                    <p role="alert" className="text-sm text-[var(--status-review-fg)]">
+                      {t("acceptedRecordWarning", { channel: channelLabel(a.channelId) })}
+                    </p>
+                    {a.deliveryReceipt.externalId && (
+                      <p className="break-words text-sm text-fg-secondary">
+                        {t("acceptedRecordId", { id: a.deliveryReceipt.externalId })}
+                      </p>
+                    )}
+                    {a.deliveryReceipt.externalUrl &&
+                      (isLinkableUrl(a.deliveryReceipt.externalUrl) ? (
+                        <a
+                          href={a.deliveryReceipt.externalUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-accent hover:underline"
+                        >
+                          {t("acceptedRecordInspect")}
+                        </a>
+                      ) : (
+                        <p className="break-words text-sm text-fg-secondary">
+                          {a.deliveryReceipt.externalUrl}
+                        </p>
+                      ))}
+                  </div>
                 ) : (
                   <p role="alert" className="text-sm text-[var(--status-review-fg)]">
                     {tc("unknownOutcome", { channel: channelLabel(a.channelId) })}
@@ -3727,7 +3837,9 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                             ? "partialTelegramRecoveryHintText"
                             : "partialTelegramRecoveryHint",
                         )
-                      : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
+                      : hasAcceptedRecord(a)
+                        ? t("acceptedRecordRecoveryHint")
+                        : t("assertDeliveryHint", { channel: channelLabel(a.channelId) })}
                   </p>
                 )}
                 {canDecideDelivery && (
@@ -3735,23 +3847,66 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                     <Button
                       variant="secondary"
                       onClick={() =>
-                        assertDelivery(a.id, true, a.partialTelegram ? "completed" : undefined)
+                        assertDelivery(a, true, a.partialTelegram ? "completed" : undefined)
                       }
-                      disabled={isArchived || deliveryBusy === a.id}
+                      disabled={
+                        isArchived ||
+                        deliveryBusy === a.id ||
+                        !a.deliveryReceipt ||
+                        (deliveryError?.adaptationId === a.id && deliveryError.needsReload)
+                      }
                     >
                       {a.partialTelegram ? t("partialTelegramConfirmComplete") : t("markDelivered")}
                     </Button>
                     <Button
                       variant="secondary"
                       onClick={() =>
-                        assertDelivery(a.id, false, a.partialTelegram ? "removed" : undefined)
+                        hasAcceptedRecord(a)
+                          ? setAcceptedRemoval(a)
+                          : assertDelivery(a, false, a.partialTelegram ? "removed" : undefined)
                       }
-                      disabled={isArchived || deliveryBusy === a.id}
+                      disabled={
+                        isArchived ||
+                        deliveryBusy === a.id ||
+                        !a.deliveryReceipt ||
+                        (deliveryError?.adaptationId === a.id && deliveryError.needsReload)
+                      }
                     >
                       {a.partialTelegram
                         ? t("partialTelegramConfirmRemoved")
-                        : t("markNotDelivered")}
+                        : hasAcceptedRecord(a)
+                          ? t("acceptedRecordRemoved")
+                          : t("markNotDelivered")}
                     </Button>
+                  </div>
+                )}
+                {canDecideDelivery && !a.deliveryReceipt && (
+                  <div className="space-y-2">
+                    <p role="alert" className="text-sm text-fg-secondary">
+                      {te("delivery_receipt_changed")}
+                    </p>
+                    <Button variant="secondary" onClick={() => void reload().catch(handleError)}>
+                      {t("reloadDeliveryRecord")}
+                    </Button>
+                  </div>
+                )}
+                {deliveryError?.adaptationId === a.id && (
+                  <div className="space-y-2">
+                    <p role="alert" className="text-sm text-danger">
+                      {deliveryError.message}
+                    </p>
+                    {deliveryError.needsReload && (
+                      <Button
+                        variant="secondary"
+                        onClick={() =>
+                          void reload()
+                            .then(() => setDeliveryError(null))
+                            .catch(handleError)
+                        }
+                      >
+                        {t("reloadDeliveryRecord")}
+                      </Button>
+                    )}
                   </div>
                 )}
               </>

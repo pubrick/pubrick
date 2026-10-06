@@ -58,6 +58,12 @@ type Adaptation = {
   cta: string | null;
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
+  deliveryReceipt?: {
+    id: string;
+    attempt: number;
+    externalId: string | null;
+    externalUrl: string | null;
+  } | null;
   partialTelegram?: {
     primaryKind?: "photo" | "message" | null;
     photoId: string | null;
@@ -126,7 +132,12 @@ function makeAdaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     deliveryOutcome: overrides.status ?? "pending",
     origin: "human",
     scheduledAt: null,
-    attemptCount: 0,
+    attemptCount:
+      overrides.deliveryOutcome === "unknown" || overrides.deliveryOutcome === "partial" ? 1 : 0,
+    deliveryReceipt:
+      overrides.deliveryOutcome === "unknown" || overrides.deliveryOutcome === "partial"
+        ? { id: deliveryReceiptId, attempt: 1, externalId: null, externalUrl: null }
+        : null,
     lastError: null,
     // Null on a row that has not failed, and on the one population that failed
     // before the column existed. A fixture that wants a coded failure says so.
@@ -195,7 +206,238 @@ function makeItem(overrides: Partial<ContentItem> = {}): ContentItem {
   };
 }
 
+const deliveryReceiptId = "774e2932-6f07-4a6b-a0da-dbc6d63d3ca1";
+const expectedDeliveryReceipt = { id: deliveryReceiptId, attempt: 1 };
+
 const channel: Channel = { id: "ch1", platform: "telegram", name: "Main channel" };
+
+describe("accepted provider record recovery", () => {
+  const acceptedUrl = "https://example.com/posts/71";
+  function item(
+    receipt: NonNullable<Adaptation["deliveryReceipt"]> = {
+      ...expectedDeliveryReceipt,
+      externalId: "71",
+      externalUrl: acceptedUrl,
+    },
+  ) {
+    return makeItem({
+      status: "failed",
+      adaptations: [
+        makeAdaptation({
+          status: "failed",
+          deliveryOutcome: "unknown",
+          deliveryReceipt: receipt,
+          attemptCount: receipt.attempt,
+        }),
+      ],
+    });
+  }
+  it("shows an inspection link and provider ID without calling acceptance published", async () => {
+    installBaseHandlers({ current: item() }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const results = resultsList();
+    const link = within(results).getByRole("link", { name: en.Publish.acceptedRecordInspect });
+    expect(link).toHaveAttribute("href", acceptedUrl);
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(within(results).getByText("Accepted record ID: 71")).toBeVisible();
+    expect(within(results).getByText(en.Content.adaptationStatus.unknown)).toBeVisible();
+    expect(within(results).queryByRole("link", { name: en.Publish.viewPost })).toBeNull();
+    expect(within(results).queryByRole("button", { name: en.Publish.markNotDelivered })).toBeNull();
+  });
+  it.each([null, "javascript:alert(1)"])(
+    "retains an ID-only or unsafe-link record without an unsafe href (%s)",
+    async (externalUrl) => {
+      installBaseHandlers(
+        { current: item({ ...expectedDeliveryReceipt, externalId: "71", externalUrl }) },
+        [],
+      );
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      expect(within(resultsList()).getByText("Accepted record ID: 71")).toBeVisible();
+      expect(within(resultsList()).queryByRole("link")).toBeNull();
+      if (externalUrl) expect(within(resultsList()).getByText(externalUrl)).toBeVisible();
+    },
+  );
+  it("binds delivered confirmation to the inspected receipt and retains human attribution beside its link", async () => {
+    const calls: Call[] = [];
+    const served = { current: item() };
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path === "/api/content/c1/adaptations/a1/delivery") {
+        served.current = makeItem({
+          status: "published",
+          adaptations: [
+            makeAdaptation({
+              status: "published",
+              attemptCount: 1,
+              externalUrl: acceptedUrl,
+              assertedAt: "2026-10-06T12:00:00Z",
+              assertedByName: "Editor",
+            }),
+          ],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Publish.markDelivered }));
+    const link = await within(resultsList()).findByRole("link", { name: en.Publish.viewPost });
+    expect(link).toHaveAttribute("href", acceptedUrl);
+    expect(
+      within(resultsList()).queryByRole("link", { name: en.Publish.acceptedRecordInspect }),
+    ).toBeNull();
+    expect(within(resultsList()).getByText(/Editor/)).toBeVisible();
+    const body = { delivered: true, expectedReceipt: expectedDeliveryReceipt };
+    const call = calls.find((value) => value.path.endsWith("/delivery"));
+    expect(JSON.parse(call?.body ?? "null")).toEqual(body);
+    expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? "null"))).toEqual(body);
+  });
+  it("requires a cancellable explicit removal confirmation before recording a negative verdict", async () => {
+    const calls: Call[] = [];
+    const served = { current: item() };
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/delivery")) {
+        served.current = makeItem({
+          status: "failed",
+          adaptations: [makeAdaptation({ status: "failed" })],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.acceptedRecordRemoved }));
+    let dialog = screen.getByRole("dialog", { name: en.Publish.acceptedRecordRemovalTitle });
+    expect(within(dialog).getByText(en.Publish.acceptedRecordRemovalBody)).toBeVisible();
+    expect(calls.filter((value) => value.path.endsWith("/delivery"))).toHaveLength(0);
+    await user.click(
+      within(dialog).getByRole("button", { name: en.Publish.approvalConfirmCancel }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: en.Publish.acceptedRecordRemoved }));
+    dialog = screen.getByRole("dialog", { name: en.Publish.acceptedRecordRemovalTitle });
+    await user.click(
+      within(dialog).getByRole("button", { name: en.Publish.acceptedRecordConfirmRemoved }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const body = {
+      delivered: false,
+      expectedReceipt: expectedDeliveryReceipt,
+      acceptedResolution: "removed",
+    };
+    const posts = calls.filter((value) => value.path.endsWith("/delivery"));
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0]?.body ?? "null")).toEqual(body);
+    expect(deliveryAssertionSchema.parse(JSON.parse(posts[0]?.body ?? "null"))).toEqual(body);
+  });
+  it("refuses local decisions with missing receipt identity and offers a reload", async () => {
+    const stale = item();
+    const adaptation = stale.adaptations[0];
+    if (!adaptation) throw new Error("Missing receipt fixture adaptation");
+    adaptation.deliveryReceipt = null;
+    const calls: Call[] = [];
+    const served = { current: stale };
+    installBaseHandlers(served, calls);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled();
+    expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
+    expect(screen.getByText(en.Errors.delivery_receipt_changed)).toBeVisible();
+    served.current = item();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: en.Publish.reloadDeliveryRecord }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeEnabled(),
+    );
+    expect(calls.filter((value) => value.path.endsWith("/delivery"))).toHaveLength(0);
+  });
+  it("shows a stale-receipt refusal beside the record and requires reload before another decision", async () => {
+    const calls: Call[] = [];
+    const served = { current: item() };
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/delivery")) {
+        served.current = item({
+          id: "929be65a-6209-4aab-ab93-cf28b5a3210e",
+          attempt: 2,
+          externalId: "72",
+          externalUrl: "https://example.com/posts/72",
+        });
+        throw new ApiError(
+          409,
+          "Do not display this provider sentence",
+          false,
+          "delivery_receipt_changed",
+        );
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.markDelivered }));
+    expect(
+      await within(resultsList()).findByText(en.Errors.delivery_receipt_changed),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeDisabled();
+    expect(screen.queryByText("Do not display this provider sentence")).toBeNull();
+    await user.click(screen.getByRole("button", { name: en.Publish.reloadDeliveryRecord }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: en.Publish.markDelivered })).toBeEnabled(),
+    );
+    expect(
+      within(resultsList()).getByRole("link", { name: en.Publish.acceptedRecordInspect }),
+    ).toHaveAttribute("href", "https://example.com/posts/72");
+    expect(calls.filter((value) => value.path.endsWith("/delivery"))).toHaveLength(1);
+  });
+  it("reloads late acceptance on the same receipt before allowing explicit removal", async () => {
+    const calls: Call[] = [];
+    const served = {
+      current: item({ ...expectedDeliveryReceipt, externalId: null, externalUrl: null }),
+    };
+    let decisions = 0;
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/delivery")) {
+        if (decisions++ === 0) {
+          served.current = item();
+          throw new ApiError(409, "Late acceptance", false, "accepted_record_removal_required");
+        }
+        served.current = makeItem({
+          status: "failed",
+          adaptations: [makeAdaptation({ status: "failed", attemptCount: 1 })],
+        });
+        return served.current;
+      }
+      return undefined;
+    });
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: en.Publish.markNotDelivered }));
+    expect(
+      await within(resultsList()).findByText(en.Errors.accepted_record_removal_required),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: en.Publish.markNotDelivered })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: en.Publish.reloadDeliveryRecord }));
+    expect(
+      await within(resultsList()).findByRole("link", { name: en.Publish.acceptedRecordInspect }),
+    ).toHaveAttribute("href", acceptedUrl);
+    await user.click(screen.getByRole("button", { name: en.Publish.acceptedRecordRemoved }));
+    const dialog = screen.getByRole("dialog", { name: en.Publish.acceptedRecordRemovalTitle });
+    await user.click(
+      within(dialog).getByRole("button", { name: en.Publish.acceptedRecordConfirmRemoved }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const posts = calls.filter((value) => value.path.endsWith("/delivery"));
+    expect(posts).toHaveLength(2);
+    expect(JSON.parse(posts[0]?.body ?? "null")).toEqual({
+      delivered: false,
+      expectedReceipt: expectedDeliveryReceipt,
+    });
+    expect(JSON.parse(posts[1]?.body ?? "null")).toEqual({
+      delivered: false,
+      expectedReceipt: expectedDeliveryReceipt,
+      acceptedResolution: "removed",
+    });
+  });
+});
 
 /**
  * A `datetime-local` value that is still in the future when the test runs.
@@ -3967,7 +4209,7 @@ describe("settling a delivery nobody can speak for", () => {
       ).toBeNull();
       await user.click(within(results).getByRole("button", { name: en.Publish[label] }));
       const call = calls.find((entry) => entry.path === "/api/content/c1/adaptations/a1/delivery");
-      const body = { delivered, partialResolution };
+      const body = { delivered, expectedReceipt: expectedDeliveryReceipt, partialResolution };
       expect(call?.body).toBe(JSON.stringify(body));
       expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual(body);
     },
@@ -4121,11 +4363,16 @@ describe("settling a delivery nobody can speak for", () => {
     );
     const call = calls.find((c) => c.path === "/api/content/c1/adaptations/a1/delivery");
     expect(call?.method).toBe("POST");
-    expect(call?.body).toBe(JSON.stringify({ delivered }));
+    expect(call?.body).toBe(
+      JSON.stringify({ delivered, expectedReceipt: expectedDeliveryReceipt }),
+    );
     // The literal pins what this screen sends; the schema — the very one the
     // api validates with — pins that the server will accept it, so a
     // server-side field rename fails here instead of only in production.
-    expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual({ delivered });
+    expect(deliveryAssertionSchema.parse(JSON.parse(call?.body ?? ""))).toEqual({
+      delivered,
+      expectedReceipt: expectedDeliveryReceipt,
+    });
   });
 
   /**

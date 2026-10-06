@@ -316,6 +316,12 @@ describe("the post screen", () => {
           cta: null,
           status: "failed",
           deliveryOutcome: "unknown",
+          deliveryReceipt: {
+            id: "774e2932-6f07-4a6b-a0da-dbc6d63d3ca1",
+            attempt: 1,
+            externalId: null,
+            externalUrl: null,
+          },
           origin: "human",
           scheduledAt: null,
           attemptCount: 1,
@@ -341,6 +347,64 @@ describe("the post screen", () => {
 
     await expectShown(es.Errors.delivery_outcome_already_known, sentence);
   });
+
+  it.each(["delivery_receipt_changed", "accepted_record_removal_required"] as const)(
+    "translates %s from the real delivery response in Spanish",
+    async (code) => {
+      const sentence = "Inspect the current provider record before resolving this delivery";
+      const inDoubt = {
+        ...item,
+        status: "failed",
+        adaptations: [
+          {
+            id: "a1",
+            contentItemId: ITEM_ID,
+            channelId: CHANNEL_ID,
+            body: null,
+            hashtags: [],
+            cta: null,
+            status: "failed",
+            deliveryOutcome: "unknown",
+            deliveryReceipt: {
+              id: "774e2932-6f07-4a6b-a0da-dbc6d63d3ca1",
+              attempt: 1,
+              externalId: "71",
+              externalUrl: "https://example.com/posts/71",
+            },
+            partialTelegram: null,
+            origin: "human",
+            scheduledAt: null,
+            attemptCount: 1,
+            lastError: null,
+            externalUrl: null,
+            assertedByName: null,
+            assertedAt: null,
+          },
+        ],
+      };
+      serve((url, method) => {
+        if (method === "POST" && url === `/api/content/${ITEM_ID}/adaptations/a1/delivery`)
+          return jsonResponse(409, refusalBody(409, code, sentence));
+        if (method === "GET" && url === `/api/content/${ITEM_ID}`)
+          return jsonResponse(200, inDoubt);
+        return undefined;
+      });
+      await renderItem("es");
+      const user = userEvent.setup();
+      if (code === "delivery_receipt_changed") {
+        await user.click(await screen.findByRole("button", { name: es.Publish.markDelivered }));
+      } else {
+        await user.click(
+          await screen.findByRole("button", { name: es.Publish.acceptedRecordRemoved }),
+        );
+        const dialog = screen.getByRole("dialog", { name: es.Publish.acceptedRecordRemovalTitle });
+        await user.click(
+          within(dialog).getByRole("button", { name: es.Publish.acceptedRecordConfirmRemoved }),
+        );
+      }
+      await expectShown(es.Errors[code], sentence);
+    },
+  );
 
   /**
    * THE OTHER HALF OF THE SAME DESIGN, and it arrives from a different button.

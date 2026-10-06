@@ -10,6 +10,7 @@ import {
   contentVersionRestoreSchema,
   DELIVERY_OUTCOMES,
   decodeContentCursor,
+  deliveryAssertionSchema,
   encodeContentCursor,
   isDeliveryOutcome,
   isManualPublicationUrl,
@@ -29,6 +30,54 @@ import {
 
 const BRAND = "11111111-1111-4111-8111-111111111111";
 const CHANNEL = "22222222-2222-4222-8222-222222222222";
+
+describe("delivery receipt reconciliation", () => {
+  const expectedReceipt = { id: CHANNEL, attempt: 2 };
+  it("preserves the exact receipt and explicit record-removal acknowledgement", () => {
+    const body = { delivered: false, expectedReceipt, acceptedResolution: "removed" };
+    expect(deliveryAssertionSchema.parse(body)).toEqual(body);
+    expect(deliveryAssertionSchema.parse({ delivered: true, expectedReceipt })).toEqual({
+      delivered: true,
+      expectedReceipt,
+    });
+  });
+  it("keeps old-client omission parseable for a coded endpoint refusal", () => {
+    expect(deliveryAssertionSchema.parse({ delivered: true })).toEqual({ delivered: true });
+  });
+  it("bounds the receipt identity and never accepts client-authored provider evidence", () => {
+    for (const value of [
+      { id: "not-a-receipt", attempt: 2 },
+      { id: CHANNEL, attempt: -1 },
+      { id: CHANNEL, attempt: 1.5 },
+    ])
+      expect(
+        deliveryAssertionSchema.safeParse({ delivered: true, expectedReceipt: value }).success,
+      ).toBe(false);
+    expect(
+      deliveryAssertionSchema.safeParse({
+        delivered: false,
+        expectedReceipt,
+        acceptedResolution: "not_delivered",
+      }).success,
+    ).toBe(false);
+    expect(
+      deliveryAssertionSchema.parse({
+        delivered: true,
+        expectedReceipt,
+        externalId: "forged",
+        externalUrl: "https://attacker.example/post",
+      }),
+    ).toEqual({ delivered: true, expectedReceipt });
+  });
+  it("models acceptance separately from the published link and supports ID-only receipts", () => {
+    const receipt = { ...expectedReceipt, externalId: "71", externalUrl: null };
+    expect(adaptationDtoSchema.shape.deliveryReceipt.parse(receipt)).toEqual(receipt);
+    expect(adaptationDtoSchema.shape.deliveryReceipt.parse(null)).toBeNull();
+    expect(
+      adaptationDtoSchema.shape.deliveryReceipt.safeParse({ ...receipt, attempt: -1 }).success,
+    ).toBe(false);
+  });
+});
 
 describe("manual publication URLs", () => {
   it.each([

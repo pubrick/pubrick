@@ -259,6 +259,8 @@ export const API_ERROR_CODES = [
    * `publications_one_published_per_adaptation` as a raw 23505.
    */
   "delivery_outcome_already_known",
+  "delivery_receipt_changed",
+  "accepted_record_removal_required",
   "manual_schedule_unsupported",
   "manual_publication_pending",
   "manual_publication_not_ready",

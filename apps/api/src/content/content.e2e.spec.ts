@@ -551,6 +551,14 @@ describe.skipIf(!url)("content e2e", () => {
     }
   }
 
+  async function viewedDeliveryReceipt(agent: request.Agent, itemId: string, adaptationId: string) {
+    const detail = await agent.get(`/api/content/${itemId}`).expect(200);
+    const receipt = detail.body.adaptations.find(
+      (row: { id: string }) => row.id === adaptationId,
+    )?.deliveryReceipt;
+    return receipt ? { id: receipt.id as string, attempt: receipt.attempt as number } : undefined;
+  }
+
   async function publishJobCount(adaptationId: string): Promise<number> {
     const { createDb } = await import("@pubrick/db");
     const { db, pool } = createDb(url as string);
@@ -3089,7 +3097,10 @@ describe.skipIf(!url)("content e2e", () => {
         if (prior === "resolved_unknown") {
           await agent
             .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-            .send({ delivered: false })
+            .send({
+              delivered: false,
+              expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+            })
             .expect(200);
         }
 
@@ -8963,7 +8974,7 @@ describe.skipIf(!url)("content e2e", () => {
         await db.execute(`SELECT org_id, channel_id FROM adaptations WHERE id = '${adaptationId}'`)
       ).rows as { org_id: string; channel_id: string }[];
       await db.execute(
-        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}',
+        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}', attempt_count = 1,
            last_error = ${status === "published" ? "NULL" : "'the worker wrote a sentence here'"}
          WHERE id = '${adaptationId}'`,
       );
@@ -9121,16 +9132,27 @@ describe.skipIf(!url)("content e2e", () => {
 
         await agent
           .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-          .send({ delivered })
+          .send({
+            delivered,
+            expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+          })
           .expect(409);
         await agent
           .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-          .send({ delivered, partialResolution: delivered ? "removed" : "completed" })
+          .send({
+            delivered,
+            partialResolution: delivered ? "removed" : "completed",
+            expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+          })
           .expect(409);
 
         const settled = await agent
           .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-          .send({ delivered, partialResolution })
+          .send({
+            delivered,
+            partialResolution,
+            expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+          })
           .expect(200);
         expect(settled.body.adaptations[0].status).toBe(expectedStatus);
         expect(settled.body.adaptations[0].partialTelegram).toBeNull();
@@ -9174,7 +9196,11 @@ describe.skipIf(!url)("content e2e", () => {
 
         const settled = await agent
           .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-          .send({ delivered: true, partialResolution: "completed" })
+          .send({
+            delivered: true,
+            partialResolution: "completed",
+            expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+          })
           .expect(200);
         expect(settled.body.adaptations[0].partialTelegram).toBeNull();
         expect(settled.body.adaptations[0].externalUrl).toBe("https://t.me/mychannel/4711");
@@ -9361,7 +9387,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const settled = await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: true })
+        .send({
+          delivered: true,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(200);
 
       const adaptation = settled.body.adaptations[0];
@@ -9408,7 +9437,10 @@ describe.skipIf(!url)("content e2e", () => {
       await seedDelivery(adaptationId, "unknown");
       await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: true })
+        .send({
+          delivered: true,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(200);
 
       const orgId = await orgOf(itemId);
@@ -9443,7 +9475,10 @@ describe.skipIf(!url)("content e2e", () => {
       await seedDelivery(adaptationId, "unknown");
       await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: true })
+        .send({
+          delivered: true,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(200);
 
       const refusal = await agent.post(`/api/content/${itemId}/approve`).send({}).expect(409);
@@ -9467,7 +9502,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const settled = await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: false })
+        .send({
+          delivered: false,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(200);
       expect(settled.body.adaptations[0].status).toBe("failed");
       expect(settled.body.adaptations[0].deliveryOutcome).toBe("failed");
@@ -9504,7 +9542,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const refusal = await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: true })
+        .send({
+          delivered: true,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(409);
       expect(refusal.body.code).toBe("delivery_outcome_already_known");
       expect(await receipts(adaptationId)).toHaveLength(1);
@@ -9524,7 +9565,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const refusal = await agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: true })
+        .send({
+          delivered: true,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        })
         .expect(409);
       expect(refusal.body.code).toBe("adaptation_pinned_queued");
       expect(await receipts(adaptationId)).toHaveLength(0);
@@ -9572,10 +9616,11 @@ describe.skipIf(!url)("content e2e", () => {
       await holder.query("BEGIN");
       await holder.query("SELECT id FROM adaptations WHERE id = $1 FOR UPDATE", [adaptationId]);
 
-      const press = () =>
-        agent
-          .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-          .send({ delivered: false });
+      const press = async () =>
+        agent.post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`).send({
+          delivered: false,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        });
       const both = Promise.all([press(), press()]);
       try {
         await waitForAdaptationRowWaiters(2, both);
@@ -9630,7 +9675,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const settling = agent
         .post(`/api/content/${itemId}/adaptations/${adaptationId}/delivery`)
-        .send({ delivered: false });
+        .send({
+          delivered: false,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, adaptationId),
+        });
       try {
         await waitForAdaptationRowWaiters(1, settling);
         // The rest of the worker's transaction, in its documented order:
@@ -9727,7 +9775,7 @@ describe.skipIf(!url)("content e2e", () => {
         await db.execute(`SELECT org_id, channel_id FROM adaptations WHERE id = '${adaptationId}'`)
       ).rows as { org_id: string; channel_id: string }[];
       await db.execute(
-        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}'
+        `UPDATE adaptations SET status = '${status === "published" ? "published" : "failed"}', attempt_count = 1
           WHERE id = '${adaptationId}'`,
       );
       await db.execute(
@@ -9799,7 +9847,10 @@ describe.skipIf(!url)("content e2e", () => {
 
       const settled = await agent
         .post(`/api/content/${itemId}/adaptations/${other}/delivery`)
-        .send({ delivered: false })
+        .send({
+          delivered: false,
+          expectedReceipt: await viewedDeliveryReceipt(agent, itemId, other),
+        })
         .expect(200);
       expect(settled.body.status).toBe("partially_published");
       expect(await itemStatus(itemId)).toBe("partially_published");

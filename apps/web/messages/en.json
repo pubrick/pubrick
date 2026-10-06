@@ -1050,7 +1050,16 @@
     "versionExternal": "Imported text",
     "saveBeforePublishing": "Save your changes before publishing or scheduling. The saved version is what will be sent.",
     "saveReviewChanges": "Save changes",
-    "reloadSavedContent": "Reload saved content"
+    "reloadSavedContent": "Reload saved content",
+    "acceptedRecordWarning": "{channel} accepted a record, but publication is unconfirmed. It may be pending or private. Inspect the provider record before deciding.",
+    "acceptedRecordInspect": "Inspect provider record",
+    "acceptedRecordId": "Accepted record ID: {id}",
+    "acceptedRecordRecoveryHint": "Confirm delivery only after inspecting the public post. Before sending again, remove the retained provider record.",
+    "acceptedRecordRemoved": "Confirm removal",
+    "acceptedRecordRemovalTitle": "Was the provider record removed?",
+    "acceptedRecordRemovalBody": "A pending, draft or private record still exists at the provider. Confirm only after removing it there. This records your decision and allows a future send; Pubrick does not remove or send anything now.",
+    "acceptedRecordConfirmRemoved": "I removed the record",
+    "reloadDeliveryRecord": "Reload"
   },
   "Prompts": {
     "title": "Generation guidance",
@@ -1898,7 +1907,9 @@
     "posting_schedule_missing": "Configure weekly posting times for every channel before adding this post to the queue.",
     "posting_queue_full": "No free posting time in the next 90 days. Add more weekly times or move scheduled posts.",
     "posting_queue_not_ready": "Only unsent native-channel posts can enter this queue. Inspect the current deliveries first.",
-    "channel_target_changed": "This connection has a different destination. Add a new channel to use another destination."
+    "channel_target_changed": "This connection has a different destination. Add a new channel to use another destination.",
+    "delivery_receipt_changed": "The delivery record changed or could not be identified. Reload and inspect the current attempt before deciding.",
+    "accepted_record_removal_required": "Inspect the accepted provider record and confirm it was removed before sending again."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -2759,7 +2770,10 @@
       "retries_exhausted": "Delivery attempts were exhausted.",
       "send_abandoned": "Delivery stopped before reaching the platform.",
       "outcome_unknown": "The delivery outcome is unknown."
-    }
+    },
+    "archiveNotDeliveredAt": "Marked not delivered by a person on {date}.",
+    "archiveInspectRecord": "Inspect provider record",
+    "archiveRecordId": "Provider record ID: {id}"
   },
   "BillingCard": {
     "title": "Subscription",

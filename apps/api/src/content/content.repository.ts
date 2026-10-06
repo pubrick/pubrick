@@ -31,6 +31,7 @@ import {
   type ContentStatus,
   type ContentUpdate,
   type ContentVersionRestore,
+  type DeliveryAssertion,
   type DraftRevisionImagePlan,
   type DraftRevisionProposal,
   type DraftRevisionRequest,
@@ -790,15 +791,14 @@ const ADAPTATION_COLUMNS = {
    * from packages/db/src/schema/content-items.ts, not TS property names.
    *
    * Scoped to `published` and deliberately NOT widened to `unknown` receipts.
-   * A generic unknown has no confirmed link; a partial Telegram receipt may
-   * have a confirmed first-message link, which `partialTelegram` exposes separately.
+   * Acceptance does not confirm publication. An accepted record and a partial
+   * Telegram checkpoint expose their inspection links separately.
    *
    * The `order by`/`limit 1` are shape, not choice, and a mutation of either is
    * an equivalent one: `publications_one_published_per_adaptation` is a unique
    * partial index, so this filtered set holds at most ONE row and there is
    * nothing for an ordering to pick between. The scope is the same story from
-   * the other side — every non-published receipt carries `external_url = null`,
-   * and a `published` adaptation is terminal (`approve` does not target it), so
+   * the other side — a `published` adaptation is terminal (`approve` does not target it), so
    * no receipt can ever be newer than the published one. The load-bearing part
    * is the correlation on `adaptation_id`, which is a tenancy question and is
    * tested as one.
@@ -850,6 +850,28 @@ const ADAPTATION_COLUMNS = {
    * someone is sending, not a record of how it ended.
    */
   deliveryOutcome: deliveryOutcomeSql,
+  /** Select the latest finished receipt first, then test this attempt's unresolved state. */
+  deliveryReceipt: sql<{
+    id: string;
+    attempt: number;
+    externalId: string | null;
+    externalUrl: string | null;
+  } | null>`(
+    select case
+      when adaptations.status = 'failed' and p.status = 'unknown'
+        and p.attempt = adaptations.attempt_count
+      then json_build_object(
+        'id', p.id, 'attempt', p.attempt,
+        'externalId', p.external_id, 'externalUrl', p.external_url
+      )
+      else null
+    end
+    from publications p
+    where p.org_id = adaptations.org_id
+      and p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+    order by p.created_at desc
+    limit 1
+  )`,
   /** The last unresolved Telegram multipart receipt, never reconstructed from log prose. */
   partialTelegram: sql<{
     primaryKind: "photo" | "message" | null;
@@ -941,10 +963,14 @@ const ADAPTATION_COLUMNS = {
 
 // A queue card needs the delivery verdict, but never the frozen missing reply.
 // Keep its projection narrow: the list is polled and can contain 200 channels.
-const { partialTelegram: _detailOnly, ...ADAPTATION_LIST_COLUMNS } = ADAPTATION_COLUMNS;
+const {
+  partialTelegram: _detailOnly,
+  deliveryReceipt: _receiptDetailOnly,
+  ...ADAPTATION_LIST_COLUMNS
+} = ADAPTATION_COLUMNS;
 type AdaptationListRow = Omit<
   Awaited<ReturnType<ContentRepository["adaptationsFor"]>>[number],
-  "partialTelegram"
+  "partialTelegram" | "deliveryReceipt"
 >;
 
 /**
@@ -7023,6 +7049,8 @@ export class ContentRepository {
     delivered: boolean,
     userId: string,
     partialResolution?: "completed" | "removed",
+    expectedReceipt?: DeliveryAssertion["expectedReceipt"],
+    acceptedResolution?: DeliveryAssertion["acceptedResolution"],
   ) {
     await db.transaction(async (tx) => {
       await holdOrganization(tx, orgId);
@@ -7052,6 +7080,7 @@ export class ContentRepository {
             attemptCount: schema.adaptations.attemptCount,
             deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
             partialTelegram: ADAPTATION_COLUMNS.partialTelegram,
+            deliveryReceipt: ADAPTATION_COLUMNS.deliveryReceipt,
           })
           .from(schema.adaptations)
           .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptationId)))
@@ -7085,6 +7114,37 @@ export class ContentRepository {
         throw conflict(
           "delivery_outcome_already_known",
           "This delivery's outcome is already known, so there is nothing to say about it",
+        );
+      }
+      // The separate post-lock read fences both concurrent decisions and ABA
+      // retries. The DTO leaves expectation optional so old clients receive a
+      // localized reload refusal, rather than an uncoded validation failure.
+      if (
+        expectedReceipt === undefined ||
+        current.deliveryReceipt === null ||
+        current.deliveryReceipt.id !== expectedReceipt.id ||
+        current.deliveryReceipt.attempt !== expectedReceipt.attempt ||
+        current.attemptCount !== expectedReceipt.attempt
+      ) {
+        throw conflict(
+          "delivery_receipt_changed",
+          "Reload and inspect the current delivery record before deciding its outcome",
+        );
+      }
+      const hasAcceptedRecord =
+        !current.partialTelegram &&
+        (current.deliveryReceipt.externalId !== null ||
+          current.deliveryReceipt.externalUrl !== null);
+      if (hasAcceptedRecord && !delivered && acceptedResolution !== "removed") {
+        throw conflict(
+          "accepted_record_removal_required",
+          "Confirm the accepted provider record was removed before allowing another send",
+        );
+      }
+      if (acceptedResolution !== undefined && (!hasAcceptedRecord || delivered)) {
+        throw conflict(
+          "delivery_receipt_changed",
+          "This decision has no accepted record to remove",
         );
       }
       if (current.partialTelegram) {
@@ -7128,9 +7188,14 @@ export class ContentRepository {
         status: delivered ? "published" : "failed",
         // A partial Telegram receipt already has the platform-confirmed first
         // message id and URL. The person attests completion of the rest.
-        // Generic unknown outcomes still have no id or link.
-        externalId: delivered ? (current.partialTelegram?.photoId ?? null) : null,
-        externalUrl: delivered ? (current.partialTelegram?.photoUrl ?? null) : null,
+        // A generic accepted record has server-owned identifiers too. Copy only
+        // the current fenced receipt; clients never provide IDs or URLs.
+        externalId: delivered
+          ? (current.partialTelegram?.photoId ?? current.deliveryReceipt?.externalId ?? null)
+          : null,
+        externalUrl: delivered
+          ? (current.partialTelegram?.photoUrl ?? current.deliveryReceipt?.externalUrl ?? null)
+          : null,
         error: null,
         attempt: current.attemptCount,
         // WHO, AND WHEN — and the two are written together because only the

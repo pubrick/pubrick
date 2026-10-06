@@ -706,20 +706,27 @@ export type AdaptationCancelSchedule = z.infer<typeof adaptationCancelScheduleSc
  *
  * One boolean, because the question is one question: an attempt whose answer
  * never came back is either live in the channel or it is not, and only a human
- * who looked can say which. `true` records a delivery nobody can produce a
- * platform id for; `false` records that nothing arrived, which puts the
- * delivery back in reach of "Publish now".
+ * who looked can say which. The exact receipt id and attempt bind that decision
+ * to the send they inspected. Accepted records may have server-owned ids even
+ * though publication is unconfirmed; a negative verdict then requires an
+ * explicit acknowledgement that the retained provider record was removed.
  *
  * NO FREE TEXT, no external id, no link. A caller that could supply an id
  * could author the product's evidence that a platform accepted a post, which
  * is the same boundary `refineRequestSchema` draws when it sends offsets
  * instead of the selected text. What the receipt carries instead is WHO said
  * so (`publications.asserted_by`, from the session) and when, which is what
- * the item screen renders in place of a link it does not have.
+ * the item screen renders beside any server-recorded inspection link.
+ * Missing expectations parse for old clients, but the endpoint refuses them
+ * with `delivery_receipt_changed`; no old-client reconciliation bypass exists.
  */
 export const deliveryAssertionSchema = z.object({
   delivered: z.boolean(),
   partialResolution: z.enum(["completed", "removed"]).optional(),
+  /** Current clients bind their decision to the exact record they inspected. */
+  expectedReceipt: z.object({ id: z.uuid(), attempt: z.number().int().nonnegative() }).optional(),
+  /** A retained provider record must be removed before another create is allowed. */
+  acceptedResolution: z.literal("removed").optional(),
 });
 export type DeliveryAssertion = z.infer<typeof deliveryAssertionSchema>;
 
@@ -779,19 +786,18 @@ export type ManualPublication = z.infer<typeof manualPublicationSchema>;
  * - `scheduled` — approved for a future time; the queue holds the job until it.
  * - `queued` — approved and handed to the queue; a worker will pick it up.
  * - `publishing` — a worker is talking to the platform right now.
- * - `published` — the platform accepted the post. This is the one outcome that
- *   carries an `externalUrl`.
- * - `failed` — the attempt ended and NOTHING reached the platform. Safe to
- *   approve again: re-approving sends the post for the first time.
+ * - `published` — publication was confirmed by the platform or a human
+ *   assertion. This outcome can carry a published `externalUrl`.
+ * - `failed` — the attempt ended with no unresolved delivery. Another send is
+ *   available after any required human resolution.
  *
  * Two outcomes have no adaptation column of their own:
  *
- * - `unknown` — the request may have left this process and never came back.
- *   The post may be live in the channel and nothing here can tell. It carries
- *   no `externalUrl` — there is no answer to have learned one from — and it is
- *   emphatically NOT `failed`: re-approving an unknown delivery can put a
- *   SECOND copy in someone's channel, so a human has to open the channel and
- *   look first.
+ * - `unknown` — publication was not confirmed. A call may have timed out, or
+ *   the provider may have retained a nonpublic record. It carries no published
+ *   `externalUrl`; any known record ID and inspection URL live separately in
+ *   `deliveryReceipt`. Another create can duplicate that record, so a human
+ *   must inspect and resolve the exact attempted send first.
  * - `partial` — Telegram accepted the cover photo, but its required text reply
  *   was not confirmed. The receipt holds the photo id/link and exact remaining
  *   text. Re-approving before recovery would duplicate the photo.
@@ -869,6 +875,15 @@ export const adaptationDtoSchema = z.strictObject({
   lateBySeconds: z.number().nullable(),
   externalUrl: z.string().nullable(),
   deliveryOutcome: z.enum(DELIVERY_OUTCOMES),
+  /** The current unresolved send, never a link claiming confirmed publication. */
+  deliveryReceipt: z
+    .object({
+      id: z.uuid(),
+      attempt: z.number().int().nonnegative(),
+      externalId: z.string().nullable(),
+      externalUrl: z.string().nullable(),
+    })
+    .nullable(),
   partialTelegram: z
     .object({
       /** Old API versions omit this field; old checkpoint rows are photo-first. */
@@ -884,8 +899,11 @@ export const adaptationDtoSchema = z.strictObject({
 });
 export type AdaptationDto = z.infer<typeof adaptationDtoSchema>;
 
-/** Queue cards omit the frozen Telegram reply; it belongs on item detail. */
-export const adaptationListDtoSchema = adaptationDtoSchema.omit({ partialTelegram: true });
+/** Queue cards omit the frozen reply and inspected receipt; both belong on item detail. */
+export const adaptationListDtoSchema = adaptationDtoSchema.omit({
+  partialTelegram: true,
+  deliveryReceipt: true,
+});
 export type AdaptationListDto = z.infer<typeof adaptationListDtoSchema>;
 
 /**

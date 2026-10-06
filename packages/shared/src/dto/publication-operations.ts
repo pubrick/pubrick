@@ -95,6 +95,7 @@ export const archivedPublicationDtoSchema = z.strictObject({
   channelName: z.string().nullable(),
   channelPlatform: z.string().nullable(),
   status: z.enum(PUBLICATION_STATUSES),
+  externalId: z.string().nullable(),
   externalUrl: z.string().nullable(),
   assertedAt: z.iso.datetime().nullable(),
   createdAt: z.iso.datetime(),

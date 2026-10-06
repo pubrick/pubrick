@@ -504,6 +504,8 @@ export class ContentController {
       body.delivered,
       userId,
       body.partialResolution,
+      body.expectedReceipt,
+      body.acceptedResolution,
     );
   }
 

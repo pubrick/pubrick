@@ -36,6 +36,7 @@ export class ArchivedPublicationsRepository {
         channelName: schema.publications.channelName,
         channelPlatform: schema.publications.channelPlatform,
         status: schema.publications.status,
+        externalId: schema.publications.externalId,
         externalUrl: schema.publications.externalUrl,
         assertedAt: schema.publications.assertedAt,
         createdAt: schema.publications.createdAt,
