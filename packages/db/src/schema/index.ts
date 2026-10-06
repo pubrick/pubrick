@@ -26,6 +26,7 @@ export * from "./knowledge.js";
 export * from "./linkedin-connections.js";
 export * from "./media.js";
 export * from "./media-cleanup.js";
+export * from "./meta-connections.js";
 export * from "./memorable-dates.js";
 export * from "./notifications.js";
 export * from "./paid-reply-analysis.js";

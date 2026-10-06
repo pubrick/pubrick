@@ -1921,7 +1921,16 @@
     "linkedin_connection_changed": "Esta conexión de LinkedIn cambió. Recarga el canal antes de reconectar o desconectar.",
     "linkedin_reconnect_required": "Reconecta esta cuenta de LinkedIn antes de comprobar o publicar.",
     "linkedin_oauth_required": "Conecta LinkedIn mediante autorización en la página de la marca. No se pueden pegar tokens.",
-    "linkedin_authorization_capacity": "Hay demasiadas solicitudes de autorización de LinkedIn pendientes. Espera diez minutos y reintenta."
+    "linkedin_authorization_capacity": "Hay demasiadas solicitudes de autorización de LinkedIn pendientes. Espera diez minutos y reintenta.",
+    "meta_unavailable": "El servidor no tiene configurada la aplicación de este proveedor. Pide al administrador que la configure.",
+    "meta_authorization_invalid": "La selección ha caducado o ya se usó. Inicia una nueva conexión.",
+    "meta_authorization_failed": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
+    "meta_authorization_unavailable": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
+    "meta_authorization_capacity": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
+    "meta_authority_changed": "Tu sesión o acceso de administrador cambió. Inicia sesión y comprueba tus permisos antes de reintentar.",
+    "meta_connection_changed": "Esta conexión de LinkedIn cambió. Recarga el canal antes de reconectar o desconectar.",
+    "meta_reconnect_required": "Es necesario reconectar",
+    "meta_oauth_required": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -3359,5 +3368,39 @@
     "humanReceipt": "Confirmada por una persona",
     "more": "Cargar más",
     "loading": "Cargando…"
+  },
+  "MetaConnections": {
+    "states": {
+      "connected": "Conectado",
+      "disconnected": "Desconectado",
+      "expired": "Acceso caducado",
+      "reconnect": "Es necesario reconectar"
+    },
+    "capability": {
+      "threads": "Texto · 500 caracteres",
+      "instagram_native": "Cuenta profesional · un JPEG y texto",
+      "facebook_page": "Página de Facebook · publicaciones de texto"
+    },
+    "connect": "Conectar cuenta",
+    "reconnect": "Reconectar",
+    "disconnect": "Desconectar",
+    "working": "Procesando…",
+    "cancel": "Cancelar",
+    "expires": "El acceso caduca el {date}",
+    "disconnectTitle": "¿Desconectar esta cuenta?",
+    "disconnectBody": "Desconecta {name} de la publicación automática. El contenido guardado, los horarios y el historial se conservan. Los envíos pendientes necesitan reconectar este mismo destino.",
+    "genericError": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
+    "callbackTitle": "Conectar una cuenta de publicación",
+    "callbackPending": "Verificando la cuenta y los permisos de publicación…",
+    "callbackRecovery": "Vuelve a tu marca e inicia una nueva conexión. Esta autorización no se puede reutilizar.",
+    "backToBrands": "Volver a las marcas",
+    "choosePage": "Elige una página de Facebook",
+    "choosePageHelp": "Selecciona la página que recibirá las publicaciones de este canal. Pubrick conecta solo la página que elijas.",
+    "connectPage": "Conectar la página seleccionada",
+    "selectionExpired": "La selección ha caducado o ya se usó. Inicia una nueva conexión.",
+    "checking": "Comprobando la configuración del servidor…",
+    "unavailable": "El servidor no tiene configurada la aplicación de este proveedor. Pide al administrador que la configure.",
+    "retry": "Intentar de nuevo",
+    "personalOnly": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social."
   }
 }

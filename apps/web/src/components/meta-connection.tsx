@@ -1,0 +1,179 @@
+"use client";
+
+import {
+  type MetaConnection,
+  type MetaConnectionProvider,
+  metaAuthorizationStartSchema,
+  metaDisconnectSchema,
+} from "@pubrick/shared";
+import { useLocale, useTranslations } from "next-intl";
+import { useRef, useState } from "react";
+import { api, apiVoid, errorMessage } from "@/lib/api";
+import { openMetaAuthorization } from "@/lib/meta-connections";
+import { Button } from "./ui/button";
+import { Modal } from "./ui/modal";
+import { StatusBadge } from "./ui/status-badge";
+
+export function MetaConnectionSummary({
+  provider,
+  connection,
+}: {
+  provider: MetaConnectionProvider;
+  connection?: MetaConnection | null;
+}) {
+  const t = useTranslations("MetaConnections");
+  const locale = useLocale();
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <StatusBadge
+        status={
+          connection?.state === "connected"
+            ? "published"
+            : connection?.state === "disconnected"
+              ? "draft"
+              : "review"
+        }
+      >
+        {t(`states.${connection?.state ?? "reconnect"}`)}
+      </StatusBadge>
+      {connection?.account && <span>{connection.account}</span>}
+      {connection?.expiresAt && connection.state !== "disconnected" && (
+        <span>
+          {t("expires", {
+            date: new Intl.DateTimeFormat(locale, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }).format(new Date(connection.expiresAt)),
+          })}
+        </span>
+      )}
+      <span>{t(`capability.${provider}`)}</span>
+    </span>
+  );
+}
+
+export function MetaConnectionActions({
+  brandId,
+  provider,
+  channel,
+  onChanged,
+}: {
+  brandId: string;
+  provider: MetaConnectionProvider;
+  channel: { id: string; name: string; connection?: MetaConnection | null };
+  onChanged: () => void;
+}) {
+  const t = useTranslations("MetaConnections");
+  const te = useTranslations("Errors");
+  const locale = useLocale();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = channel.connection?.generation;
+  async function reconnect() {
+    if (busyRef.current || generation === undefined) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = metaAuthorizationStartSchema.parse({
+        provider,
+        brandId,
+        name: channel.name,
+        locale,
+        channelId: channel.id,
+        expectedGeneration: generation,
+      });
+      openMetaAuthorization(
+        provider,
+        await api("/api/channels/meta/authorize", { method: "POST", body: JSON.stringify(body) }),
+      );
+    } catch (caught) {
+      setError(errorMessage(caught, t("genericError"), te));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+  async function disconnect() {
+    if (busyRef.current || generation === undefined) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiVoid(`/api/channels/meta/${channel.id}/disconnect`, {
+        method: "POST",
+        body: JSON.stringify(metaDisconnectSchema.parse({ expectedGeneration: generation })),
+      });
+      setOpen(false);
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught, t("genericError"), te));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <Button
+        className="min-h-11"
+        size="sm"
+        variant="secondary"
+        disabled={busy || generation === undefined}
+        onClick={reconnect}
+      >
+        {busy ? t("working") : t("reconnect")}
+      </Button>
+      {channel.connection?.state !== "disconnected" && (
+        <Button
+          className="min-h-11"
+          size="sm"
+          variant="danger"
+          disabled={busy || generation === undefined}
+          onClick={() => {
+            setError(null);
+            setOpen(true);
+          }}
+        >
+          {t("disconnect")}
+        </Button>
+      )}
+      {error && !open && (
+        <span role="alert" className="text-sm text-danger">
+          {error}
+        </span>
+      )}
+      <Modal
+        open={open}
+        onClose={() => {
+          if (!busyRef.current) setOpen(false);
+        }}
+        title={t("disconnectTitle")}
+        footer={
+          <>
+            <Button
+              className="min-h-11"
+              variant="secondary"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
+              {t("cancel")}
+            </Button>
+            <Button className="min-h-11" variant="danger" disabled={busy} onClick={disconnect}>
+              {busy ? t("working") : t("disconnect")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{t("disconnectBody", { name: channel.name })}</p>
+        {error && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {error}
+          </p>
+        )}
+      </Modal>
+    </>
+  );
+}

@@ -1921,7 +1921,16 @@
     "linkedin_connection_changed": "This LinkedIn connection changed. Reload the channel before reconnecting or disconnecting.",
     "linkedin_reconnect_required": "Reconnect this LinkedIn account before checking or publishing.",
     "linkedin_oauth_required": "Connect LinkedIn through authorization on the brand page. Tokens cannot be pasted.",
-    "linkedin_authorization_capacity": "Too many LinkedIn authorization requests are pending. Wait ten minutes and try again."
+    "linkedin_authorization_capacity": "Too many LinkedIn authorization requests are pending. Wait ten minutes and try again.",
+    "meta_unavailable": "This server does not have this provider’s application configured. Ask the server administrator to configure it.",
+    "meta_authorization_invalid": "This Page selection has expired or was used. Start a new connection.",
+    "meta_authorization_failed": "The account could not be connected. Start again from your brand.",
+    "meta_authorization_unavailable": "The account could not be connected. Start again from your brand.",
+    "meta_authorization_capacity": "The account could not be connected. Start again from your brand.",
+    "meta_authority_changed": "Your session or manager access changed. Sign in and check your permissions before trying again.",
+    "meta_connection_changed": "This LinkedIn connection changed. Reload the channel before reconnecting or disconnecting.",
+    "meta_reconnect_required": "Reconnect required",
+    "meta_oauth_required": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -3359,5 +3368,39 @@
     "humanReceipt": "Confirmed by a person",
     "more": "Load more",
     "loading": "Loading…"
+  },
+  "MetaConnections": {
+    "states": {
+      "connected": "Connected",
+      "disconnected": "Disconnected",
+      "expired": "Access expired",
+      "reconnect": "Reconnect required"
+    },
+    "capability": {
+      "threads": "Text posts · 500 characters",
+      "instagram_native": "Professional account · one JPEG and caption",
+      "facebook_page": "Facebook Page · text posts"
+    },
+    "connect": "Connect account",
+    "reconnect": "Reconnect",
+    "disconnect": "Disconnect",
+    "working": "Working…",
+    "cancel": "Cancel",
+    "expires": "Access expires {date}",
+    "disconnectTitle": "Disconnect this account?",
+    "disconnectBody": "Disconnect {name} from automatic publishing. Saved content, schedules and publication history stay available. Queued work cannot send until this same destination is reconnected.",
+    "genericError": "The account could not be connected. Start again from your brand.",
+    "callbackTitle": "Connect a publishing account",
+    "callbackPending": "Verifying your account and publishing permissions…",
+    "callbackRecovery": "Return to your brand and start a new connection. This authorization cannot be replayed.",
+    "backToBrands": "Back to brands",
+    "choosePage": "Choose a Facebook Page",
+    "choosePageHelp": "Select the Page that should receive this channel’s posts. Pubrick connects only the Page you choose.",
+    "connectPage": "Connect selected Page",
+    "selectionExpired": "This Page selection has expired or was used. Start a new connection.",
+    "checking": "Checking server configuration…",
+    "unavailable": "This server does not have this provider’s application configured. Ask the server administrator to configure it.",
+    "retry": "Try again",
+    "personalOnly": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token."
   }
 }

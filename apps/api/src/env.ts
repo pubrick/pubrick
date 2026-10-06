@@ -5,6 +5,9 @@ import {
   linkedinEnvironmentSchema,
   MAX_PUBLIC_OPERATION_RECORDS,
   MAX_PUBLIC_OPERATION_RECORDS_CONFIG,
+  META_CONNECTION_PROVIDERS,
+  metaApplicationConfigurations,
+  metaEnvironmentSchema,
   parseEnv,
   parseKeyRing,
 } from "@pubrick/shared";
@@ -12,11 +15,13 @@ import { z } from "zod";
 import { identityConfig } from "./auth-hosted-policy";
 import { assertNoPublishedSecrets, parseSignupMode, parseTrustedProxies } from "./auth-policy";
 import { linkedinRuntimeConfiguration } from "./channels/linkedin-runtime-config";
+import { metaRuntimeConfiguration } from "./channels/meta-runtime-config";
 
 export const env = parseEnv({
   PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
   ...mailEnvironmentSchema.shape,
   ...linkedinEnvironmentSchema.shape,
+  ...metaEnvironmentSchema.shape,
   DATABASE_URL: z.string().min(1),
   PUBLIC_API_MAX_OPERATION_RECORDS: z.preprocess(
     (v) => (v === "" ? undefined : v),
@@ -116,3 +121,13 @@ export const identity = identityConfig(env, process.env.NODE_ENV);
 export const linkedinApplication = linkedinApplicationConfiguration(env);
 // Fail at boot rather than generating a callback the provider can never return to.
 linkedinRuntimeConfiguration(linkedinApplication, env.BETTER_AUTH_URL, env.WEB_ORIGIN);
+
+/** Native Meta modes use three separately configured confidential applications. */
+export const metaApplications = metaApplicationConfigurations(env);
+for (const provider of META_CONNECTION_PROVIDERS)
+  metaRuntimeConfiguration(
+    provider,
+    metaApplications[provider],
+    env.BETTER_AUTH_URL,
+    env.WEB_ORIGIN,
+  );

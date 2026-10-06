@@ -26,6 +26,9 @@ export const PLATFORM_MAX_TEXT_LENGTH: Record<(typeof PLATFORM_IDS)[number], num
   x: 280,
   wordpress: MAX_BODY_LENGTH,
   linkedin: 3000,
+  threads: 500,
+  instagram_native: 2200,
+  facebook_page: MAX_BODY_LENGTH,
 };
 
 export const TELEGRAM_ADAPTER_MAX_TEXT_LENGTH = TELEGRAM_LONG_POST_LENGTH;

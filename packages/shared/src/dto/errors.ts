@@ -434,6 +434,15 @@ export const API_ERROR_CODES = [
   "linkedin_reconnect_required",
   "linkedin_oauth_required",
   "linkedin_authorization_capacity",
+  "meta_unavailable",
+  "meta_authorization_invalid",
+  "meta_authorization_failed",
+  "meta_authorization_unavailable",
+  "meta_authorization_capacity",
+  "meta_authority_changed",
+  "meta_connection_changed",
+  "meta_reconnect_required",
+  "meta_oauth_required",
   /**
    * The channel's stored credentials will not decrypt under any key this
    * instance has — `APP_ENCRYPTION_KEY` was changed under a stored row, or the

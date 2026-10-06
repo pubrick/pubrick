@@ -71,6 +71,8 @@ export const channels = pgTable(
     /** CAS fence for managed authorization, replacement and disconnect. */
     connectionGeneration: integer("connection_generation").default(0).notNull(),
     connectionAccount: text("connection_account"),
+    /** Server-owned application lineage for managed Meta tokens; never user-editable. */
+    connectionApplicationId: text("connection_application_id"),
     connectionScopes: text("connection_scopes"),
     connectionExpiresAt: timestamp("connection_expires_at", { withTimezone: true }),
     connectionConnectedAt: timestamp("connection_connected_at", { withTimezone: true }),
@@ -89,6 +91,18 @@ export const channels = pgTable(
     index("channels_brand_id_idx").on(t.brandId),
     uniqueIndex("channels_org_brand_id_idx").on(t.orgId, t.brandId, t.id),
     check("channels_connection_generation_check", sql`${t.connectionGeneration} >= 0`),
+    check(
+      "channels_connection_application_check",
+      sql`${t.connectionApplicationId} is null or ${t.connectionApplicationId} ~ '^[1-9][0-9]{0,30}$'`,
+    ),
+    check(
+      "channels_meta_target_check",
+      sql`(${t.platform} not in ('threads', 'instagram_native', 'facebook_page')) or
+        (${t.connectionTarget} is not null and ${t.connectionApplicationId} is not null and
+          ((${t.platform} = 'threads' and ${t.connectionTarget} ~ '^threads:[1-9][0-9]{0,30}$') or
+           (${t.platform} = 'instagram_native' and ${t.connectionTarget} ~ '^instagram:[1-9][0-9]{0,30}$') or
+           (${t.platform} = 'facebook_page' and ${t.connectionTarget} ~ '^facebook-page:[1-9][0-9]{0,30}$')))`,
+    ),
     check(
       "channels_connection_account_check",
       sql`${t.connectionAccount} is null or length(${t.connectionAccount}) between 1 and 300`,

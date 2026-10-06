@@ -4,6 +4,8 @@ import { mailEnvironmentSchema, resolveSmtpConfig } from "@pubrick/mail";
 import {
   linkedinApplicationConfiguration,
   linkedinEnvironmentSchema,
+  metaApplicationConfigurations,
+  metaEnvironmentSchema,
   PUBLISH_ABANDONED_AFTER_SECONDS,
   PUBLISH_MAX_LATENESS_HOURS_DEFAULT,
   PUBLISH_QUEUE_OPTIONS,
@@ -17,6 +19,7 @@ export const env = parseEnv({
   PUBRICK_DEPLOYMENT_MODE: z.enum(["self-hosted", "hosted"]).default("self-hosted"),
   ...mailEnvironmentSchema.shape,
   ...linkedinEnvironmentSchema.shape,
+  ...metaEnvironmentSchema.shape,
   BETTER_AUTH_SECRET: z.preprocess(
     (value) => (value === "" ? undefined : value),
     z.string().min(16).optional(),
@@ -133,3 +136,6 @@ if (
 
 /** Fixed server application used to prove actual personal publication grants. */
 export const linkedinApplication = linkedinApplicationConfiguration(env);
+
+/** Same server applications used by OAuth; never tenant-supplied proof credentials. */
+export const metaApplications = metaApplicationConfigurations(env);

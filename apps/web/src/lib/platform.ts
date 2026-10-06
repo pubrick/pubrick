@@ -25,6 +25,9 @@ const PLATFORM_NAMES: Record<string, string> = {
   x: "X",
   wordpress: "WordPress",
   linkedin: "LinkedIn",
+  threads: "Threads",
+  instagram_native: "Instagram API",
+  facebook_page: "Facebook Page",
 };
 
 export function platformName(id: string): string {

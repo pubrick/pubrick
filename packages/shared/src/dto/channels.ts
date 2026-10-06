@@ -16,6 +16,9 @@ export const PLATFORM_IDS = [
   "x",
   "wordpress",
   "linkedin",
+  "threads",
+  "instagram_native",
+  "facebook_page",
 ] as const;
 
 /**
@@ -52,7 +55,7 @@ export type PlatformId = (typeof PLATFORM_IDS)[number];
  * the adapters that actually exist. This constant is what lets the picker say
  * the same thing before the request is made.
  */
-export const PUBLISHABLE_PLATFORM_IDS = [
+export const DIRECT_PUBLISHABLE_PLATFORM_IDS = [
   "telegram",
   "vk",
   "max",
@@ -60,6 +63,14 @@ export const PUBLISHABLE_PLATFORM_IDS = [
   "mastodon",
   "wordpress",
   "linkedin",
+  "facebook_page",
+] as const;
+export type DirectPublishablePlatformId = (typeof DIRECT_PUBLISHABLE_PLATFORM_IDS)[number];
+/** Container preparation and readiness are durable worker stages, not direct sends. */
+export const STAGED_PUBLISHABLE_PLATFORM_IDS = ["threads", "instagram_native"] as const;
+export const PUBLISHABLE_PLATFORM_IDS = [
+  ...DIRECT_PUBLISHABLE_PLATFORM_IDS,
+  ...STAGED_PUBLISHABLE_PLATFORM_IDS,
 ] as const;
 export type PublishablePlatformId = (typeof PUBLISHABLE_PLATFORM_IDS)[number];
 
@@ -88,6 +99,13 @@ export function isPublishablePlatform(id: string): id is PublishablePlatformId {
   return (PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(id);
 }
 
+/** Browser choices and server admission share the same managed authorization modes. */
+export function isManagedOAuthPlatform(id: string): boolean {
+  return (
+    id === "linkedin" || id === "threads" || id === "instagram_native" || id === "facebook_page"
+  );
+}
+
 /**
  * Credential fields each platform's publisher needs. Keyed by PLATFORM_IDS, so the
  * form asks for the right keys instead of a generic "token" for unsupported
@@ -110,6 +128,9 @@ export const PLATFORM_FIELDS: Record<(typeof PLATFORM_IDS)[number], readonly str
   wordpress: ["siteUrl", "username", "applicationPassword"],
   // Personal tokens are installed only by the server-owned authorization flow.
   linkedin: [],
+  threads: [],
+  instagram_native: [],
+  facebook_page: [],
 };
 
 /** Fields that are not secrets — everything else renders as type="password". */
@@ -159,8 +180,8 @@ export const channelCreateSchema = z
     credentials: credentialsBag.optional(),
   })
   .superRefine((channel, ctx) => {
-    if (channel.platform === "linkedin") {
-      ctx.addIssue({ code: "custom", message: "LinkedIn channels require OAuth authorization" });
+    if (isManagedOAuthPlatform(channel.platform)) {
+      ctx.addIssue({ code: "custom", message: "This channel requires OAuth authorization" });
     } else if (isManualPlatform(channel.platform)) {
       if (channel.credentials !== undefined) {
         ctx.addIssue({
