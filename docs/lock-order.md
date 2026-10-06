@@ -858,3 +858,30 @@ immutable UUID/revision/accepted-time audit. Operation target kind/UUID, root
 source UUID and result run UUID are separate immutable audit values without
 resource FKs. Only tenant/brand deletion cleans that audit. Actual transaction
 races and raw run redaction remain step 2/3 integration work, not schema claims.
+
+### Atomic saved-post batch approval
+
+A one-brand batch takes organization `FOR KEY SHARE`, brand `FOR KEY SHARE`,
+then proves the trusted request's current session/user authority through
+`authorizeRequestActor`, followed by the actor's current membership rows
+`FOR SHARE` in ascending ID order.
+Current capability and brand grants are rechecked while those fences are held;
+brand grant replacement takes the conflicting brand `FOR UPDATE` lock.
+
+Before any per-item approval, the batch locks the complete selected adaptation
+union `FOR UPDATE`, all referenced channels `FOR SHARE`, and all selected
+content items `FOR UPDATE`, each union in ascending ID order. Channel `SHARE`
+also prevents a non-key credential or name update during confirmation. Taking
+this complete union first avoids locking one item's parent before another
+item's adaptation. Preview and confirmation use this same order.
+
+`ContentRepository.approveInTransaction` preserves individual approval guards
+and the existing conditional posting-schedule advisory lock. Individual approval
+also fences its brand before locking adaptations. Batch preflight runs this
+helper through every guard without domain/audit/job writes; all snapshot
+fingerprints and blockers are checked before commit mode reuses the helper
+inside the same transaction. A failure in any enqueue rolls the entire batch
+back. The same authority helper checks the database clock again immediately
+before the first domain/queue write, since a held session can naturally expire
+while waiting for child or review locks. Immediate batch approval never takes
+the scheduling advisory lock.

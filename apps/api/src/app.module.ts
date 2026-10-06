@@ -14,6 +14,7 @@ import { ClaimReviewModule } from "./claim-review/claim-review.module";
 import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
 import { ContentAssignmentModule } from "./content-assignment/content-assignment.module";
+import { ContentBatchReviewModule } from "./content-batch-review/content-batch-review.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
 import { HostedAdmissionModule } from "./hosted-admission/hosted-admission.module";
@@ -55,6 +56,7 @@ import { WorkspaceDataModule } from "./workspace-data/workspace-data.module";
     ClientReviewModule,
     ContentModule,
     ContentAssignmentModule,
+    ContentBatchReviewModule,
     FeedsModule,
     OrgModule,
     PaidRepliesModule,

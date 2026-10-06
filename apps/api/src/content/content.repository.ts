@@ -6368,341 +6368,373 @@ export class ContentRepository {
     if (requestedScheduledAt !== null && requestedScheduledAt.getTime() <= Date.now()) {
       throw badRequest("schedule_in_past", "scheduledAt must be in the future");
     }
-    await db.transaction(async (tx) => {
-      await holdOrganization(tx, orgId);
-      await this.requireItem(tx, orgId, id);
-      if (requestedScheduledAt !== null || delayMinutes !== null || queuePreviewToken !== null) {
-        await lockPostingSchedule(tx, orgId);
-      }
-      const targets = await this.lockAdaptations(tx, orgId, id, [
-        "pending",
-        "failed",
-        "scheduled",
-        "manual_ready",
-      ]);
-      // A relative shortcut uses the database clock after any lock wait. The
-      // browser may be minutes ahead or behind; the queue must still mean a
-      // full 30 minutes from this decision.
-      let scheduledAt = requestedScheduledAt;
-      if (delayMinutes !== null) {
-        const [clock] = await tx
-          .select({
-            nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
-          })
-          .from(schema.contentItems)
-          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
-          .limit(1);
-        if (!clock) throw notFound("content_not_found", "Content item not found");
-        scheduledAt = new Date(clock.nowMs + delayMinutes * 60_000);
-      }
-      await this.requireNotPublished(tx, orgId, id, { of: "the item" });
-      if (expectedReviewFingerprint !== null)
-        await this.postingQueue.assertReviewed(tx, orgId, id, expectedReviewFingerprint);
-      const postingTimes =
-        queuePreviewToken !== null
-          ? await this.postingQueue.confirm(tx, orgId, id, queuePreviewToken)
-          : null;
-      if (postingTimes) scheduledAt = postingTimes.values().next().value ?? null;
-      if (
-        scheduledAt !== null &&
-        scheduledAt.getTime() <= (await postingDatabaseNow(tx, orgId)).getTime()
-      ) {
-        throw badRequest(
-          "schedule_in_past",
-          "scheduledAt must remain in the future after scheduling locks",
-        );
-      }
-      const journalDecision = await this.shouldJournalDecision(
-        tx,
+    await db.transaction((tx) =>
+      this.approveInTransaction(
         orgId,
+        tx,
         id,
-        "approved",
-        targets.some((target) => target.status === "failed"),
-      );
-      // After `requireNotPublished` too: an item whose channels are gone AND
-      // which already published from them is a published item first.
-      await this.requireAdaptations(tx, orgId, id);
-      await requireClientReviewApproval(tx, orgId, id);
-      const [unreviewedImage] = await tx
-        .select({ id: schema.contentImageSlots.id })
-        .from(schema.contentImageSlots)
-        .where(
-          and(
-            eq(schema.contentImageSlots.orgId, orgId),
-            eq(schema.contentImageSlots.contentItemId, id),
-            eq(schema.contentImageSlots.needsReview, true),
-          ),
-        )
-        .limit(1);
-      if (unreviewedImage) {
-        throw conflict(
-          "content_images_need_review",
-          "Review the generated article images and their descriptions before approving",
-        );
-      }
-      /*
-       * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
-       * ROW.
-       *
-       * An adaptation whose last finished attempt ended `unknown` may already
-       * be live in someone's channel: the request left this process and the
-       * answer never came back, so nothing here can tell. Re-sending it is how
-       * a person ends up with two copies of one post — which is the whole
-       * reason `deliveryOutcome` exists, and which until now was defended by
-       * two sentences on two screens. Advice, not a control: the adaptation
-       * column has no `unknown`, so the row reads `failed` and `approve`
-       * targeted it like any other.
-       *
-       * Per row rather than per item, because a four-channel post with one
-       * unknown half still has provably undelivered halves, and refusing the
-       * whole request would leave the person no way to send them. The skip
-       * costs nothing it did not already cost: nothing else re-sends by itself.
-       *
-       * THE READ IS AFTER `lockAdaptations`, for the reason
-       * `requireNotPublished` gives at length: delivery state read before the
-       * lock is stale against a worker landing a moment later. It takes no new
-       * lock and changes no order (`docs/lock-order.md`). It is also BEFORE the
-       * schedule guard, which is the next comment's subject.
-       */
-      const unknown = await this.unknownDeliveries(
-        tx,
-        orgId,
-        targets.map((target) => target.id),
-      );
-      const manualReady = targets.filter((target) => target.status === "manual_ready");
-      const sendable = targets.filter(
-        (target) => target.status !== "manual_ready" && !unknown.has(target.id),
-      );
-      const platforms = sendable.length
-        ? await tx
-            .select({ id: schema.channels.id, platform: schema.channels.platform })
-            .from(schema.channels)
-            .where(
-              and(
-                eq(schema.channels.orgId, orgId),
-                inArray(
-                  schema.channels.id,
-                  sendable.map((target) => target.channelId),
-                ),
-              ),
-            )
-        : [];
-      const cover = await tx
+        requestedScheduledAt,
+        delayMinutes,
+        queuePreviewToken,
+        expectedReviewFingerprint,
+      ),
+    );
+    return this.get(orgId, id);
+  }
+
+  /** Reuse the complete approval boundary inside an already locked atomic batch. */
+  async approveInTransaction(
+    orgId: string,
+    tx: Tx,
+    id: string,
+    requestedScheduledAt: Date | null,
+    delayMinutes: 30 | null = null,
+    queuePreviewToken: string | null = null,
+    expectedReviewFingerprint: string | null = null,
+    preflightOnly = false,
+  ): Promise<void> {
+    await holdOrganization(tx, orgId);
+    await this.requireItem(tx, orgId, id);
+    if (requestedScheduledAt !== null || delayMinutes !== null || queuePreviewToken !== null) {
+      await lockPostingSchedule(tx, orgId);
+    }
+    // All approval writers fence brand deletion/grant replacement before child locks.
+    const [scope] = await tx
+      .select({ brandId: schema.contentItems.brandId })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+    const [brand] = scope
+      ? await tx
+          .select({ id: schema.brands.id })
+          .from(schema.brands)
+          .where(and(eq(schema.brands.orgId, orgId), eq(schema.brands.id, scope.brandId)))
+          .for("key share")
+      : [];
+    if (!brand) throw notFound("content_not_found", "Content item not found");
+    const targets = await this.lockAdaptations(tx, orgId, id, [
+      "pending",
+      "failed",
+      "scheduled",
+      "manual_ready",
+    ]);
+    // A relative shortcut uses the database clock after any lock wait. The
+    // browser may be minutes ahead or behind; the queue must still mean a
+    // full 30 minutes from this decision.
+    let scheduledAt = requestedScheduledAt;
+    if (delayMinutes !== null) {
+      const [clock] = await tx
         .select({
-          id: schema.contentItems.coverMediaId,
-          videoId: schema.contentItems.videoMediaId,
-          body: schema.contentItems.body,
+          nowMs: sql<number>`extract(epoch from clock_timestamp()) * 1000`.mapWith(Number),
         })
         .from(schema.contentItems)
         .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
         .limit(1);
-      const coveredItem = cover[0];
-      if (coveredItem?.id && coveredItem.videoId) {
-        throw conflict("content_media_invalid", "A post cannot publish both a cover and a video");
-      }
-      if (coveredItem?.id) {
-        if (
-          platforms.some(
-            (channel) =>
-              !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
-          ) ||
-          manualReady.length
-        ) {
-          throw conflict(
-            "content_media_unsupported",
-            "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
-          );
-        }
-      }
-      // Approval is the final boundary before a queued publisher can read this
-      // text. Preflight the exact inherited or overridden channel body now,
-      // including historic rows that bypassed today's editor validation.
-      const overrideBodies = await tx
-        .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
-        .from(schema.adaptations)
-        .where(
-          and(
-            eq(schema.adaptations.orgId, orgId),
-            eq(schema.adaptations.contentItemId, id),
-            inArray(
-              schema.adaptations.channelId,
-              platforms
-                .filter((channel) => channel.platform === "telegram")
-                .map((channel) => channel.id),
+      if (!clock) throw notFound("content_not_found", "Content item not found");
+      scheduledAt = new Date(clock.nowMs + delayMinutes * 60_000);
+    }
+    await this.requireNotPublished(tx, orgId, id, { of: "the item" });
+    if (expectedReviewFingerprint !== null)
+      await this.postingQueue.assertReviewed(tx, orgId, id, expectedReviewFingerprint);
+    const postingTimes =
+      queuePreviewToken !== null
+        ? await this.postingQueue.confirm(tx, orgId, id, queuePreviewToken)
+        : null;
+    if (postingTimes) scheduledAt = postingTimes.values().next().value ?? null;
+    if (
+      scheduledAt !== null &&
+      scheduledAt.getTime() <= (await postingDatabaseNow(tx, orgId)).getTime()
+    ) {
+      throw badRequest(
+        "schedule_in_past",
+        "scheduledAt must remain in the future after scheduling locks",
+      );
+    }
+    const journalDecision = await this.shouldJournalDecision(
+      tx,
+      orgId,
+      id,
+      "approved",
+      targets.some((target) => target.status === "failed"),
+    );
+    // After `requireNotPublished` too: an item whose channels are gone AND
+    // which already published from them is a published item first.
+    await this.requireAdaptations(tx, orgId, id);
+    await requireClientReviewApproval(tx, orgId, id);
+    const [unreviewedImage] = await tx
+      .select({ id: schema.contentImageSlots.id })
+      .from(schema.contentImageSlots)
+      .where(
+        and(
+          eq(schema.contentImageSlots.orgId, orgId),
+          eq(schema.contentImageSlots.contentItemId, id),
+          eq(schema.contentImageSlots.needsReview, true),
+        ),
+      )
+      .limit(1);
+    if (unreviewedImage) {
+      throw conflict(
+        "content_images_need_review",
+        "Review the generated article images and their descriptions before approving",
+      );
+    }
+    /*
+     * A DELIVERY NOBODY CAN SPEAK FOR IS NOT RE-SENT, and the skip is PER
+     * ROW.
+     *
+     * An adaptation whose last finished attempt ended `unknown` may already
+     * be live in someone's channel: the request left this process and the
+     * answer never came back, so nothing here can tell. Re-sending it is how
+     * a person ends up with two copies of one post — which is the whole
+     * reason `deliveryOutcome` exists, and which until now was defended by
+     * two sentences on two screens. Advice, not a control: the adaptation
+     * column has no `unknown`, so the row reads `failed` and `approve`
+     * targeted it like any other.
+     *
+     * Per row rather than per item, because a four-channel post with one
+     * unknown half still has provably undelivered halves, and refusing the
+     * whole request would leave the person no way to send them. The skip
+     * costs nothing it did not already cost: nothing else re-sends by itself.
+     *
+     * THE READ IS AFTER `lockAdaptations`, for the reason
+     * `requireNotPublished` gives at length: delivery state read before the
+     * lock is stale against a worker landing a moment later. It takes no new
+     * lock and changes no order (`docs/lock-order.md`). It is also BEFORE the
+     * schedule guard, which is the next comment's subject.
+     */
+    const unknown = await this.unknownDeliveries(
+      tx,
+      orgId,
+      targets.map((target) => target.id),
+    );
+    const manualReady = targets.filter((target) => target.status === "manual_ready");
+    const sendable = targets.filter(
+      (target) => target.status !== "manual_ready" && !unknown.has(target.id),
+    );
+    const platforms = sendable.length
+      ? await tx
+          .select({ id: schema.channels.id, platform: schema.channels.platform })
+          .from(schema.channels)
+          .where(
+            and(
+              eq(schema.channels.orgId, orgId),
+              inArray(
+                schema.channels.id,
+                sendable.map((target) => target.channelId),
+              ),
             ),
-          ),
-        );
-      for (const row of overrideBodies) {
-        const problem = telegramTextProblem(
-          row.body ?? coveredItem?.body ?? "",
-          coveredItem?.id != null,
-          coveredItem?.videoId != null,
-        );
-        if (problem) {
-          throw conflict(
-            coveredItem?.videoId &&
-              (row.body ?? coveredItem.body).length > TELEGRAM_PHOTO_CAPTION_LENGTH
-              ? "content_media_caption_too_long"
-              : "invalid_request",
-            problem,
-          );
-        }
-      }
-      if (coveredItem?.videoId) {
-        if (
-          platforms.some((channel) => !["telegram", "vk"].includes(channel.platform)) ||
-          manualReady.length
-        ) {
-          throw conflict(
-            "content_media_unsupported",
-            "Videos currently publish only to Telegram and VK channels",
-          );
-        }
-      }
-      const platformByChannel = new Map(platforms.map((row) => [row.id, row.platform]));
+          )
+      : [];
+    const cover = await tx
+      .select({
+        id: schema.contentItems.coverMediaId,
+        videoId: schema.contentItems.videoMediaId,
+        body: schema.contentItems.body,
+      })
+      .from(schema.contentItems)
+      .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
+      .limit(1);
+    const coveredItem = cover[0];
+    if (coveredItem?.id && coveredItem.videoId) {
+      throw conflict("content_media_invalid", "A post cannot publish both a cover and a video");
+    }
+    if (coveredItem?.id) {
       if (
-        scheduledAt !== null &&
-        (manualReady.length > 0 ||
-          sendable.some((target) =>
-            isManualPlatform(platformByChannel.get(target.channelId) ?? ""),
-          ))
+        platforms.some(
+          (channel) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform),
+        ) ||
+        manualReady.length
       ) {
-        throw badRequest(
-          "manual_schedule_unsupported",
-          "Manual VC.ru publishing cannot be scheduled from Pubrick",
+        throw conflict(
+          "content_media_unsupported",
+          "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
         );
       }
-      /*
-       * A REQUEST THAT NAMES A TIME MAY NOT SKIP A CHANNEL AT ALL — and this is
-       * why the unknown rows are read BEFORE the schedule is checked rather
-       * than after it.
-       *
-       * `requireScheduleReachesEveryChannel` reads the adaptation STATUS
-       * column, which has no value for "unknown": a row nobody can speak for
-       * reads `failed`, so a timed approve over `{failed, unknown}` passed the
-       * check whose whole job is the sentence its name is, then skipped that
-       * channel and answered 200. The reader was told the post goes out, whole,
-       * at the time they picked.
-       *
-       * Skipping is right for "publish now" and wrong for a schedule, and the
-       * difference is the promise, not the mechanism: "now" says nothing about
-       * the row it leaves alone, which the response still reports as it was,
-       * while a time is a claim about every channel at once. So a timed request
-       * that would skip anything is refused — the standard this guard, the
-       * empty-target refusal below and `requireAdaptations` all set.
-       *
-       * BEFORE the guard, so the reader is told what is actually in their way:
-       * the unknown delivery they must go and look at, rather than a sentence
-       * about a queue.
-       */
-      if (scheduledAt !== null) {
-        if (unknown.size > 0) {
-          throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
-        }
-        // Only for a request that names a time: "Publish now" over a queued or
-        // publishing channel is already true of it. See the method's own comment.
-        await this.requireScheduleReachesEveryChannel(tx, orgId, id);
+    }
+    // Approval is the final boundary before a queued publisher can read this
+    // text. Preflight the exact inherited or overridden channel body now,
+    // including historic rows that bypassed today's editor validation.
+    const overrideBodies = await tx
+      .select({ body: schema.adaptations.body, channelId: schema.adaptations.channelId })
+      .from(schema.adaptations)
+      .where(
+        and(
+          eq(schema.adaptations.orgId, orgId),
+          eq(schema.adaptations.contentItemId, id),
+          inArray(
+            schema.adaptations.channelId,
+            platforms
+              .filter((channel) => channel.platform === "telegram")
+              .map((channel) => channel.id),
+          ),
+        ),
+      );
+    for (const row of overrideBodies) {
+      const problem = telegramTextProblem(
+        row.body ?? coveredItem?.body ?? "",
+        coveredItem?.id != null,
+        coveredItem?.videoId != null,
+      );
+      if (problem) {
+        throw conflict(
+          coveredItem?.videoId &&
+            (row.body ?? coveredItem.body).length > TELEGRAM_PHOTO_CAPTION_LENGTH
+            ? "content_media_caption_too_long"
+            : "invalid_request",
+          problem,
+        );
       }
-      // After `requireNotPublished`: an item already live in a channel gets the
-      // message about the post that went out, not one about reading it. Before
-      // the loop, so a refusal costs no queue work.
-      await this.requireHumanInvolvement(tx, orgId, id);
-
-      /*
-       * AND WHEN THE SKIP LEAVES NOTHING TO ENQUEUE it refuses rather than
-       * answering 200 — the same judgement `requireAdaptations` and
-       * `requireScheduleReachesEveryChannel` make, and for the same reason: a
-       * 200 that did no work is a report the reader has to discover is false.
-       * The way out is the resolver (`assertDelivery`), which this refusal
-       * shipped with — without it a person could only finish the post by
-       * deleting the channel.
-       *
-       * Unreachable for a timed request, which is refused above before it can
-       * skip anything: this is the "publish now" ending.
-       */
-      if (sendable.length === 0 && unknown.size > 0) {
+    }
+    if (coveredItem?.videoId) {
+      if (
+        platforms.some((channel) => !["telegram", "vk"].includes(channel.platform)) ||
+        manualReady.length
+      ) {
+        throw conflict(
+          "content_media_unsupported",
+          "Videos currently publish only to Telegram and VK channels",
+        );
+      }
+    }
+    const platformByChannel = new Map(platforms.map((row) => [row.id, row.platform]));
+    if (
+      scheduledAt !== null &&
+      (manualReady.length > 0 ||
+        sendable.some((target) => isManualPlatform(platformByChannel.get(target.channelId) ?? "")))
+    ) {
+      throw badRequest(
+        "manual_schedule_unsupported",
+        "Manual VC.ru publishing cannot be scheduled from Pubrick",
+      );
+    }
+    /*
+     * A REQUEST THAT NAMES A TIME MAY NOT SKIP A CHANNEL AT ALL — and this is
+     * why the unknown rows are read BEFORE the schedule is checked rather
+     * than after it.
+     *
+     * `requireScheduleReachesEveryChannel` reads the adaptation STATUS
+     * column, which has no value for "unknown": a row nobody can speak for
+     * reads `failed`, so a timed approve over `{failed, unknown}` passed the
+     * check whose whole job is the sentence its name is, then skipped that
+     * channel and answered 200. The reader was told the post goes out, whole,
+     * at the time they picked.
+     *
+     * Skipping is right for "publish now" and wrong for a schedule, and the
+     * difference is the promise, not the mechanism: "now" says nothing about
+     * the row it leaves alone, which the response still reports as it was,
+     * while a time is a claim about every channel at once. So a timed request
+     * that would skip anything is refused — the standard this guard, the
+     * empty-target refusal below and `requireAdaptations` all set.
+     *
+     * BEFORE the guard, so the reader is told what is actually in their way:
+     * the unknown delivery they must go and look at, rather than a sentence
+     * about a queue.
+     */
+    if (scheduledAt !== null) {
+      if (unknown.size > 0) {
         throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
       }
-      if (sendable.length === 0 && manualReady.length > 0) {
-        throw conflict(
-          "manual_publication_pending",
-          "This post is ready for you to publish manually",
-        );
-      }
+      // Only for a request that names a time: "Publish now" over a queued or
+      // publishing channel is already true of it. See the method's own comment.
+      await this.requireScheduleReachesEveryChannel(tx, orgId, id);
+    }
+    // After `requireNotPublished`: an item already live in a channel gets the
+    // message about the post that went out, not one about reading it. Before
+    // the loop, so a refusal costs no queue work.
+    await this.requireHumanInvolvement(tx, orgId, id);
 
-      if (scheduledAt !== null) {
-        await assertPostingTimesAvailable(
-          tx,
-          orgId,
-          sendable.map((adaptation) => ({
-            adaptationId: adaptation.id,
-            channelId: adaptation.channelId,
-            scheduledAt: postingTimes?.get(adaptation.id) ?? (scheduledAt as Date),
-          })),
-        );
-      }
+    /*
+     * AND WHEN THE SKIP LEAVES NOTHING TO ENQUEUE it refuses rather than
+     * answering 200 — the same judgement `requireAdaptations` and
+     * `requireScheduleReachesEveryChannel` make, and for the same reason: a
+     * 200 that did no work is a report the reader has to discover is false.
+     * The way out is the resolver (`assertDelivery`), which this refusal
+     * shipped with — without it a person could only finish the post by
+     * deleting the channel.
+     *
+     * Unreachable for a timed request, which is refused above before it can
+     * skip anything: this is the "publish now" ending.
+     */
+    if (sendable.length === 0 && unknown.size > 0) {
+      throw conflict("delivery_outcome_unknown", DELIVERY_OUTCOME_UNKNOWN_MESSAGE);
+    }
+    if (sendable.length === 0 && manualReady.length > 0) {
+      throw conflict(
+        "manual_publication_pending",
+        "This post is ready for you to publish manually",
+      );
+    }
 
-      for (const adaptation of sendable) {
-        const deliveryTime = postingTimes?.get(adaptation.id) ?? scheduledAt;
-        if (isManualPlatform(platformByChannel.get(adaptation.channelId) ?? "")) {
-          await tx
-            .update(schema.adaptations)
-            .set({
-              status: "manual_ready",
-              scheduledAt: null,
-              lastError: null,
-              failureReason: null,
-            })
-            .where(
-              and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
-            );
-          continue;
-        }
-        // CURRENT attempt count (before this attempt) — see publishJobId's contract.
-        let attemptCount = adaptation.attemptCount;
-        if (adaptation.status === "scheduled") {
-          // The cancelled job keeps its id, so the count must advance or the
-          // re-enqueue would be swallowed by send()'s ON CONFLICT DO NOTHING.
-          await this.queue.cancelPublish(tx, adaptation.id, orgId);
-          attemptCount += 1;
-        }
+    if (scheduledAt !== null) {
+      await assertPostingTimesAvailable(
+        tx,
+        orgId,
+        sendable.map((adaptation) => ({
+          adaptationId: adaptation.id,
+          channelId: adaptation.channelId,
+          scheduledAt: postingTimes?.get(adaptation.id) ?? (scheduledAt as Date),
+        })),
+      );
+    }
+
+    // A preview reaches the same guards without writing statuses, audit or jobs.
+    if (preflightOnly) return;
+
+    for (const adaptation of sendable) {
+      const deliveryTime = postingTimes?.get(adaptation.id) ?? scheduledAt;
+      if (isManualPlatform(platformByChannel.get(adaptation.channelId) ?? "")) {
         await tx
           .update(schema.adaptations)
           .set({
-            status: deliveryTime ? "scheduled" : "queued",
-            // `null` FOR "PUBLISH NOW", and that is load-bearing rather than
-            // incidental. A row that missed its slot is `failed` with the slot
-            // still on it; "Publish now" has to erase the slot, or the worker
-            // would load the same overdue `scheduled_at`, find itself past the
-            // bound again, and fail the row for ever — a post nobody could ever
-            // send. Writing it conditionally (`...(scheduledAt && { scheduledAt })`)
-            // is exactly that loop.
-            scheduledAt: deliveryTime,
+            status: "manual_ready",
+            scheduledAt: null,
             lastError: null,
-            // Beside the `lastError` it already clears, for the same reason:
-            // the row is outstanding again and the previous attempt's verdict
-            // is not its verdict. Leaving the code would have the screen
-            // caption a re-approved row "Missed its slot".
             failureReason: null,
-            attemptCount,
           })
           .where(
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)),
           );
-        await this.queue.enqueuePublish(
-          tx,
-          { id: adaptation.id, orgId, channelId: adaptation.channelId, attemptCount },
-          deliveryTime,
-        );
+        continue;
       }
-
-      await this.setItemStatus(tx, orgId, id, "approved");
-      if (journalDecision.should && (sendable.length > 0 || manualReady.length > 0)) {
-        await this.appendPromptDecision(tx, orgId, id, "approved", journalDecision.ordinal);
+      // CURRENT attempt count (before this attempt) — see publishJobId's contract.
+      let attemptCount = adaptation.attemptCount;
+      if (adaptation.status === "scheduled") {
+        // The cancelled job keeps its id, so the count must advance or the
+        // re-enqueue would be swallowed by send()'s ON CONFLICT DO NOTHING.
+        await this.queue.cancelPublish(tx, adaptation.id, orgId);
+        attemptCount += 1;
       }
-    });
+      await tx
+        .update(schema.adaptations)
+        .set({
+          status: deliveryTime ? "scheduled" : "queued",
+          // `null` FOR "PUBLISH NOW", and that is load-bearing rather than
+          // incidental. A row that missed its slot is `failed` with the slot
+          // still on it; "Publish now" has to erase the slot, or the worker
+          // would load the same overdue `scheduled_at`, find itself past the
+          // bound again, and fail the row for ever — a post nobody could ever
+          // send. Writing it conditionally (`...(scheduledAt && { scheduledAt })`)
+          // is exactly that loop.
+          scheduledAt: deliveryTime,
+          lastError: null,
+          // Beside the `lastError` it already clears, for the same reason:
+          // the row is outstanding again and the previous attempt's verdict
+          // is not its verdict. Leaving the code would have the screen
+          // caption a re-approved row "Missed its slot".
+          failureReason: null,
+          attemptCount,
+        })
+        .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, adaptation.id)));
+      await this.queue.enqueuePublish(
+        tx,
+        { id: adaptation.id, orgId, channelId: adaptation.channelId, attemptCount },
+        deliveryTime,
+      );
+    }
 
-    return this.get(orgId, id);
+    await this.setItemStatus(tx, orgId, id, "approved");
+    if (journalDecision.should && (sendable.length > 0 || manualReady.length > 0)) {
+      await this.appendPromptDecision(tx, orgId, id, "approved", journalDecision.ordinal);
+    }
   }
 
   /** Move exactly one automatic channel's outstanding job without re-approving its siblings. */

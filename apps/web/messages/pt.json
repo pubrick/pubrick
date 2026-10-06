@@ -1921,7 +1921,10 @@
     "linkedin_connection_changed": "Esta conexão do LinkedIn mudou. Recarregue o canal antes de reconectar ou desconectar.",
     "linkedin_reconnect_required": "Reconecte esta conta do LinkedIn antes de verificar ou publicar.",
     "linkedin_oauth_required": "Conecte o LinkedIn pela autorização na página da marca. Não é possível colar tokens.",
-    "linkedin_authorization_capacity": "Há muitas solicitações de autorização do LinkedIn pendentes. Aguarde dez minutos e tente novamente."
+    "linkedin_authorization_capacity": "Há muitas solicitações de autorização do LinkedIn pendentes. Aguarde dez minutos e tente novamente.",
+    "batch_review_changed": "Esta seleção mudou. Recarregue e revise as versões atuais.",
+    "batch_review_not_ready": "Esta publicação não pode fazer parte da seleção. Abra-a para revisar os envios e as verificações necessárias.",
+    "batch_review_authority_changed": "Sua sessão ou permissões mudaram. Entre novamente e depois recarregue e revise a seleção."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -3359,5 +3362,41 @@
     "humanReceipt": "Confirmada por uma pessoa",
     "more": "Carregar mais",
     "loading": "A carregar…"
+  },
+  "BatchReview": {
+    "title": "Rever publicações selecionadas",
+    "select": "Selecionar {title}",
+    "otherBrand": "Outra marca — limpe a seleção para mudar",
+    "selected": "{count} selecionadas · até {limit}",
+    "clear": "Limpar",
+    "review": "Rever",
+    "loadedOnly": "Selecione publicações individuais carregadas nesta fila. A seleção está limitada a uma marca.",
+    "brand": "Marca: {name}",
+    "brandLoading": "Carregando a marca selecionada…",
+    "hint": "Leia cada publicação salva e o texto exato de cada canal; depois confirme cada versão. A aprovação coloca esta seleção na fila para envio imediato.",
+    "failed": "Não foi possível rever a seleção. Recarregue e tente novamente.",
+    "close": "Fechar",
+    "approve": "Aprovar",
+    "queuing": "Adicionando à fila…",
+    "queued": "{count} publicações na fila. Os resultados do envio aparecerão na fila.",
+    "refreshFailed": "As publicações foram colocadas na fila, mas não foi possível atualizá-la. Recarregue a fila para ver os resultados do envio.",
+    "loading": "Carregando versões salvas…",
+    "untitled": "Publicação sem título",
+    "master": "Texto principal salvo",
+    "destination": "{name} · {platform}",
+    "hashtags": "Metadados de hashtags: {text}",
+    "cta": "Metadados de chamada à ação: {text}",
+    "paragraph": "Após o parágrafo {number}",
+    "media": {
+      "cover": "Capa enviada aos canais compatíveis",
+      "video": "Vídeo enviado aos canais compatíveis",
+      "inline": "Imagem do artigo salvo — confira a posição no editor"
+    },
+    "openEditor": "Abrir",
+    "acknowledge": "Revisei a versão salva de “{title}” e o texto de cada canal acima.",
+    "reload": "Recarregar",
+    "changed": "Esta seleção mudou. Recarregue e revise as versões atuais.",
+    "notReady": "Esta publicação não pode fazer parte da seleção. Abra-a para revisar os envios e as verificações necessárias.",
+    "brandUnavailable": "Não foi possível carregar a marca selecionada. Rever tenta novamente."
   }
 }

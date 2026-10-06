@@ -1921,7 +1921,10 @@
     "linkedin_connection_changed": "This LinkedIn connection changed. Reload the channel before reconnecting or disconnecting.",
     "linkedin_reconnect_required": "Reconnect this LinkedIn account before checking or publishing.",
     "linkedin_oauth_required": "Connect LinkedIn through authorization on the brand page. Tokens cannot be pasted.",
-    "linkedin_authorization_capacity": "Too many LinkedIn authorization requests are pending. Wait ten minutes and try again."
+    "linkedin_authorization_capacity": "Too many LinkedIn authorization requests are pending. Wait ten minutes and try again.",
+    "batch_review_changed": "This selection changed. Reload and review the current versions.",
+    "batch_review_not_ready": "This post cannot join this selection. Open it to review its deliveries and required checks.",
+    "batch_review_authority_changed": "Your session or permissions changed. Sign in again, then reload and review the selection."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -3359,5 +3362,41 @@
     "humanReceipt": "Confirmed by a person",
     "more": "Load more",
     "loading": "Loading…"
+  },
+  "BatchReview": {
+    "title": "Review selected posts",
+    "select": "Select {title}",
+    "otherBrand": "Another brand — clear the selection to switch",
+    "selected": "{count} selected · up to {limit}",
+    "clear": "Clear",
+    "review": "Review",
+    "loadedOnly": "Select individual posts loaded in this queue. This selection is limited to one brand.",
+    "brand": "Brand: {name}",
+    "brandLoading": "Loading selected brand…",
+    "hint": "Read each saved post and its exact channel text, then acknowledge each version. Approval queues this selection for immediate delivery.",
+    "failed": "The selection could not be reviewed. Reload it and try again.",
+    "close": "Close",
+    "approve": "Approve",
+    "queuing": "Queuing…",
+    "queued": "{count} posts queued. Delivery results appear in the queue.",
+    "refreshFailed": "The posts were queued, but the queue could not be refreshed. Reload the queue to see their delivery results.",
+    "loading": "Loading saved versions…",
+    "untitled": "Untitled post",
+    "master": "Saved master",
+    "destination": "{name} · {platform}",
+    "hashtags": "Hashtags metadata: {text}",
+    "cta": "Call to action metadata: {text}",
+    "paragraph": "After paragraph {number}",
+    "media": {
+      "cover": "Cover sent with supported channel deliveries",
+      "video": "Video sent with supported channel deliveries",
+      "inline": "Image in the saved article — inspect placement in the editor"
+    },
+    "openEditor": "Open",
+    "acknowledge": "I reviewed the saved version of “{title}” and each channel above.",
+    "reload": "Reload",
+    "changed": "This selection changed. Reload and review the current versions.",
+    "notReady": "This post cannot join this selection. Open it to review its deliveries and required checks.",
+    "brandUnavailable": "The selected brand could not be loaded. Review retries this read."
   }
 }
