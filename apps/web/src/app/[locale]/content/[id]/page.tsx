@@ -3160,6 +3160,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       <ClientReviewLink
         itemId={id}
         canCreate={["draft", "rejected", "failed"].includes(item.status)}
+        editsPending={approvalEditsPending}
         revision={JSON.stringify([
           item.updatedAt,
           item.coverMediaId,

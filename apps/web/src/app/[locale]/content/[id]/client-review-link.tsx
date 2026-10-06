@@ -30,10 +30,12 @@ export function ClientReviewLink({
   itemId,
   revision,
   canCreate,
+  editsPending = false,
 }: {
   itemId: string;
   revision: string;
   canCreate: boolean;
+  editsPending?: boolean;
 }) {
   const t = useTranslations("ClientReviewLink");
   const te = useTranslations("Errors");
@@ -73,7 +75,7 @@ export function ClientReviewLink({
   }, [load, revision]);
 
   async function create() {
-    if (busy) return;
+    if (busy || editsPending) return;
     setBusy(true);
     setError(null);
     setLink(null);
@@ -127,6 +129,11 @@ export function ClientReviewLink({
     <Card className="mb-6" aria-label={t("title")}>
       <h2 className="text-lg font-semibold text-fg">{t("title")}</h2>
       <p className="mt-1 text-sm text-fg-secondary">{t("hint")}</p>
+      {canManage && canCreate && editsPending && (
+        <p className="mt-3 text-sm text-fg-secondary" role="status">
+          {t("saveBeforeSharing")}
+        </p>
+      )}
       {status ? (
         <p className="mt-3 text-sm text-fg" role="status">
           {t(`status.${status.status}`)}
@@ -173,7 +180,7 @@ export function ClientReviewLink({
             <Button
               className="min-h-11"
               variant="secondary"
-              disabled={busy}
+              disabled={busy || editsPending}
               onClick={() => void create()}
             >
               {status.status === "none" || status.status === "revoked" ? t("create") : t("replace")}

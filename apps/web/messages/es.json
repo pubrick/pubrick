@@ -588,7 +588,8 @@
       "expired": "El enlace de revisión caducó",
       "revoked": "El enlace de revisión fue revocado",
       "stale": "El borrador cambió después de crear el enlace"
-    }
+    },
+    "saveBeforeSharing": "Guarda los cambios antes de crear un enlace de revisión. El cliente revisa la versión guardada."
   },
   "ClientReviewGuest": {
     "title": "Revisar este borrador",

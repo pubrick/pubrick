@@ -1126,6 +1126,8 @@ describe("saved content before publication", () => {
       installBaseHandlers(served, calls);
       await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
       await screen.findByRole("button", { name: en.Publish.approveNow });
+      const share = await screen.findByRole("button", { name: en.ClientReviewLink.create });
+      expect(share).toBeEnabled();
       const field =
         level === "master"
           ? screen.getByRole("textbox", { name: en.Publish.bodyLabel })
@@ -1134,6 +1136,12 @@ describe("saved content before publication", () => {
             });
       fireEvent.change(field, { target: { value: "Visible unsaved changes" } });
       expect(await screen.findByText(en.Publish.saveBeforePublishing)).toBeVisible();
+      expect(screen.getByText(en.ClientReviewLink.saveBeforeSharing)).toBeVisible();
+      expect(share).toBeDisabled();
+      await userEvent.setup().click(share);
+      expect(
+        calls.filter((call) => call.method === "POST" && call.path.endsWith("/client-review-link")),
+      ).toEqual([]);
       expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
       expect(
         screen.getByRole("button", { name: en.Publish.approveAfterThirtyMinutes }),

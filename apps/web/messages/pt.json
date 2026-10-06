@@ -588,7 +588,8 @@
       "expired": "O link de revisão expirou",
       "revoked": "O link de revisão foi revogado",
       "stale": "O rascunho mudou após a criação do link"
-    }
+    },
+    "saveBeforeSharing": "Salve as alterações antes de criar um link de revisão. O cliente revisa a versão salva."
   },
   "ClientReviewGuest": {
     "title": "Revisar este rascunho",

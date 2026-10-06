@@ -588,7 +588,8 @@
       "expired": "Review link expired",
       "revoked": "Review link revoked",
       "stale": "Draft changed after the link was created"
-    }
+    },
+    "saveBeforeSharing": "Save your changes before creating a review link. The client reviews the saved version."
   },
   "ClientReviewGuest": {
     "title": "Review this draft",
