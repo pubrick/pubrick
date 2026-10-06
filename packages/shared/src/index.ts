@@ -196,6 +196,7 @@ export * from "./link-policy-defaults.js";
 export * from "./linkedin-environment.js";
 export * from "./meta-environment.js";
 export * from "./meta-media-access.js";
+export * from "./meta-publication.js";
 export * from "./organization-roles.js";
 export {
   adaptationLimit,

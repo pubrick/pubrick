@@ -43,6 +43,10 @@ export interface PublisherOptions {
   fetchImpl?: typeof fetch;
   /** Server application credentials for LinkedIn's token inspector; never part of a channel bag. */
   linkedin?: { clientId: string; clientSecret: string };
+  /** Server-owned Facebook application for Page/User token inspection. */
+  facebookPage?: { clientId: string; clientSecret: string };
+  /** Recheck the saved destination/send claim after Facebook's read-only preflight. */
+  beforeFacebookPageCreate?: () => Promise<void>;
   /** Recheck the saved connection/send claim after LinkedIn's read-only preflight, before create. */
   beforeLinkedInCreate?: () => Promise<void>;
   /** Persist the accepted Telegram photo and frozen reply before attempting the reply. */
