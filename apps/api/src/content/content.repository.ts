@@ -2411,8 +2411,13 @@ export class ContentRepository {
       await holdOrganization(tx, orgId);
       const current = await this.requireEditableItem(tx, orgId, id);
       if (
-        data.richBody !== undefined &&
-        (data.expectedBody !== current.body || data.expectedBodyRevision !== current.bodyRevision)
+        (data.richBody !== undefined &&
+          (data.expectedBody !== current.body ||
+            data.expectedBodyRevision !== current.bodyRevision)) ||
+        (data.body !== undefined &&
+          ((data.expectedBody !== undefined && data.expectedBody !== current.body) ||
+            (data.expectedBodyRevision !== undefined &&
+              data.expectedBodyRevision !== current.bodyRevision)))
       ) {
         throw bodyRevisionConflict(current.bodyRevision);
       }
@@ -4777,6 +4782,9 @@ export class ContentRepository {
       }
 
       if (
+        (data.body !== undefined &&
+          data.expectedBody !== undefined &&
+          current.body !== data.expectedBody) ||
         (data.hashtags !== undefined &&
           JSON.stringify(current.hashtags) !== JSON.stringify(data.expectedHashtags)) ||
         (data.cta !== undefined && current.cta !== data.expectedCta)
