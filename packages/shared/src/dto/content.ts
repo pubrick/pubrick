@@ -471,7 +471,9 @@ export const contentUpdateSchema = z
     title: titleText.optional(),
     body: bodyText.optional(),
     richBody: richBodySchema.nullable().optional(),
+    /** Exact saved master text; optional for legacy plain-text writers. */
     expectedBody: z.string().max(MAX_BODY_LENGTH).optional(),
+    /** Saved revision also fences formatting changes and text restored to the same bytes. */
     expectedBodyRevision: z.number().int().min(0).optional(),
   })
   .refine(
@@ -501,6 +503,8 @@ export const adaptationUpdateSchema = z
   .object({
     /** Authored text without managed hashtags; `null` clears the override. */
     body: channelBodyText.nullable().optional(),
+    /** Exact saved override, including managed hashtags; null means master inheritance. */
+    expectedBody: z.string().max(MAX_CHANNEL_BODY_LENGTH).nullable().optional(),
     hashtags: z
       .array(
         z
