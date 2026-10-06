@@ -91,7 +91,49 @@ of the milestone 2 package and awaits its final built acceptance.
 
 ## Milestone 2 — composer and publication calendar
 
-Implementation and verification are in progress in independent checkouts.
-This section will record retained edits, saved-body compare-and-swap behavior,
-scoped calendar reads, atomic moves and the combined desktop/mobile journey
-after their integrated checks finish.
+Integrated source: `fed163bf`; final browser selector correction: `0fc13356`.
+Independent checkouts implemented and reviewed the composer, calendar API and
+UI before integration. A post-commit restore race found during review was fixed
+by returning an atomic restored-body acknowledgement from the locked write.
+
+Implemented behavior:
+
+- Channel tabs retain unsaved edits and support keyboard navigation.
+- Saved-body and rich-revision comparisons refuse overwriting a teammate's work.
+- Restoring a version retains the acknowledged baseline across later reads;
+  a same-text formatting change cannot silently become the editor's baseline.
+- Channel previews explain actual text/media limits without promising delivery.
+- Scheduled calendar reads are bounded, tenant/brand/filter-scoped and paginated.
+- Confirmed moves and swaps update delivery times and jobs atomically; occupied,
+  stale, near-due and uncertain deliveries are refused without partial changes.
+- Attempt-count and expected-time guards independently catch stale selections.
+- Mobile and keyboard controls provide an alternative to dragging, with
+  44-pixel dialog and posting-control hit areas.
+
+### Integrated local gates
+
+The final integrated run passed **276 API cases** across content, rich content,
+body compare-and-swap and publication calendar suites; **554 shared-contract
+cases**; **1,648 web cases**; all **20 typecheck tasks**; and Biome across
+**1,158 files**. The API run includes real database rollback, worker-lock wait,
+atomic restore and independent stale-time/attempt regressions. It used the owned
+loopback PostgreSQL test database, with durability settings enabled.
+
+### Built browser acceptance
+
+`node scripts/e2e/run.mjs` passed from clean source
+`0fc13356cbad55a4e93284c54278d232d444ea34`: **three journeys, 44.5 seconds**.
+The existing account/delivery and scoped-write journeys passed alongside the new
+composer/calendar journey. The latter saved different texts for two channels,
+switched tabs using the keyboard, confirmed exact-time swaps on a 390-pixel
+screen, checked that the sibling delivery stayed unchanged, refused an entire
+stale swap after another editor's move, reloaded and opened the correct channel
+version. Confirmation alone created no changes. The first run selected the first
+of two identically titled channel cards; its locator was corrected to select the
+intended channel without changing production behavior or weakening assertions.
+
+Mobile calendar, confirmation and posting screenshots were inspected for
+overflow, readable destinations/times and visible actions. The runner removed
+its owned processes, media directory and disposable database. Outbound Telegram
+remains a fixture, not a live-provider acceptance claim. The owner's retained
+database and other projects were preserved.

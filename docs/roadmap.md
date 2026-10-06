@@ -13,6 +13,13 @@ records the P0–P5 scope; [porting status](porting-status.md) describes today's
 capabilities and their exact limits. Neither a planned feature nor a manual
 platform handoff should be described as automatic delivery.
 
+Competitive parity milestones 1 and 2 are implemented and locally accepted:
+safe saved-content review, weekly publication slots, retained channel editing
+and an atomic publication calendar. The combined built desktop/mobile journeys
+passed; see the [core workflow evidence](verification/competitive-parity-core.md).
+The next implementation milestone is international native destinations, starting
+with WordPress and LinkedIn and their connection/credential lifecycle.
+
 ## Current position
 
 | Original phase | Current implementation | Remaining scope |
