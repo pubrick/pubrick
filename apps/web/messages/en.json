@@ -3325,7 +3325,7 @@
     },
     "disconnectTitle": "Disconnect LinkedIn?",
     "disconnectBody": "Remove the saved LinkedIn credentials for {name}. Scheduled work and publication history are kept. A publication already being sent may finish.",
-    "connectHint": "Authorize your personal LinkedIn account. Pubrick verifies permission to publish public text posts. Images, videos and company pages are not supported.",
+    "connectHint": "Authorize your personal LinkedIn account. Pubrick checks permission to publish public text posts. Images, videos and company pages are not supported.",
     "configurationPending": "Checking whether LinkedIn is available on this server…",
     "configurationUnavailable": "LinkedIn has not been configured by this server’s administrator.",
     "editHint": "You can change the channel name here. Use Reconnect on the channel to renew authorization for the same LinkedIn account.",

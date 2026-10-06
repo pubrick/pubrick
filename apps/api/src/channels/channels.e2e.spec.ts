@@ -502,6 +502,7 @@ describe.skipIf(!url)("channels e2e", () => {
           channelName: "Announcements",
           channelPlatform: "telegram",
           status: "published",
+          externalId: "777",
           externalUrl: "https://t.me/pubrick/777",
           assertedAt: null,
           createdAt: expect.any(String),

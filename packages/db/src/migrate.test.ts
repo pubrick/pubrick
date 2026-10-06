@@ -923,6 +923,11 @@ function expectNoRowRewritten(
           if (table === "channels" && key === "posting_revision") {
             return afterRow[key] !== 0;
           }
+          // 0133 adds only a rotation fence to historical channels; zero does
+          // not authorize an account or alter their encrypted credentials.
+          if (table === "channels" && key === "connection_generation") {
+            return afterRow[key] !== 0;
+          }
           // 0060 intentionally makes historical items ineligible for deletion:
           // an orphaned receipt may already have lost its item link.
           if (table === "content_items" && key === "is_safe_to_delete") {
