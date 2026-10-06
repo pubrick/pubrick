@@ -81,7 +81,9 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
       guest.getByText("The channel story our client should review.", { exact: true }),
     ).toBeVisible();
     await guest.getByRole("button", { name: "Request changes", exact: true }).click();
-    await expect(guest.getByRole("alert")).toContainText("Tell the team what needs to change.");
+    await expect(
+      guest.getByRole("alert").filter({ hasText: "Tell the team what needs to change." }),
+    ).toBeVisible();
     await guest
       .getByLabel("Comment (optional when approving)", { exact: true })
       .fill("Make the channel ending more personal.");
