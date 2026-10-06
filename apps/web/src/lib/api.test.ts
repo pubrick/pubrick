@@ -634,6 +634,24 @@ describe("apiPage", () => {
   });
 });
 
+it("retains Meta authorization recovery at the 403 transport boundary", async () => {
+  vi.mocked(fetch).mockResolvedValue(
+    jsonResponse(403, refusalBody(403, "meta_authority_changed", "The actor session changed")),
+  );
+  const failure = await api("/api/channels/meta/authorize", { method: "POST" }).catch(
+    (error) => error,
+  );
+  expect(failure).toBeInstanceOf(ApiError);
+  if (!(failure instanceof ApiError)) throw new Error("Expected a coded Meta refusal");
+  expect(failure.code).toBe("meta_authority_changed");
+  const russian = createTranslator({
+    locale: "ru",
+    messages: ru,
+    namespace: "Errors",
+  }) as unknown as ErrorTranslator;
+  expect(errorMessage(failure, "fallback", russian)).toBe(ru.Errors.meta_authority_changed);
+});
+
 it("retains hosted subscription refusal codes at the 403 transport boundary", async () => {
   vi.mocked(fetch).mockResolvedValue(
     jsonResponse(403, { code: "subscription_required", message: "Operator prose" }),

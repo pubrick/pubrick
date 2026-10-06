@@ -770,7 +770,7 @@
     "generateCover": "Gerar uma imagem de capa para este rascunho",
     "generateCoverHint": "Normalmente usa uma chamada adicional ao Gemini cobrada na sua chave Google; uma interrupção ou nova tentativa pode gerar outra chamada faturável. A capa é anexada ao rascunho para revisão. O custo pode ser desconhecido.",
     "generateCoverNeedsGoogle": "Adicione uma chave Google AI nas Definições para ativar esta opção.",
-    "generateCoverUnsupported": "As capas estão disponíveis apenas para canais Telegram, VK, MAX e Bluesky.",
+    "generateCoverUnsupported": "Capas estão disponíveis para canais do Telegram, VK, MAX, Bluesky e Instagram automático.",
     "generateInlineImages": "Gerar imagens para este rascunho",
     "generateInlineImagesHint": "O Gemini cria até duas imagens no artigo, cobradas da sua chave Google. Revise cada imagem, posição e descrição antes de aprovar o rascunho. Uma nova tentativa pode gerar outra cobrança.",
     "generateInlineImagesNeedsGoogle": "Adicione uma chave do Google AI em Configurações para gerar imagens.",
@@ -1933,14 +1933,18 @@
     "inbox_reply_inspection_required": "Verifique e inspecione a conta remetente deste envio antes de resolver.",
     "inbox_collection_busy": "Uma coleta está em andamento. Aguarde e recarregue.",
     "meta_unavailable": "O servidor não tem o aplicativo deste provedor configurado. Peça ao administrador para configurá-lo.",
-    "meta_authorization_invalid": "A seleção expirou ou já foi usada. Inicie uma nova conexão.",
+    "meta_authorization_invalid": "Esta autorização expirou, mudou ou já foi usada. Inicie uma nova conexão pela sua marca.",
     "meta_authorization_failed": "Não foi possível conectar a conta. Comece novamente na sua marca.",
-    "meta_authorization_unavailable": "Não foi possível conectar a conta. Comece novamente na sua marca.",
-    "meta_authorization_capacity": "Não foi possível conectar a conta. Comece novamente na sua marca.",
+    "meta_authorization_unavailable": "A Meta não conseguiu confirmar o acesso agora. Inicie uma nova conexão pela sua marca.",
+    "meta_authorization_capacity": "Há muitas solicitações de conexão pendentes. Aguarde até dez minutos para expirarem e tente novamente.",
     "meta_authority_changed": "Sua sessão ou acesso de administrador mudou. Entre e confira suas permissões antes de tentar novamente.",
-    "meta_connection_changed": "Esta conexão do LinkedIn mudou. Recarregue o canal antes de reconectar ou desconectar.",
+    "meta_connection_changed": "Esta conexão mudou. Recarregue o canal antes de reconectar ou desconectar.",
     "meta_reconnect_required": "É necessário reconectar",
-    "meta_oauth_required": "Conecte pela autorização do provedor. Pubrick nunca pede que você cole um token de acesso social."
+    "meta_oauth_required": "Conecte pela autorização do provedor. Pubrick nunca pede que você cole um token de acesso social.",
+    "content_meta_invalid": "O Instagram exige um JPEG de até 8 MB, largura de 320–1440 pixels, proporção de 4:5–1,91:1 e legenda de até 2200 caracteres. O Threads aceita 500 caracteres. Threads e páginas do Facebook aceitam apenas texto; remova vídeos e imagens do artigo.",
+    "meta_preparation_changed": "Esta preparação ou envio mudou. Recarregue e verifique o registro de envio do canal desta publicação antes de agir.",
+    "meta_preparation_authority_changed": "Sua sessão ou acesso editorial mudou. Entre e recarregue antes de agir.",
+    "meta_preparation_not_found": "Esta preparação não está mais disponível nesta publicação. Recarregue os registros atuais."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -2355,7 +2359,7 @@
     "back": "Voltar à marca",
     "hint": "JPEG, PNG ou WebP até 10 MB; vídeo MP4 até 20 MB. Imagens viram JPEG. Vídeos são publicados no Telegram e VK; o Pubrick não transcodifica nem valida codecs.",
     "add": "Adicionar imagem ou vídeo",
-    "empty": "Adicione uma imagem para usar como capa no Telegram, no VK, no MAX ou no Bluesky.",
+    "empty": "Adicione uma imagem como capa para Telegram, VK, MAX, Bluesky ou Instagram automático.",
     "selected": "Mídia atual",
     "use": "Usar",
     "remove": "Remover",
@@ -3503,9 +3507,9 @@
       "reconnect": "É necessário reconectar"
     },
     "capability": {
-      "threads": "Texto · 500 caracteres",
-      "instagram_native": "Conta profissional · um JPEG e legenda",
-      "facebook_page": "Página do Facebook · publicações de texto"
+      "threads": "Somente texto · até 500 caracteres",
+      "instagram_native": "Conta profissional · um JPEG de até 8 MB · legenda de até 2200 caracteres",
+      "facebook_page": "Página do Facebook · somente texto"
     },
     "connect": "Conectar conta",
     "reconnect": "Reconectar",
@@ -3527,6 +3531,62 @@
     "checking": "Verificando a configuração do servidor…",
     "unavailable": "O servidor não tem o aplicativo deste provedor configurado. Peça ao administrador para configurá-lo.",
     "retry": "Tentar novamente",
-    "personalOnly": "Conecte pela autorização do provedor. Pubrick nunca pede que você cole um token de acesso social."
+    "personalOnly": "Conecte pela autorização do provedor. Pubrick nunca pede que você cole um token de acesso social.",
+    "providers": {
+      "threads": "Threads",
+      "instagram_native": "Instagram · automático",
+      "facebook_page": "Página do Facebook"
+    },
+    "editHint": "Renomeie este canal aqui. Use Reconectar para renovar o acesso à mesma conta.",
+    "pageIdentity": "ID da página: {id}",
+    "reloadRequired": "Recarregue este canal para consultar a conexão atual.",
+    "reload": "Recarregar canal"
+  },
+  "MetaPreparations": {
+    "title": "Preparação do Meta",
+    "help": "Os registros recentes são atualizados enquanto há trabalho ativo. Carregar mais mostra registros anteriores; Recarregar atualiza seu estado. Os comprovantes e as ações para resolver o envio final ficam na seção do canal desta publicação.",
+    "reload": "Recarregar",
+    "loadMore": "Carregar mais",
+    "failed": "Não foi possível carregar ou atualizar os registros de preparação. Recarregue antes de agir.",
+    "refreshFailed": "A preparação foi descartada, mas o histórico atualizado não pôde ser carregado. Recarregue para ver os registros atuais.",
+    "reloadRequired": "Recarregue os registros atuais antes de confirmar outra ação.",
+    "discarded": "Preparação descartada. Seu histórico foi preservado. Revise esta publicação e depois aprove separadamente para iniciar outra tentativa.",
+    "removedChannel": "Canal removido",
+    "attempt": "Tentativa {attempt}",
+    "container": "ID da preparação: {id}",
+    "record": "Registro: {id}",
+    "unknownHelp": "A resposta da preparação não foi registrada. Um contêiner não público pode permanecer no Meta e ter consumido cota.",
+    "blocked": "Esta preparação não pode ser descartada agora. Recarregue quando o trabalho ativo terminar ou verifique o registro de envio na seção do canal desta publicação.",
+    "finalHelp": "Verifique e resolva o registro do envio final na seção do canal desta publicação. Descartar uma preparação não resolve um envio final incerto ou aceito.",
+    "discard": "Descartar",
+    "confirmTitle": "Descartar preparação?",
+    "confirmHelp": "Isso altera apenas este registro de preparação preservado. Revisar e Aprovar continuam sendo ações separadas. O Meta pode manter a preparação não pública e descontar sua cota.",
+    "confirmRecord": "{channel} · tentativa {attempt} · registro {id}",
+    "acknowledge": "Entendo que uma preparação não pública pode permanecer no Meta e consumir cota. Vou revisar a publicação antes de aprovar outra tentativa.",
+    "cancel": "Cancelar",
+    "working": "Processando…",
+    "phases": {
+      "preparation_intent": "Preparando",
+      "waiting": "Aguardando o Meta",
+      "final_intent": "Enviando",
+      "published": "Publicada",
+      "preparation_unknown": "Preparação incerta",
+      "final_unknown": "Envio final incerto",
+      "published_without_receipt": "Aceita · comprovante ausente",
+      "failed": "Preparação falhou",
+      "cancelled": "Preparação cancelada"
+    },
+    "reasons": {
+      "preparation_receipt_lost": "Nenhum comprovante de preparação válido foi registrado.",
+      "container_rejected": "O Meta rejeitou o contêiner preparado.",
+      "container_expired": "O contêiner preparado expirou.",
+      "preparation_deadline": "O prazo de preparação foi atingido.",
+      "input_changed": "O conteúdo revisado mudou.",
+      "connection_changed": "A conta conectada mudou.",
+      "permission_refused": "O Meta recusou a permissão da conta.",
+      "final_outcome_unknown": "O resultado do envio final precisa de inspeção.",
+      "published_without_receipt": "O Meta aceitou a publicação sem um comprovante válido.",
+      "recording_failed": "As evidências do envio não puderam ser registradas."
+    }
   }
 }

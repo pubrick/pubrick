@@ -147,7 +147,7 @@ export const channels = pgTable(
      */
     check(
       "channels_credentials_mode_check",
-      sql`${t.platform} in ('dzen', 'linkedin') or ((${t.platform} in (${enumSqlLiterals(MANUAL_PLATFORM_IDS.filter((platform) => platform !== "dzen"))})) = (${t.credentialsEncrypted} is null))`,
+      sql`${t.platform} in ('dzen', 'linkedin', 'threads', 'instagram_native', 'facebook_page') or ((${t.platform} in (${enumSqlLiterals(MANUAL_PLATFORM_IDS.filter((platform) => platform !== "dzen"))})) = (${t.credentialsEncrypted} is null))`,
     ),
     check(
       "channels_metrics_auto_refresh_vk_check",

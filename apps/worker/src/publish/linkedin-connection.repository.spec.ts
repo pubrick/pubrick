@@ -35,6 +35,7 @@ describe.skipIf(!url)("LinkedIn final connection/send claim fence (real database
       .values({ orgId, name: "Personal" })
       .returning({ id: schema.brands.id });
     if (!brand) throw new Error("fixture brand missing");
+    const ciphertext = encryptJson(credentials, key);
     const [channel] = await direct.db
       .insert(schema.channels)
       .values({
@@ -45,7 +46,7 @@ describe.skipIf(!url)("LinkedIn final connection/send claim fence (real database
         connectionTarget: credentials.authorUrn,
         connectionGeneration: 3,
         connectionExpiresAt: new Date(credentials.expiresAt),
-        credentialsEncrypted: encryptJson(credentials, key),
+        credentialsEncrypted: ciphertext,
       })
       .returning({ id: schema.channels.id });
     if (!channel) throw new Error("fixture channel missing");
@@ -74,7 +75,7 @@ describe.skipIf(!url)("LinkedIn final connection/send claim fence (real database
     if (attempt === null) throw new Error("fixture attempt missing");
     const claim = await repo.claimSend(orgId, adaptation.id, attempt);
     if (!claim) throw new Error("fixture send claim missing");
-    return { orgId, channelId: channel.id, adaptationId: adaptation.id, claim };
+    return { orgId, channelId: channel.id, adaptationId: adaptation.id, claim, ciphertext };
   }
   type Fixture = Awaited<ReturnType<typeof fixture>>;
   const current = (row: Fixture) =>
@@ -92,6 +93,8 @@ describe.skipIf(!url)("LinkedIn final connection/send claim fence (real database
       credentials,
       generation: 3,
       target: credentials.authorUrn,
+      ciphertext: row.ciphertext,
+      applicationId: null,
     });
     expect(await current(row)).toBe(true);
   });

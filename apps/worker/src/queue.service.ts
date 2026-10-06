@@ -26,6 +26,10 @@ import {
   type ManualAutopilotJob,
   type ManualDigestJob,
   type ManualTopicPlanJob,
+  META_PUBLICATION_DLQ,
+  META_PUBLICATION_QUEUE,
+  META_PUBLICATION_QUEUE_OPTIONS,
+  type MetaPublicationJob,
   PAID_REPLY_ANALYSIS_OPTIONS,
   PAID_REPLY_ANALYSIS_QUEUE,
   type PaidReplyAnalysisJob,
@@ -152,6 +156,12 @@ export function sweepQueueOf(generateQueue: string): string {
  * for the other. The passes themselves are independent global scans over
  * different tables, so nothing is lost by ticking them apart.
  */
+export function metaPublicationQueueOf(publishQueue: string): string {
+  return publishQueue === PUBLISH_QUEUE
+    ? META_PUBLICATION_QUEUE
+    : `${publishQueue}-meta-publication`;
+}
+
 export function publishSweepQueueOf(publishQueue: string): string {
   return `${publishQueue}-sweep`;
 }
@@ -419,16 +429,49 @@ export class QueueService {
 
     // groupConcurrency: 1 caps concurrent publishes per channel cluster-wide,
     // respecting Telegram's ~1 message/second-per-chat guidance.
-    await boss.work<PublishJob>(
+    const metadataOptions = { batchSize: 1, groupConcurrency: 1, includeMetadata: true } as const;
+    await boss.work<PublishJob, void, typeof metadataOptions>(
       names.publish,
-      { batchSize: 1, groupConcurrency: 1 },
+      metadataOptions,
       async ([job]) => {
-        if (job) await this.publish.handle(job.data);
+        if (job)
+          await this.publish.handle(job.data, boss, {
+            jobId: job.id,
+            queue: names.publish,
+            startedOn: job.startedOn,
+            retryCount: job.retryCount,
+            readinessQueue: metaPublicationQueueOf(names.publish),
+          });
       },
     );
     // Retries exhausted: the dead-letter copy records the terminal failure.
     await boss.work<PublishJob>(names.publishDeadLetter, { batchSize: 1 }, async ([job]) => {
       if (job) await this.publish.markExhausted(job.data);
+    });
+
+    const readinessQueue = metaPublicationQueueOf(names.publish);
+    const readinessDeadLetter =
+      names.publish === PUBLISH_QUEUE ? META_PUBLICATION_DLQ : `${readinessQueue}-dlq`;
+    const readinessOptions = { ...META_PUBLICATION_QUEUE_OPTIONS, deadLetter: readinessDeadLetter };
+    await boss.createQueue(readinessDeadLetter);
+    await boss.createQueue(readinessQueue, readinessOptions);
+    await boss.updateQueue(readinessQueue, readinessOptions);
+    await boss.work<MetaPublicationJob, void, typeof metadataOptions>(
+      readinessQueue,
+      metadataOptions,
+      async ([job]) => {
+        if (job)
+          await this.publish.handleStaged(job.data, boss, {
+            jobId: job.id,
+            queue: readinessQueue,
+            startedOn: job.startedOn,
+            retryCount: job.retryCount,
+            readinessQueue,
+          });
+      },
+    );
+    await boss.work<MetaPublicationJob>(readinessDeadLetter, { batchSize: 1 }, async ([job]) => {
+      if (job) await this.publish.recoverStaged(job.data.orgId, boss, readinessQueue);
     });
 
     // And the publish queue's copy of "pg-boss will never deliver ANYTHING
@@ -444,6 +487,7 @@ export class QueueService {
     await boss.createQueue(publishSweepQueue);
     await boss.schedule(publishSweepQueue, SWEEP_CRON);
     await boss.work(publishSweepQueue, { batchSize: 1 }, async () => {
+      if (names === DEFAULT_QUEUE_NAMES) await this.publish.recoverAllStaged(boss, readinessQueue);
       await this.publish.sweepAbandoned();
     });
 

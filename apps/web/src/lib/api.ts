@@ -173,6 +173,10 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   metrics_unavailable: "metrics_unavailable",
   content_media_unsupported: "content_media_unsupported",
   content_media_invalid: "content_media_invalid",
+  content_meta_invalid: "content_meta_invalid",
+  meta_preparation_changed: "meta_preparation_changed",
+  meta_preparation_authority_changed: "meta_preparation_authority_changed",
+  meta_preparation_not_found: "meta_preparation_not_found",
   content_image_position_invalid: "content_image_position_invalid",
   content_image_body_conflict: "content_image_body_conflict",
   claim_review_body_changed: "claim_review_body_changed",
@@ -510,7 +514,9 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       if (
         code &&
         ((HOSTED_ERROR_CODES as readonly string[]).includes(code) ||
-          code === "batch_review_authority_changed")
+          code === "batch_review_authority_changed" ||
+          code === "meta_authority_changed" ||
+          code === "meta_preparation_authority_changed")
       ) {
         throw new ApiError(403, detail ?? "Workspace request refused", false, code);
       }

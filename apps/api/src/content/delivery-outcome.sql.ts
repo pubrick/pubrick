@@ -16,8 +16,8 @@ export const deliveryOutcomeSql = sql<DeliveryOutcome>`(
         else null
       end
       from publications p
-      where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-      order by p.created_at desc
+      where p.org_id = adaptations.org_id and p.adaptation_id = adaptations.id and p.status <> 'in_flight'
+      order by p.created_at desc, p.id desc
       limit 1
     ), adaptations.status)
     else adaptations.status

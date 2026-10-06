@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { getStagedPublisher } from "@pubrick/integrations";
 import { AuthMailModule } from "./auth-mail/auth-mail.module";
 import { AutopilotService } from "./autopilot/autopilot.service";
 import { CalendarService } from "./calendar/calendar.service";
@@ -11,6 +12,7 @@ import { CommentsRepository } from "./comments/comments.repository";
 import { CommentsService } from "./comments/comments.service";
 import { PaidReplyRepository } from "./comments/paid-reply.repository";
 import { PaidReplyService } from "./comments/paid-reply.service";
+import { env, metaApplications } from "./env";
 import { GenerateRepository } from "./generate/generate.repository";
 import { GenerateService } from "./generate/generate.service";
 import { KnowledgeAutoIndexRepository } from "./knowledge/knowledge-auto-index.repository";
@@ -21,6 +23,9 @@ import { NotificationsService } from "./notifications/notifications.service";
 import { TelegramInitialNotificationsRepository } from "./notifications/telegram-initial-notifications.repository";
 import { PublishRepository } from "./publish/publish.repository";
 import { PublishService } from "./publish/publish.service";
+import { StagedAssets } from "./publish/staged-assets";
+import { StagedPublicationRepository } from "./publish/staged-publication.repository";
+import { StagedPublicationService } from "./publish/staged-publication.service";
 import { QueueService } from "./queue.service";
 import { RelevanceRepository } from "./relevance/relevance.repository";
 import { RelevanceService } from "./relevance/relevance.service";
@@ -41,6 +46,17 @@ import { WebhooksService } from "./webhooks/webhooks.service";
     ClaimReviewWorkerRepository,
     ClaimReviewService,
     PublishRepository,
+    StagedPublicationRepository,
+    StagedAssets,
+    {
+      provide: StagedPublicationService,
+      inject: [StagedPublicationRepository, StagedAssets],
+      useFactory: (repo: StagedPublicationRepository, assets: StagedAssets) =>
+        new StagedPublicationService(repo, assets, getStagedPublisher, {
+          threads: metaApplications.threads,
+          approvedMediaOrigin: env.WEB_ORIGIN,
+        }),
+    },
     PublishService,
     GenerateRepository,
     GenerateService,

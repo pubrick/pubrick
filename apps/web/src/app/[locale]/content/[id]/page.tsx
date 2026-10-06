@@ -37,6 +37,7 @@ import { use, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { FeedEntryAction } from "@/components/feed-controls";
 import { MediaLibrary } from "@/components/media-library";
+import { MetaPreparations } from "@/components/meta-preparations";
 import { OriginBadge } from "@/components/origin-badge";
 import { PostingQueueAction } from "@/components/posting-queue-action";
 import { Advanced } from "@/components/ui/advanced";
@@ -2402,6 +2403,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         key={`${organization?.id ?? ""}:${id}`}
         itemId={id}
         canAssign={canAssignContent}
+      />
+      <MetaPreparations
+        key={`${organization?.id ?? ""}:${id}:${item.adaptations.map((adaptation) => `${adaptation.id}/${adaptation.status}/${adaptation.attemptCount}`).join(",")}`}
+        itemId={id}
+        canRecover={canAssignContent}
       />
       {canDecideDelivery && approvalEditsPending && (
         <Card className="mb-4">

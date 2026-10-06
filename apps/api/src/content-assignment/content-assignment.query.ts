@@ -4,12 +4,19 @@ import {
   isOrganizationManager,
   ORGANIZATION_ROLES,
 } from "@pubrick/shared";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { db } from "../db";
+import { sql } from "drizzle-orm";
 
 /** Same eligibility rule for summaries and server-side queue filtering. */
 export function eligibleAssignmentSql() {
-  const a = schema.contentAssignments;
+  // Identifiers preserve the outer assignment correlation when this expression
+  // is embedded in a single-table SELECT, whose Column chunks Drizzle dequalifies.
+  const table = sql.identifier("content_assignments");
+  const a = {
+    orgId: sql`${table}.${sql.identifier("org_id")}`,
+    brandId: sql`${table}.${sql.identifier("brand_id")}`,
+    assigneeMemberId: sql`${table}.${sql.identifier("assignee_member_id")}`,
+    assigneeUserId: sql`${table}.${sql.identifier("assignee_user_id")}`,
+  };
   return sql<boolean>`exists (
     select 1 from member as assigned_member
     where assigned_member.organization_id = ${a.orgId}
@@ -58,41 +65,19 @@ export function assignmentQueuePredicate(
   return filter === "mine" ? active : sql<boolean>`not (${active})`;
 }
 
-export async function contentAssignmentSummaries(orgId: string, itemIds: string[]) {
-  const rows =
-    itemIds.length === 0
-      ? []
-      : await db
-          .select({
-            itemId: schema.contentAssignments.contentItemId,
-            revision: schema.contentAssignments.revision,
-            memberId: schema.contentAssignments.assigneeMemberId,
-            userId: schema.contentAssignments.assigneeUserId,
-            name: schema.contentAssignments.assigneeName,
-            eligible: eligibleAssignmentSql(),
-          })
-          .from(schema.contentAssignments)
-          .where(
-            and(
-              eq(schema.contentAssignments.orgId, orgId),
-              inArray(schema.contentAssignments.contentItemId, itemIds),
-            ),
-          );
-  return new Map<string, ContentAssignmentSummary>(
-    rows.map((row) => [
-      row.itemId,
-      {
-        revision: row.revision,
-        assignee:
-          row.memberId !== null && row.userId !== null && row.name !== null
-            ? {
-                memberId: row.memberId,
-                userId: row.userId,
-                name: row.name,
-                eligible: row.eligible,
-              }
-            : null,
-      },
-    ]),
-  );
+/** Public assignment metadata rides the bounded master page without another read or an ID placeholder per row. */
+export function contentAssignmentSummarySql() {
+  return sql<ContentAssignmentSummary>`coalesce((
+    select jsonb_build_object(
+      'revision', content_assignments.revision,
+      'assignee', case when content_assignments.assignee_member_id is not null
+        and content_assignments.assignee_user_id is not null and content_assignments.assignee_name is not null
+        then jsonb_build_object('memberId', content_assignments.assignee_member_id,
+          'userId', content_assignments.assignee_user_id, 'name', content_assignments.assignee_name,
+          'eligible', ${eligibleAssignmentSql()}) else null end
+    ) from ${schema.contentAssignments}
+    where content_assignments.org_id = "content_items"."org_id"
+      and content_assignments.brand_id = "content_items"."brand_id"
+      and content_assignments.content_item_id = "content_items"."id"
+  ), jsonb_build_object('revision', 0, 'assignee', null))`;
 }

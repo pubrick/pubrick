@@ -1,9 +1,11 @@
 import { PLATFORM_IDS, PUBLISHABLE_PLATFORM_IDS } from "@pubrick/shared";
 import { describe, expect, it } from "vitest";
 import { blueskyPublisher } from "./bluesky.js";
+import { facebookPagePublisher } from "./facebook-page.js";
 import { mastodonPublisher } from "./mastodon.js";
 import { maxPublisher } from "./max.js";
 import { getPublisher, PUBLISHABLE_PLATFORMS } from "./registry.js";
+import { getStagedPublisher } from "./staged-registry.js";
 import { telegramPublisher } from "./telegram.js";
 import { vkPublisher } from "./vk.js";
 import { wordpressPublisher } from "./wordpress.js";
@@ -16,6 +18,7 @@ describe("getPublisher", () => {
     expect(getPublisher("bluesky")).toBe(blueskyPublisher);
     expect(getPublisher("mastodon")).toBe(mastodonPublisher);
     expect(getPublisher("wordpress")).toBe(wordpressPublisher);
+    expect(getPublisher("facebook_page")).toBe(facebookPagePublisher);
   });
 
   it("returns undefined for a platform with no adapter yet", () => {
@@ -30,6 +33,7 @@ describe("getPublisher", () => {
     // platform".
     for (const name of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"]) {
       expect(getPublisher(name)).toBeUndefined();
+      expect(getStagedPublisher(name)).toBeUndefined();
     }
   });
 });
@@ -52,7 +56,10 @@ describe("the publishable set", () => {
 
   it("agrees with getPublisher for every platform the product names", () => {
     for (const id of PLATFORM_IDS) {
-      expect({ id, hasAdapter: getPublisher(id) !== undefined }).toEqual({
+      expect({
+        id,
+        hasAdapter: getPublisher(id) !== undefined || getStagedPublisher(id) !== undefined,
+      }).toEqual({
         id,
         hasAdapter: (PUBLISHABLE_PLATFORM_IDS as readonly string[]).includes(id),
       });

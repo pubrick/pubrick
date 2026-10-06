@@ -7,7 +7,7 @@ import {
   metaDisconnectSchema,
 } from "@pubrick/shared";
 import { useLocale, useTranslations } from "next-intl";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, apiVoid, errorMessage } from "@/lib/api";
 import { openMetaAuthorization } from "@/lib/meta-connections";
 import { Button } from "./ui/button";
@@ -66,11 +66,25 @@ export function MetaConnectionActions({
   const t = useTranslations("MetaConnections");
   const te = useTranslations("Errors");
   const locale = useLocale();
-  const [open, setOpen] = useState(false);
+  const [confirmationScope, setConfirmationScope] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const generation = channel.connection?.generation;
+  const mounted = useRef(true);
+  const scope = `${brandId}/${provider}/${channel.id}/${generation}`;
+  const open = confirmationScope === scope;
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  useEffect(() => {
+    setConfirmationScope((confirmed) => (confirmed === scope ? confirmed : null));
+  }, [scope]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   async function reconnect() {
     if (busyRef.current || generation === undefined) return;
     busyRef.current = true;
@@ -85,19 +99,22 @@ export function MetaConnectionActions({
         channelId: channel.id,
         expectedGeneration: generation,
       });
-      openMetaAuthorization(
-        provider,
-        await api("/api/channels/meta/authorize", { method: "POST", body: JSON.stringify(body) }),
-      );
+      const result = await api("/api/channels/meta/authorize", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      if (mounted.current && currentScope.current === scope)
+        openMetaAuthorization(provider, result);
     } catch (caught) {
-      setError(errorMessage(caught, t("genericError"), te));
+      if (mounted.current && currentScope.current === scope)
+        setError(errorMessage(caught, t("genericError"), te));
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   async function disconnect() {
-    if (busyRef.current || generation === undefined) return;
+    if (busyRef.current || generation === undefined || confirmationScope !== scope) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -106,13 +123,16 @@ export function MetaConnectionActions({
         method: "POST",
         body: JSON.stringify(metaDisconnectSchema.parse({ expectedGeneration: generation })),
       });
-      setOpen(false);
-      onChanged();
+      if (mounted.current && currentScope.current === scope) {
+        setConfirmationScope(null);
+        onChanged();
+      }
     } catch (caught) {
-      setError(errorMessage(caught, t("genericError"), te));
+      if (mounted.current && currentScope.current === scope)
+        setError(errorMessage(caught, t("genericError"), te));
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -134,7 +154,7 @@ export function MetaConnectionActions({
           disabled={busy || generation === undefined}
           onClick={() => {
             setError(null);
-            setOpen(true);
+            setConfirmationScope(scope);
           }}
         >
           {t("disconnect")}
@@ -145,10 +165,18 @@ export function MetaConnectionActions({
           {error}
         </span>
       )}
+      {generation === undefined && (
+        <span className="text-sm text-fg-secondary">
+          {t("reloadRequired")}
+          <Button className="ml-2 min-h-11" size="sm" variant="secondary" onClick={onChanged}>
+            {t("reload")}
+          </Button>
+        </span>
+      )}
       <Modal
         open={open}
         onClose={() => {
-          if (!busyRef.current) setOpen(false);
+          if (!busyRef.current) setConfirmationScope(null);
         }}
         title={t("disconnectTitle")}
         footer={
@@ -157,7 +185,7 @@ export function MetaConnectionActions({
               className="min-h-11"
               variant="secondary"
               disabled={busy}
-              onClick={() => setOpen(false)}
+              onClick={() => setConfirmationScope(null)}
             >
               {t("cancel")}
             </Button>

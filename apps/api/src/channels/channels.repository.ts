@@ -1,16 +1,18 @@
 import { BadRequestException, Injectable, Logger } from "@nestjs/common";
 import { schema, withTenantResourceAdmission } from "@pubrick/db";
-import { getPublisher, type VerifyResult } from "@pubrick/integrations";
+import { getPublisher, getStagedPublisher, type VerifyResult } from "@pubrick/integrations";
 import {
   type ChannelCreate,
   type ChannelUpdate,
   channelHealthState,
   decryptJson,
   encryptJson,
+  isManagedOAuthPlatform,
   isManualPlatform,
   isOutstandingAdaptation,
   isUnreadableCiphertext,
   type LinkedInConnection,
+  META_CONNECTION_PROVIDERS,
   RUN_ADMISSION_LOCK_NAMESPACE,
   rewrapJson,
   UNREADABLE_CREDENTIALS_MESSAGE,
@@ -18,7 +20,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { badRequest, conflict, notFound } from "../api-error";
 import { db } from "../db";
-import { env, linkedinApplication } from "../env";
+import { env, linkedinApplication, metaApplications } from "../env";
 import { QueueService } from "../queue/queue.service";
 import { tenantQuotaMode, withQuotaErrors } from "../tenant-quota";
 
@@ -31,8 +33,12 @@ const PUBLIC_COLUMNS = {
   platform: schema.channels.platform,
   name: schema.channels.name,
   connectionTarget: schema.channels.connectionTarget,
-  connection: sql<LinkedInConnection | null>`case when ${schema.channels.platform} = 'linkedin' then json_build_object(
+  connection: sql<LinkedInConnection | null>`case when ${schema.channels.platform} in ('linkedin','threads','instagram_native','facebook_page') then json_build_object(
     'state', case when ${schema.channels.credentialsEncrypted} is null then 'disconnected'
+      when ${schema.channels.platform} <> 'linkedin' and ${schema.channels.connectionApplicationId} is distinct from
+        case ${schema.channels.platform} when 'threads' then ${metaApplications.threads?.clientId ?? ""}
+          when 'instagram_native' then ${metaApplications.instagram_native?.clientId ?? ""}
+          when 'facebook_page' then ${metaApplications.facebook_page?.clientId ?? ""} else '' end then 'reconnect'
       when ${schema.channels.connectionExpiresAt} is null then 'reconnect'
       when ${schema.channels.connectionExpiresAt} <= clock_timestamp() then 'expired'
       when ${schema.channels.healthOk} = false then 'reconnect' else 'connected' end,
@@ -154,6 +160,15 @@ export class ChannelsRepository {
    * written, so a refused create leaves no row and no ciphertext behind.
    */
   async create(orgId: string, data: ChannelCreate) {
+    if (
+      META_CONNECTION_PROVIDERS.includes(
+        data.platform as (typeof META_CONNECTION_PROVIDERS)[number],
+      )
+    )
+      throw badRequest(
+        "meta_oauth_required",
+        "Native Meta channels must be connected through OAuth",
+      );
     if (data.platform === "linkedin")
       throw badRequest(
         "linkedin_oauth_required",
@@ -248,10 +263,10 @@ export class ChannelsRepository {
       if (!channel) throw notFound("channel_not_found", "Channel not found");
       if (data.credentials !== undefined && isManualPlatform(channel.platform))
         throw new BadRequestException("Manual channels do not use credentials");
-      if (data.credentials !== undefined && channel.platform === "linkedin")
+      if (data.credentials !== undefined && isManagedOAuthPlatform(channel.platform))
         throw conflict(
-          "linkedin_oauth_required",
-          "Reconnect LinkedIn through authorization; tokens cannot be pasted",
+          channel.platform === "linkedin" ? "linkedin_oauth_required" : "meta_oauth_required",
+          "Reconnect this account through authorization; tokens cannot be pasted",
         );
       if (data.metricsAutoRefresh === true && channel.platform !== "vk")
         throw new BadRequestException("Automatic metric checks are only available for VK channels");
@@ -547,6 +562,8 @@ export class ChannelsRepository {
         credentialsEncrypted: schema.channels.credentialsEncrypted,
         connectionTarget: schema.channels.connectionTarget,
         connectionExpiresAt: schema.channels.connectionExpiresAt,
+        connectionApplicationId: schema.channels.connectionApplicationId,
+        connectionLive: sql<boolean>`coalesce(${schema.channels.connectionExpiresAt} > clock_timestamp(), false)`,
       })
       .from(schema.channels)
       .where(and(eq(schema.channels.orgId, orgId), eq(schema.channels.id, id)))
@@ -561,17 +578,25 @@ export class ChannelsRepository {
       };
     }
     if (
-      channel.platform === "linkedin" &&
-      (!channel.credentialsEncrypted ||
-        !channel.connectionExpiresAt ||
-        channel.connectionExpiresAt.getTime() <= Date.now())
+      isManagedOAuthPlatform(channel.platform) &&
+      (!channel.credentialsEncrypted || !channel.connectionLive)
     )
       throw conflict(
-        "linkedin_reconnect_required",
-        "Reconnect this LinkedIn account before checking or publishing",
+        channel.platform === "linkedin" ? "linkedin_reconnect_required" : "meta_reconnect_required",
+        "Reconnect this account before checking or publishing",
       );
 
-    const publisher = getPublisher(channel.platform);
+    const metaProvider = META_CONNECTION_PROVIDERS.find(
+      (provider) => provider === channel.platform,
+    );
+    if (
+      metaProvider &&
+      (!metaApplications[metaProvider] ||
+        channel.connectionApplicationId !== metaApplications[metaProvider]?.clientId)
+    )
+      throw conflict("meta_reconnect_required", "Reconnect using the current server application");
+
+    const publisher = getPublisher(channel.platform) ?? getStagedPublisher(channel.platform);
     if (!publisher) {
       await this.saveHealth(orgId, id, channel.credentialsEncrypted, false);
       return { ok: false, reason: `No adapter for platform ${channel.platform} yet` };
@@ -584,6 +609,29 @@ export class ChannelsRepository {
       id,
       channel.credentialsEncrypted as string,
     );
+    const nativeCurrent = async () => {
+      if (!metaProvider) return true;
+      const [current] = await db
+        .select({ id: schema.channels.id })
+        .from(schema.channels)
+        .where(
+          and(
+            eq(schema.channels.orgId, orgId),
+            eq(schema.channels.id, id),
+            eq(schema.channels.credentialsEncrypted, checkedCiphertext),
+            eq(schema.channels.connectionTarget, channel.connectionTarget ?? ""),
+            eq(
+              schema.channels.connectionApplicationId,
+              metaApplications[metaProvider]?.clientId ?? "",
+            ),
+            sql`${schema.channels.connectionExpiresAt} > clock_timestamp()`,
+          ),
+        )
+        .limit(1);
+      return !!current;
+    };
+    if (!(await nativeCurrent()))
+      throw conflict("meta_connection_changed", "This connection changed; reload before checking");
     const parsed = publisher.credentialsSchema.safeParse(credentials);
     if (!parsed.success) {
       await this.saveHealth(orgId, id, checkedCiphertext, false);
@@ -621,10 +669,19 @@ export class ChannelsRepository {
       result = await publisher.verify(parsed.data, {
         baseUrl,
         ...(channel.platform === "linkedin" ? { linkedin: linkedinApplication } : {}),
+        ...(channel.platform === "facebook_page"
+          ? { facebookPage: metaApplications.facebook_page }
+          : {}),
+        ...(channel.platform === "threads" ? { threads: metaApplications.threads } : {}),
       });
     } catch {
       result = { ok: false, reason: "Connection test failed unexpectedly", indeterminate: true };
     }
+    if (!(await nativeCurrent()))
+      throw conflict(
+        "meta_connection_changed",
+        "This connection changed during verification; reload",
+      );
     await this.saveHealth(
       orgId,
       id,

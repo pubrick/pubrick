@@ -8,6 +8,8 @@ import {
   GENERATE_WORK_OPTIONS,
   MANUAL_TOPIC_PLAN_QUEUE,
   MANUAL_TOPIC_PLAN_QUEUE_OPTIONS,
+  META_PUBLICATION_QUEUE,
+  META_PUBLICATION_QUEUE_OPTIONS,
   PAID_REPLY_ANALYSIS_QUEUE,
   PUBLISH_DLQ,
   PUBLISH_QUEUE,
@@ -27,7 +29,13 @@ import {
   TOPIC_SUGGESTIONS_QUEUE_OPTIONS,
 } from "@pubrick/shared";
 import { describe, expect, it, vi } from "vitest";
-import { publishSweepQueueOf, QueueService, SWEEP_CRON, sweepQueueOf } from "./queue.service";
+import {
+  metaPublicationQueueOf,
+  publishSweepQueueOf,
+  QueueService,
+  SWEEP_CRON,
+  sweepQueueOf,
+} from "./queue.service";
 
 function bossStub() {
   return {
@@ -39,7 +47,14 @@ function bossStub() {
 }
 
 function serviceStub() {
-  const publish = { handle: vi.fn(), markExhausted: vi.fn(), sweepAbandoned: vi.fn() };
+  const publish = {
+    handle: vi.fn(),
+    markExhausted: vi.fn(),
+    sweepAbandoned: vi.fn(),
+    handleStaged: vi.fn(),
+    recoverStaged: vi.fn(),
+    recoverAllStaged: vi.fn(),
+  };
   const generate = { handle: vi.fn(), markExhausted: vi.fn(), sweepAbandoned: vi.fn() };
   return { publish, generate, service: new QueueService(publish as never, generate as never) };
 }
@@ -470,6 +485,52 @@ describe("QueueService.registerAll", () => {
     );
   });
 
+  it("passes actual private queue incarnation metadata to both publication handlers", async () => {
+    const boss = bossStub();
+    const { publish, service } = serviceStub();
+    const names = {
+      publish: "fixture-publish",
+      publishDeadLetter: "fixture-publish-dlq",
+      generate: "fixture-generate",
+      generateDeadLetter: "fixture-generate-dlq",
+    };
+    await service.registerAll(boss as never, names);
+    const ready = metaPublicationQueueOf(names.publish);
+    expect(ready).not.toBe(META_PUBLICATION_QUEUE);
+    expect(boss.work.mock.calls.map((call) => call[0])).not.toContain(META_PUBLICATION_QUEUE);
+    expect(boss.createQueue).toHaveBeenCalledWith(ready, {
+      ...META_PUBLICATION_QUEUE_OPTIONS,
+      deadLetter: `${ready}-dlq`,
+    });
+    const startedOn = new Date("2026-10-07T10:00:00.000Z");
+    for (const [queue, handler, data] of [
+      [names.publish, publish.handle, { orgId: "o1", adaptationId: "a1" }],
+      [ready, publish.handleStaged, { orgId: "o1", adaptationId: "a1", stageId: "s1" }],
+    ] as const) {
+      const call = boss.work.mock.calls.find((entry) => entry[0] === queue);
+      expect(call?.[1]).toEqual({ batchSize: 1, groupConcurrency: 1, includeMetadata: true });
+      const consume = call?.[2] as (jobs: unknown[]) => Promise<void>;
+      await consume([{ id: "actual-job", data, startedOn, retryCount: 2 }]);
+      expect(handler).toHaveBeenCalledWith(data, boss, {
+        jobId: "actual-job",
+        queue,
+        startedOn,
+        retryCount: 2,
+        readinessQueue: ready,
+      });
+    }
+    const sweep = boss.work.mock.calls.find(
+      (call) => call[0] === publishSweepQueueOf(names.publish),
+    )?.[2] as () => Promise<void>;
+    await sweep();
+    expect(publish.recoverAllStaged).not.toHaveBeenCalled();
+    const exhausted = boss.work.mock.calls.find((call) => call[0] === `${ready}-dlq`)?.[2] as (
+      jobs: unknown[],
+    ) => Promise<void>;
+    await exhausted([{ data: { orgId: "o1", adaptationId: "a1", stageId: "s1" } }]);
+    expect(publish.recoverStaged).toHaveBeenCalledWith("o1", boss, ready);
+  });
+
   it("puts the abandoned-run sweep on a schedule and consumes its ticks", async () => {
     const boss = bossStub();
     const { generate, service } = serviceStub();
@@ -512,6 +573,7 @@ describe("QueueService.registerAll", () => {
     ) => Promise<void>;
     await tick([{ id: "tick-1", data: {} }]);
     expect(publish.sweepAbandoned).toHaveBeenCalledTimes(1);
+    expect(publish.recoverAllStaged).toHaveBeenCalledWith(boss, META_PUBLICATION_QUEUE);
   });
 
   it("keeps the two sweeps on separate queues, one per pair", async () => {

@@ -27,13 +27,14 @@ import {
   isManualPlatform,
   isUnreadableCiphertext,
   type MetaPublicationJob,
+  metaContentProblem,
   PUBLISH_QUEUE_OPTIONS,
   type PublishFailureReason,
   type PublishJob,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
-import { env, linkedinApplication } from "../env";
+import { env, linkedinApplication, metaApplications } from "../env";
 import {
   type AttemptFence,
   ChannelNotFoundError,
@@ -248,6 +249,7 @@ export class PublishService {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation || adaptation.status === "published" || isManualPlatform(adaptation.platform))
       return;
+    if (adaptation.platform === "facebook_page" && !execution) return;
     if (this.staged && boss && getStagedPublisher(adaptation.platform)) {
       await this.staged.start(job.orgId, job.adaptationId, boss, this.stagedRecorder(), execution);
       return;
@@ -448,8 +450,23 @@ export class PublishService {
     // (see recordPublished below).
     let result: PublishResult;
     try {
+      if (adaptation.platform === "facebook_page") {
+        if (adaptation.coverMediaId)
+          throw new ClassifiedPermanentError(
+            "Facebook Pages currently support text only",
+            "platform_rejected",
+          );
+        const problem = metaContentProblem(adaptation.platform, text, {
+          video: !!adaptation.videoMediaId,
+          inlineImages: adaptation.hasInlineImages,
+        });
+        if (problem) throw new ClassifiedPermanentError(problem, "platform_rejected");
+      }
       let credentials: Record<string, string>;
       let managedGeneration: number | undefined;
+      let pageSnapshot:
+        | Awaited<ReturnType<PublishRepository["managedCredentialSnapshot"]>>
+        | undefined;
       try {
         if (adaptation.platform === "linkedin") {
           const snapshot = await this.repo.managedCredentialSnapshot(
@@ -458,6 +475,21 @@ export class PublishService {
           );
           credentials = snapshot.credentials;
           managedGeneration = snapshot.generation;
+        } else if (adaptation.platform === "facebook_page") {
+          pageSnapshot = await this.repo.managedCredentialSnapshot(
+            job.orgId,
+            adaptation.channelId,
+            "facebook_page",
+          );
+          credentials = pageSnapshot.credentials;
+          if (
+            !metaApplications.facebook_page ||
+            pageSnapshot.applicationId !== metaApplications.facebook_page.clientId
+          )
+            throw new ClassifiedPermanentError(
+              "The Facebook server application changed; reconnect the saved Page",
+              "credentials_invalid",
+            );
         } else {
           credentials = await this.repo.credentials(job.orgId, adaptation.channelId);
         }
@@ -670,6 +702,28 @@ export class PublishService {
                   )
                     throw new ClassifiedPermanentError(
                       "LinkedIn access or this delivery changed during verification; reconnect and review the post",
+                      "credentials_invalid",
+                    );
+                },
+              }
+            : {}),
+          ...(adaptation.platform === "facebook_page"
+            ? {
+                facebookPage: metaApplications.facebook_page,
+                beforeFacebookPageCreate: async () => {
+                  if (
+                    !pageSnapshot ||
+                    !execution ||
+                    !(await this.repo.facebookPageSendCurrent(
+                      job.orgId,
+                      job.adaptationId,
+                      claim,
+                      { ...pageSnapshot, text, scheduledAt: adaptation.scheduledAt },
+                      execution,
+                    ))
+                  )
+                    throw new ClassifiedPermanentError(
+                      "Facebook Page access or this delivery changed during verification; reconnect and review the post",
                       "credentials_invalid",
                     );
                 },
@@ -900,8 +954,12 @@ export class PublishService {
     await this.staged?.resume(job.orgId, job, boss, this.stagedRecorder(), execution);
   }
 
-  async recoverStaged(orgId: string, boss: PgBoss): Promise<void> {
-    await this.staged?.recover(orgId, boss, this.stagedRecorder());
+  async recoverStaged(orgId: string, boss: PgBoss, readinessQueue?: string): Promise<void> {
+    await this.staged?.recover(orgId, boss, this.stagedRecorder(), readinessQueue);
+  }
+
+  async recoverAllStaged(boss: PgBoss, readinessQueue?: string): Promise<void> {
+    await this.staged?.recoverAll(boss, this.stagedRecorder(), readinessQueue);
   }
 
   private stagedRecorder(): StagedReceiptRecorder {

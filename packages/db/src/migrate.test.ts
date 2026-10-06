@@ -220,6 +220,10 @@ const ZONED_COLUMNS = [
   "media_cleanup_work.next_attempt_at",
   "memorable_dates.created_at",
   "memorable_dates.updated_at",
+  "meta_authorization_requests.consumed_at",
+  "meta_authorization_requests.created_at",
+  "meta_authorization_requests.expires_at",
+  "meta_authorization_requests.page_selection_consumed_at",
   "meta_publication_stages.created_at",
   "meta_publication_stages.lease_until",
   "meta_publication_stages.next_poll_at",
@@ -431,6 +435,20 @@ const NON_ENUM_CHECKS = [
   "linkedin_authorization_requests_locale_check",
   "linkedin_authorization_intent_check",
   "linkedin_authorization_expiry_check",
+  // 0136 follows the historical seed; schema pins and the populated Meta
+  // connection foundation prove these constraints with valid current rows.
+  "channels_connection_application_check",
+  "channels_meta_target_check",
+  "meta_authorization_requests_provider_check",
+  "meta_authorization_requests_locale_check",
+  "meta_authorization_application_check",
+  "meta_authorization_callback_check",
+  "meta_authorization_hash_check",
+  "meta_authorization_actor_check",
+  "meta_authorization_name_check",
+  "meta_authorization_expiry_check",
+  "meta_authorization_intent_check",
+  "meta_authorization_page_selection_check",
   // 0135: the checkpoint table is absent from the historical enum seed.
   // schema-invariants.test.ts pins its enums; meta-publications.foundation.e2e.test.ts
   // exercises its exact payload, authority lease and real-receipt constraints.

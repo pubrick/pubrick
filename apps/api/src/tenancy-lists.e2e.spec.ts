@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { INestApplication } from "@nestjs/common";
@@ -33,6 +34,8 @@ const url = process.env.TEST_DATABASE_URL;
 type ListEndpoint = {
   /** The `@Controller("…")` path. The ratchet at the bottom matches on this. */
   controller: string;
+  /** Distinguishes named collections on the same guarded controller. */
+  label?: string;
   /** Pulls the identifying value out of one row of the response. */
   identify: (row: Record<string, unknown>) => string;
   /** Unwrap a collection response that also carries metadata. */
@@ -49,6 +52,8 @@ type Seeded = {
   paths: string[];
   /** Public routes have no cookie authority; seed supplies their bearer key. */
   bearer?: string;
+  /** Mutually exclusive filters prepare their actual saved state before a positive read. */
+  beforeList?: (path: string) => Promise<void>;
 };
 
 /**
@@ -76,6 +81,8 @@ const NOT_A_TENANT_LIST: Record<string, string> = {
     "one channel-scoped weekly schedule, not a collection; posting-queue.e2e.spec.ts proves another org receives 404 when reading it",
   "client-review/:token":
     "one bearer-capability preview, not a collection; client-review.e2e.spec.ts proves invalid and changed links close and status remains org-scoped",
+  "media/meta/:orgId/:token":
+    "one purpose-bound expiring bearer image, not a collection; media/meta-media.e2e.spec.ts proves exact reviewed bytes and rejects another tenant, changed parent/channel, expired or cancelled stage, changed hash and file bytes",
 };
 
 async function orgAgent(app: INestApplication): Promise<request.Agent> {
@@ -124,6 +131,111 @@ const id = (row: Record<string, unknown>) => row.id as string;
 function justAfter(createdAt: string): string {
   const at = new Date(Date.parse(createdAt) + 1).toISOString().replace("Z", "000Z");
   return encodeContentCursor({ createdAt: at, id: "00000000-0000-4000-8000-000000000000" });
+}
+
+function inboxCursor(
+  orgId: string,
+  brandId: string,
+  collection: string,
+  value: Record<string, unknown>,
+  filter?: string,
+) {
+  const identity = [orgId, brandId, collection, ...(filter ? [filter] : [])];
+  const scope = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  return encodeURIComponent(Buffer.from(JSON.stringify({ scope, ...value })).toString("base64url"));
+}
+
+/** Persist the normalized collection writer's actual rows, without any Telegram or AI call. */
+async function seedInbox(agent: request.Agent) {
+  const { brandId, channelId } = await brandWithChannel(agent);
+  const item = await agent
+    .post("/api/content")
+    .send({
+      brandId,
+      title: "Scoped discussion",
+      body: "Published discussion",
+      channelIds: [channelId],
+    })
+    .expect(201);
+  const adaptationId = item.body.adaptations[0].id as string;
+  const { createDb, schema } = await import("@pubrick/db");
+  const { eq } = await import("drizzle-orm");
+  const fixture = createDb(url as string);
+  try {
+    const [adaptation] = await fixture.db
+      .update(schema.adaptations)
+      .set({ status: "published", attemptCount: 1 })
+      .where(eq(schema.adaptations.id, adaptationId))
+      .returning({ orgId: schema.adaptations.orgId });
+    if (!adaptation) throw new Error("Expected owned discussion adaptation");
+    const orgId = adaptation.orgId;
+    const [publication] = await fixture.db
+      .insert(schema.publications)
+      .values({
+        orgId,
+        adaptationId,
+        channelId,
+        status: "published",
+        attempt: 1,
+        externalId: "7",
+        externalUrl: "https://t.me/pubrick/7",
+      })
+      .returning({ id: schema.publications.id, createdAt: schema.publications.createdAt });
+    if (!publication) throw new Error("Expected owned discussion publication");
+    const at = new Date();
+    const [conversation] = await fixture.db
+      .insert(schema.inboxConversations)
+      .values({
+        orgId,
+        brandId,
+        publicationId: publication.id,
+        postUrl: "https://t.me/pubrick/7",
+        title: "Scoped discussion",
+        peerId: -1001234567890,
+        rootId: 7,
+        activityRevision: 1,
+        readRevision: 0,
+        collectionRevision: 1,
+        lastActivityAt: at,
+        collectedAt: at,
+        windowMaxId: 8,
+      })
+      .returning({ id: schema.inboxConversations.id });
+    if (!conversation) throw new Error("Expected normalized discussion conversation");
+    const [message] = await fixture.db
+      .insert(schema.inboxMessages)
+      .values({
+        orgId,
+        brandId,
+        conversationId: conversation.id,
+        providerMessageId: 8,
+        body: "Scoped normalized reply",
+        publishedAt: at,
+      })
+      .returning({ id: schema.inboxMessages.id });
+    const [activity] = await fixture.db
+      .insert(schema.inboxActivities)
+      .values({
+        orgId,
+        brandId,
+        conversationId: conversation.id,
+        activityAt: at,
+      })
+      .returning({ seq: schema.inboxActivities.seq });
+    if (!message || !activity) throw new Error("Expected normalized discussion activity");
+    return {
+      orgId,
+      brandId,
+      conversationId: conversation.id,
+      messageId: message.id,
+      publicationId: publication.id,
+      publicationAt: publication.createdAt,
+      activityAt: at,
+      window: activity.seq.toString(),
+    };
+  } finally {
+    await fixture.pool.end();
+  }
 }
 
 const LIST_ENDPOINTS: ListEndpoint[] = [
@@ -485,6 +597,161 @@ const LIST_ENDPOINTS: ListEndpoint[] = [
     },
   },
   {
+    controller: "content/:id/meta-preparations",
+    identify: (row) => row.stageId as string,
+    rows: (body) => (body as { stages: Record<string, unknown>[] }).stages,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const { brandId, channelId } = await brandWithChannel(agent);
+      const item = await agent
+        .post("/api/content")
+        .send({ brandId, body: "Scoped retained preparation", channelIds: [channelId] })
+        .expect(201);
+      const { createDb, schema } = await import("@pubrick/db");
+      const { eq } = await import("drizzle-orm");
+      const fixture = createDb(url as string);
+      const stageId = randomUUID();
+      const anchorId = randomUUID();
+      const at = new Date();
+      let orgId: string;
+      try {
+        const [content] = await fixture.db
+          .select({ orgId: schema.contentItems.orgId })
+          .from(schema.contentItems)
+          .where(eq(schema.contentItems.id, item.body.id));
+        if (!content) throw new Error("Expected owned preparation content");
+        orgId = content.orgId;
+        // Retained UUIDs intentionally outlive deleted adapters/channels. The live scoped item
+        // still grants read authority, while an absent destination prevents recovery.
+        await fixture.db.insert(schema.metaPublicationStages).values({
+          id: stageId,
+          orgId,
+          brandId,
+          contentItemId: item.body.id,
+          adaptationId: randomUUID(),
+          channelId: randomUUID(),
+          platform: "threads",
+          attempt: 1,
+          inputHash: "a".repeat(64),
+          frozenInput: { version: 1, platform: "threads", text: "Reviewed content" },
+          target: "threads:123",
+          credentialGeneration: 1,
+          phase: "preparation_unknown",
+          failureReason: "preparation_receipt_lost",
+          createdAt: at,
+          preparationDeadline: new Date(at.getTime() + 3_600_000),
+        });
+      } finally {
+        await fixture.pool.end();
+      }
+      const base = `/api/content/${item.body.id}/meta-preparations`;
+      return {
+        id: stageId,
+        paths: [base, `${base}?cursor=${anchorId}`],
+        beforeList: async (path) => {
+          if (!path.includes("?cursor=")) return;
+          const anchor = createDb(url as string);
+          try {
+            const createdAt = new Date(at.getTime() + 1);
+            await anchor.db.insert(schema.metaPublicationStages).values({
+              id: anchorId,
+              orgId,
+              brandId,
+              contentItemId: item.body.id,
+              adaptationId: randomUUID(),
+              channelId: randomUUID(),
+              platform: "threads",
+              attempt: 1,
+              inputHash: "b".repeat(64),
+              frozenInput: { version: 1, platform: "threads", text: "Cursor anchor" },
+              target: "threads:123",
+              credentialGeneration: 1,
+              phase: "cancelled",
+              createdAt,
+              preparationDeadline: new Date(createdAt.getTime() + 3_600_000),
+            });
+          } finally {
+            await anchor.pool.end();
+          }
+        },
+      };
+    },
+  },
+  {
+    controller: "brands/:brandId/inbox",
+    identify: id,
+    rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const fixture = await seedInbox(agent);
+      const base = `/api/brands/${fixture.brandId}/inbox`;
+      const paths = [base];
+      for (const filter of ["open", "resolved", "all"] as const) {
+        const cursor = inboxCursor(
+          fixture.orgId,
+          fixture.brandId,
+          "conversations",
+          {
+            window: fixture.window,
+            at: new Date(fixture.activityAt.getTime() + 1).toISOString(),
+            id: "00000000-0000-4000-8000-000000000000",
+          },
+          filter,
+        );
+        paths.push(`${base}?filter=${filter}`, `${base}?filter=${filter}&cursor=${cursor}`);
+      }
+      return {
+        id: fixture.conversationId,
+        paths,
+        beforeList: async (path) => {
+          await agent
+            .post(`${base}/${fixture.conversationId}/state`)
+            .send({
+              action: path.includes("filter=resolved") ? "resolve" : "reopen",
+              expectedActivityRevision: 1,
+            })
+            .expect(200);
+        },
+      };
+    },
+  },
+  {
+    controller: "brands/:brandId/inbox",
+    label: "publications",
+    identify: id,
+    rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const fixture = await seedInbox(agent);
+      const base = `/api/brands/${fixture.brandId}/inbox/publications`;
+      const cursor = inboxCursor(fixture.orgId, fixture.brandId, "publications", {
+        window: "0",
+        at: new Date(fixture.publicationAt.getTime() + 1).toISOString(),
+        id: "00000000-0000-4000-8000-000000000000",
+      });
+      return { id: fixture.publicationId, paths: [base, `${base}?cursor=${cursor}`] };
+    },
+  },
+  {
+    controller: "brands/:brandId/inbox",
+    label: "messages",
+    identify: id,
+    rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
+    foreignBrandNotFound: true,
+    seed: async (agent) => {
+      const fixture = await seedInbox(agent);
+      const base = `/api/brands/${fixture.brandId}/inbox/${fixture.conversationId}/messages`;
+      const cursor = inboxCursor(
+        fixture.orgId,
+        fixture.brandId,
+        "messages",
+        { upper: 9, last: 9 },
+        fixture.conversationId,
+      );
+      return { id: fixture.messageId, paths: [base, `${base}?cursor=${cursor}`] };
+    },
+  },
+  {
     controller: "brands/:brandId/publications",
     identify: id,
     rows: (body) => (body as { rows: Record<string, unknown>[] }).rows,
@@ -676,7 +943,7 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
   });
 
   for (const endpoint of LIST_ENDPOINTS) {
-    it(`${endpoint.controller}: mine on every branch, and never theirs`, async () => {
+    it(`${endpoint.controller}${endpoint.label ? `/${endpoint.label}` : ""}: mine on every branch, and never theirs`, async () => {
       const stranger = await orgAgent(app);
       const mine = await endpoint.seed(stranger);
       const owner = await orgAgent(app);
@@ -686,6 +953,7 @@ describe.skipIf(!url)("every list endpoint returns only this org's rows", () => 
       // so an endpoint that answered `[]` to everything — a broken query, a
       // filter on the wrong column — cannot pass for correct scoping.
       for (const path of mine.paths) {
+        await mine.beforeList?.(path);
         const query = stranger.get(path);
         if (mine.bearer) query.set("Authorization", `Bearer ${mine.bearer}`);
         const body = (await query.expect(200)).body as unknown;

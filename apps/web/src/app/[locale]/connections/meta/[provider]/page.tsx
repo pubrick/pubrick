@@ -35,7 +35,9 @@ function MetaCallback({ provider }: { provider: MetaConnectionProvider }) {
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -85,6 +87,10 @@ function MetaCallback({ provider }: { provider: MetaConnectionProvider }) {
 
   async function selectPage() {
     if (!choices || !pageId || expired || busyRef.current) return;
+    if (Date.parse(choices.expiresAt) <= Date.now()) {
+      setExpired(true);
+      return;
+    }
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -107,7 +113,7 @@ function MetaCallback({ provider }: { provider: MetaConnectionProvider }) {
       }
     } finally {
       busyRef.current = false;
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -136,7 +142,12 @@ function MetaCallback({ provider }: { provider: MetaConnectionProvider }) {
                     checked={pageId === page.id}
                     onChange={() => setPageId(page.id)}
                   />
-                  <span className="min-w-0 break-words">{page.name}</span>
+                  <span className="min-w-0 break-words">
+                    <span className="block">{page.name}</span>{" "}
+                    <span className="block text-sm text-fg-secondary">
+                      {t("pageIdentity", { id: page.id })}
+                    </span>
+                  </span>
                 </label>
               ))}
             </fieldset>
@@ -178,7 +189,11 @@ export default function MetaCallbackPage() {
   const { provider } = useParams<{ provider: string }>();
   const t = useTranslations("MetaConnections");
   const locale = useLocale();
-  if (!(META_CONNECTION_PROVIDERS as readonly string[]).includes(provider))
+  const valid = (META_CONNECTION_PROVIDERS as readonly string[]).includes(provider);
+  useEffect(() => {
+    if (!valid) window.history.replaceState(window.history.state, "", window.location.pathname);
+  }, [valid]);
+  if (!valid)
     return (
       <AppShell title={t("callbackTitle")}>
         <Card>

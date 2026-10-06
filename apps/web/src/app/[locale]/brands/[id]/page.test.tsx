@@ -11,6 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/auth-client";
+import { isMetaConnectionProvider } from "@/lib/meta-connections";
 import { credentialFieldLabel, platformName } from "@/lib/platform";
 import { signedInSession } from "@/test/auth-client.stub";
 import { routerMock } from "@/test/next-navigation.stub";
@@ -1454,7 +1455,11 @@ describe("BrandPage — the platform picker", () => {
       installHandlers([]);
       await renderAsync(<BrandPage params={Promise.resolve({ id: "b1" })} />);
 
-      const option = await screen.findByRole("option", { name: platformName(platform) });
+      const option = await screen.findByRole("option", {
+        name: isMetaConnectionProvider(platform)
+          ? en.MetaConnections.providers[platform]
+          : platformName(platform),
+      });
       expect(option).toBeEnabled();
     });
   }

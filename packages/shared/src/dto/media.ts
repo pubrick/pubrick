@@ -9,7 +9,13 @@ export const IMAGE_CALL_STEPS = [
 ] as const;
 export const MAX_IMAGE_CALLS_PER_HOUR = 12;
 /** Channels for which the existing publish gate accepts an image cover. */
-export const COVER_SUPPORTED_PLATFORMS = ["telegram", "vk", "max", "bluesky"] as const;
+export const COVER_SUPPORTED_PLATFORMS = [
+  "telegram",
+  "vk",
+  "max",
+  "bluesky",
+  "instagram_native",
+] as const;
 
 /** The safe, public metadata returned by the brand-scoped media library. */
 const mediaCommon = {

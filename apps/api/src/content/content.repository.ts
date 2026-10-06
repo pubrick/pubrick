@@ -78,7 +78,7 @@ import {
   toLedgerCostUsd,
   withHashtags,
 } from "@pubrick/shared";
-import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
@@ -86,7 +86,7 @@ import { badRequest, conflict, forbidden, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
 import {
   assignmentQueuePredicate,
-  contentAssignmentSummaries,
+  contentAssignmentSummarySql,
 } from "../content-assignment/content-assignment.query";
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
@@ -102,6 +102,7 @@ import { assertImagesFitBody } from "./content-images.repository";
 import { deliveryOutcomeSql } from "./delivery-outcome.sql";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { DRAFT_REVISION_STEP } from "./draft-revision.step";
+import { requireNativeMetaDelivery } from "./native-meta-admission";
 import {
   assertPostingTimesAvailable,
   lockPostingSchedule,
@@ -777,7 +778,7 @@ const ADAPTATION_COLUMNS = {
         select extract(epoch from p.created_at - adaptations.scheduled_at)
         from publications p
         where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-        order by p.created_at desc
+        order by p.created_at desc, p.id desc
         limit 1
       )
     end
@@ -874,7 +875,7 @@ const ADAPTATION_COLUMNS = {
     from publications p
     where p.org_id = adaptations.org_id
       and p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-    order by p.created_at desc
+    order by p.created_at desc, p.id desc
     limit 1
   )`,
   /** The last unresolved Telegram multipart receipt, never reconstructed from log prose. */
@@ -899,7 +900,7 @@ const ADAPTATION_COLUMNS = {
     end
     from publications p
     where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-    order by p.created_at desc
+    order by p.created_at desc, p.id desc
     limit 1
   )`,
   /**
@@ -936,7 +937,7 @@ const ADAPTATION_COLUMNS = {
     select u.name from "user" u where u.id = (
       select p.asserted_by from publications p
       where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-      order by p.created_at desc
+      order by p.created_at desc, p.id desc
       limit 1
     )
   )`,
@@ -961,7 +962,7 @@ const ADAPTATION_COLUMNS = {
   assertedAt: sql<Date | null>`(
     select p.asserted_at from publications p
     where p.adaptation_id = adaptations.id and p.status <> 'in_flight'
-    order by p.created_at desc
+    order by p.created_at desc, p.id desc
     limit 1
   )`,
 };
@@ -1304,7 +1305,7 @@ export class ContentRepository {
         publishedAt: sql<Date | null>`(
           select p.created_at from publications p
           where p.adaptation_id = adaptations.id and p.status = 'published'
-          order by p.created_at desc limit 1
+          order by p.created_at desc, p.id desc limit 1
         )`,
         externalUrl: ADAPTATION_COLUMNS.externalUrl,
         assertedAt: ADAPTATION_COLUMNS.assertedAt,
@@ -1540,14 +1541,14 @@ export class ContentRepository {
       // of the literal statuses drizzle's column type expects.
       status
         ? eq(schema.contentItems.status, status as ContentStatus)
-        : ne(schema.contentItems.status, "archived"),
+        : sql`${schema.contentItems.status} <> 'archived'`,
       cursor ? afterCursor(cursor) : undefined,
       assignment.data === "all"
         ? undefined
         : assignmentQueuePredicate(orgId, assignment.data, options.assigneeUserId ?? ""),
     );
     const page = await db
-      .select({ ...ITEM_COLUMNS, cursorAt: CURSOR_AT })
+      .select({ ...ITEM_COLUMNS, cursorAt: CURSOR_AT, assignment: contentAssignmentSummarySql() })
       .from(schema.contentItems)
       .where(where)
       // NEWEST FIRST, TIES BROKEN BY `id`. This query had no `ORDER BY` of any
@@ -1572,10 +1573,9 @@ export class ContentRepository {
     const items = hasNext ? page.slice(0, limit) : page;
     const itemIds = items.map((item) => item.id);
     // Independent bounded reads of this page share one wait.
-    const [aiEvidence, adaptations, assignments] = await Promise.all([
+    const [aiEvidence, adaptations] = await Promise.all([
       this.itemAiEvidence(orgId, itemIds),
       this.adaptationsForMany(orgId, itemIds),
-      contentAssignmentSummaries(orgId, itemIds),
     ]);
     const rows = items.map((item) => {
       // The gate's question, on the card. See `get` for why the badge is a
@@ -1595,12 +1595,16 @@ export class ContentRepository {
       // `cursorAt` leaves by the same door and for a plainer reason: it is the
       // sort key rendered for the CURSOR, and a caller that read it off a row
       // would be reading the ordering this api reserves the right to change.
-      const { body, cursorAt: _cursorAt, ...card } = item;
+      const { body, cursorAt: _cursorAt, assignment: savedAssignment, ...card } = item;
       return {
         ...card,
+        // The optional wire field omits only the never-created default. A cleared
+        // assignment still carries its saved revision, and unavailable members retain their identity.
+        ...(savedAssignment.revision === 0 && savedAssignment.assignee === null
+          ? {}
+          : { assignment: savedAssignment }),
         bodyIsAiVerbatim: allSentencesAi(body, evidence.rows, evidence.firstFullBody),
         adaptations: adaptations.get(item.id) ?? [],
-        assignment: assignments.get(item.id) ?? { revision: 0, assignee: null },
       };
     });
     // The LAST ROW OF THE PAGE, not the extra one: the cursor means "start
@@ -6533,6 +6537,12 @@ export class ContentRepository {
       .from(schema.contentItems)
       .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)))
       .limit(1);
+    await requireNativeMetaDelivery(
+      orgId,
+      tx,
+      id,
+      platforms.map((channel) => channel.id),
+    );
     const coveredItem = cover[0];
     if (coveredItem?.id && coveredItem.videoId) {
       throw conflict("content_media_invalid", "A post cannot publish both a cover and a video");
@@ -6546,7 +6556,7 @@ export class ContentRepository {
       ) {
         throw conflict(
           "content_media_unsupported",
-          "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
+          "A selected destination does not support image covers",
         );
       }
     }
@@ -7250,12 +7260,14 @@ export class ContentRepository {
         // second survives the first. `asserted_by` is `ON DELETE SET NULL`, so
         // a date derived from it dies with the account and the screen goes back
         // to claiming a platform confirmed the post (`assertedAt` in
-        // `ADAPTATION_COLUMNS`, migration 0017). `now()` rather than a
-        // JavaScript `Date`: it is the same transaction clock `created_at`
-        // defaults to, so the receipt and the assertion cannot disagree about
-        // their own instant.
+        // `ADAPTATION_COLUMNS`, migration 0017). Use the post-lock database
+        // statement clock for BOTH fields instead of a JavaScript Date: a
+        // decision transaction may have started before the unknown receipt's
+        // transaction and waited for its lock. Its verdict must still sort
+        // after the exact receipt it just inspected.
         assertedBy: userId,
-        assertedAt: sql`now()`,
+        createdAt: sql`statement_timestamp()`,
+        assertedAt: sql`statement_timestamp()`,
       });
 
       // `content_items` last, and only now: the row is terminal either way, so

@@ -15,11 +15,16 @@ import {
 import { and, eq, inArray, isNull, type SQLWrapper, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db";
-import { env } from "../env";
+import { env, metaApplications } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
 import { holdOrganization, holdOrganizations } from "../organization-lock";
-import type { StagedPreflightFence } from "./staged-publication.contract";
-import { holdStagedPreflight } from "./staged-publication.repository";
+import type { StagedExecution, StagedPreflightFence } from "./staged-publication.contract";
+import {
+  holdStagedExecution,
+  holdStagedPreflight,
+  lockStagedDelivery,
+  readStagedDelivery,
+} from "./staged-publication.repository";
 
 export type LoadedAdaptation = {
   id: string;
@@ -32,6 +37,7 @@ export type LoadedAdaptation = {
   itemBrandId: string;
   channelBrandId: string;
   connectionTarget: string | null;
+  hasInlineImages?: boolean;
   coverMediaId: string | null;
   coverAuthorizedId: string | null;
   videoMediaId?: string | null;
@@ -599,6 +605,7 @@ export class PublishRepository {
         itemBrandId: schema.contentItems.brandId,
         channelBrandId: schema.channels.brandId,
         connectionTarget: schema.channels.connectionTarget,
+        hasInlineImages: sql<boolean>`exists(select 1 from content_image_slots slots where slots.org_id = ${orgId} and slots.content_item_id = ${schema.contentItems.id})`,
         coverMediaId: schema.contentItems.coverMediaId,
         coverAuthorizedId: schema.mediaAssets.id,
         videoMediaId: schema.contentItems.videoMediaId,
@@ -675,11 +682,16 @@ export class PublishRepository {
   }
 
   /** One atomic snapshot: reconnect/disconnect must fence exactly the token this attempt read. */
-  async managedCredentialSnapshot(orgId: string, channelId: string) {
+  async managedCredentialSnapshot(
+    orgId: string,
+    channelId: string,
+    platform: "linkedin" | "facebook_page" = "linkedin",
+  ) {
     const [row] = await db
       .select({
         credentialsEncrypted: schema.channels.credentialsEncrypted,
         generation: schema.channels.connectionGeneration,
+        applicationId: schema.channels.connectionApplicationId,
         target: schema.channels.connectionTarget,
       })
       .from(schema.channels)
@@ -687,12 +699,14 @@ export class PublishRepository {
         and(
           eq(schema.channels.orgId, orgId),
           eq(schema.channels.id, channelId),
-          eq(schema.channels.platform, "linkedin"),
+          eq(schema.channels.platform, platform),
         ),
       );
-    if (!row) throw new ChannelNotFoundError("LinkedIn channel no longer exists");
+    if (!row) throw new ChannelNotFoundError("Managed channel no longer exists");
     if (!row.credentialsEncrypted)
-      throw new NoAutomaticCredentialsError("LinkedIn is disconnected; reconnect the account");
+      throw new NoAutomaticCredentialsError(
+        "Managed channel is disconnected; reconnect the account",
+      );
     return {
       credentials: decryptJson<Record<string, string>>(
         row.credentialsEncrypted,
@@ -700,7 +714,71 @@ export class PublishRepository {
       ),
       generation: row.generation,
       target: row.target,
+      applicationId: row.applicationId,
+      ciphertext: row.credentialsEncrypted,
     };
+  }
+
+  /** The direct Page request is admitted only after all read-only provider waits. */
+  async facebookPageSendCurrent(
+    orgId: string,
+    adaptationId: string,
+    claim: SendClaim,
+    expected: {
+      generation: number;
+      target: string | null;
+      applicationId: string | null;
+      ciphertext: string;
+      text: string;
+      scheduledAt: Date | null;
+    },
+    execution: StagedExecution,
+  ): Promise<boolean> {
+    return db.transaction(async (tx) => {
+      const live = await lockStagedDelivery(tx, orgId, adaptationId);
+      const app = metaApplications.facebook_page;
+      if (
+        !live ||
+        !app ||
+        live.platform !== "facebook_page" ||
+        live.status !== "publishing" ||
+        live.attemptCount !== claim.attempt ||
+        live.itemStatus === "rejected" ||
+        live.itemStatus === "archived" ||
+        live.credentialGeneration !== expected.generation ||
+        live.target !== expected.target ||
+        live.applicationId !== expected.applicationId ||
+        live.applicationId !== app.clientId ||
+        live.ciphertext !== expected.ciphertext ||
+        live.text !== expected.text ||
+        live.scheduledAt?.getTime() !== expected.scheduledAt?.getTime() ||
+        live.coverMediaId ||
+        live.videoMediaId ||
+        live.hasInlineImages
+      )
+        return false;
+      const [owned] = await tx
+        .select({ id: schema.publications.id })
+        .from(schema.publications)
+        .where(
+          and(
+            eq(schema.publications.orgId, orgId),
+            eq(schema.publications.id, claim.id),
+            eq(schema.publications.adaptationId, adaptationId),
+            eq(schema.publications.attempt, claim.attempt),
+            eq(schema.publications.status, "in_flight"),
+          ),
+        )
+        .for("update");
+      if (!owned || !(await holdStagedExecution(tx, orgId, adaptationId, execution))) return false;
+      const fresh = await readStagedDelivery(tx, orgId, adaptationId);
+      return (
+        !!fresh &&
+        (fresh.lateBySeconds === null ||
+          (fresh.lateBySeconds >= 0 &&
+            fresh.lateBySeconds <= env.PUBLISH_MAX_LATENESS_HOURS * 3600))
+      );
+    });
   }
 
   async linkedInSendCurrent(

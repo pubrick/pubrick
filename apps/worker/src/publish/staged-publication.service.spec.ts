@@ -22,6 +22,15 @@ import {
 } from "./staged-publication.repository";
 import { StagedPublicationService } from "./staged-publication.service";
 
+vi.mock("../env", async (original) => ({
+  ...(await original<typeof import("../env")>()),
+  metaApplications: {
+    threads: { clientId: "321", clientSecret: "fixture-app-secret" },
+    instagram_native: { clientId: "322", clientSecret: "fixture-app-secret" },
+    facebook_page: undefined,
+  },
+}));
+
 const uuid = "00000000-0000-4000-8000-000000000001";
 const input: FrozenMetaPublicationInput = {
   version: 1,
@@ -66,6 +75,7 @@ function fixture() {
     lateBySeconds: null,
     target: identity.target,
     credentialGeneration: 1,
+    applicationId: "321",
     ciphertext,
     coverMediaId: null,
     videoMediaId: null,
@@ -84,6 +94,7 @@ function fixture() {
     deadline: new Date(Date.now() + 3600_000),
     pollCount: 1,
     ciphertext,
+    applicationId: "321",
   };
   stage.execution = execution;
   const waiting: StageLease = { ...stage, phase: "waiting", containerId: "99887" };
@@ -98,6 +109,7 @@ function fixture() {
     end: vi.fn().mockResolvedValue(true),
     retainReceipt: vi.fn().mockResolvedValue(undefined),
     recover: vi.fn().mockResolvedValue([]),
+    recoveryOrganizations: vi.fn().mockResolvedValue([]),
   };
   const publisher = {
     platform: "threads",
@@ -176,6 +188,14 @@ describe("durable Meta preparation", () => {
       "schedule_missed",
       { delivery: f.delivery, execution: f.execution },
     );
+  });
+  it("refuses an old server application before any provider request or stage admission", async () => {
+    const f = fixture();
+    f.delivery.applicationId = "999";
+    await f.service.start("o1", uuid, f.boss, f.recorder, f.execution);
+    expect(f.publisher.verify).not.toHaveBeenCalled();
+    expect(f.repo.begin).not.toHaveBeenCalled();
+    expect(f.recorder.failed).toHaveBeenCalledOnce();
   });
   it("requires the provider proof to match the saved destination", async () => {
     const f = fixture();

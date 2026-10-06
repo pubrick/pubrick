@@ -111,9 +111,19 @@ export class CalendarRepository {
     ) {
       throw badRequest(
         "content_media_unsupported",
-        "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
+        "A selected destination does not support image covers",
       );
     }
+    if (
+      inlineImages &&
+      owned.some((channel) =>
+        ["threads", "instagram_native", "facebook_page"].includes(channel.platform),
+      )
+    )
+      throw badRequest(
+        "content_meta_invalid",
+        "Native Meta destinations currently do not support article images",
+      );
     if (!cover && !inlineImages) return;
     const [google] = await db
       .select({ id: schema.aiCredentials.id })

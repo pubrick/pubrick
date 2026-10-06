@@ -54,13 +54,13 @@ export const metaAuthorizationRequests = pgTable(
       columns: [t.orgId, t.brandId, t.channelId],
       foreignColumns: [channels.orgId, channels.brandId, channels.id],
     }).onDelete("cascade"),
-    enumCheck("meta_authorization_provider_check", t.provider, META_CONNECTION_PROVIDERS),
+    enumCheck("meta_authorization_requests_provider_check", t.provider, META_CONNECTION_PROVIDERS),
     check("meta_authorization_application_check", sql`${t.applicationId} ~ '^[1-9][0-9]{0,30}$'`),
     check(
       "meta_authorization_callback_check",
       sql`length(${t.redirectUri}) between 1 and 2048 and ${t.redirectUri} ~ '^https://[^[:space:]]+$'`,
     ),
-    enumCheck("meta_authorization_locale_check", t.locale, ["en", "es", "ru", "pt"]),
+    enumCheck("meta_authorization_requests_locale_check", t.locale, ["en", "es", "ru", "pt"]),
     check("meta_authorization_hash_check", sql`${t.stateHash} ~ '^[a-f0-9]{64}$'`),
     check(
       "meta_authorization_actor_check",

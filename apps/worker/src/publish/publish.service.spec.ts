@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { schema } from "@pubrick/db";
+import type { PublisherOptions } from "@pubrick/integrations";
 import {
   BLUESKY_REQUEST_TIMEOUT_MS,
   FACEBOOK_PAGE_MAX_REQUESTS,
@@ -48,6 +49,15 @@ import type { StagedReceiptRecorder } from "./staged-publication.contract";
  * publisher must carry one or it is not standing in for a real Publisher at
  * all.
  */
+vi.mock("../env", async (original) => ({
+  ...(await original<typeof import("../env")>()),
+  metaApplications: {
+    threads: undefined,
+    instagram_native: undefined,
+    facebook_page: { clientId: "321", clientSecret: "fixture-page-secret" },
+  },
+}));
+
 const stubCredentialsSchema = z.object({ botToken: z.string().min(1), chatId: z.string().min(1) });
 
 function publisherStub(publish: unknown, schema: unknown = stubCredentialsSchema) {
@@ -148,6 +158,95 @@ describe("PublishService.handle", () => {
       expect(repo.claimSend).not.toHaveBeenCalled();
     },
   );
+  it("requires actual queue metadata before any Facebook send admission", async () => {
+    const { repo } = fixture({ platform: "facebook_page" });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), undefined, 0);
+    await service.handle({ orgId: "o1", adaptationId: "a1" });
+    expect(repo.markPublishing).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+  it("refuses a Facebook article image before any outbound provider work", async () => {
+    const { repo } = fixture({ platform: "facebook_page", hasInlineImages: true });
+    const publish = vi.fn();
+    const service = new PublishService(repo as never, () => publisherStub(publish), undefined, 0);
+    await service.handle({ orgId: "o1", adaptationId: "a1" }, {} as never, {
+      jobId: "actual-job",
+      queue: "private",
+      startedOn: new Date(),
+      retryCount: 0,
+    });
+    expect(repo.credentials).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalled();
+  });
+  it.each([true, false])(
+    "wires the exact Facebook credential generation/app and current create authority (%s)",
+    async (current) => {
+      const { repo } = fixture({
+        platform: "facebook_page",
+        connectionTarget: "facebook-page:777",
+      });
+      const snapshot = {
+        credentials: {
+          accessToken: "fixture-page",
+          userAccessToken: "fixture-user",
+          pageId: "777",
+        },
+        generation: 3,
+        target: "facebook-page:777",
+        applicationId: "321",
+        ciphertext: "private-fixture-bag",
+      };
+      const managedCredentialSnapshot = vi.fn().mockResolvedValue(snapshot);
+      const facebookPageSendCurrent = vi.fn().mockResolvedValue(current);
+      const extended = { ...repo, managedCredentialSnapshot, facebookPageSendCurrent };
+      const publish = vi.fn(
+        async (_credentials: unknown, _input: unknown, options: PublisherOptions) => {
+          await options.beforeFacebookPageCreate?.();
+          return { externalId: "777_88", externalUrl: null };
+        },
+      );
+      const publisher = {
+        platform: "facebook_page",
+        credentialsSchema: z.object({
+          accessToken: z.string(),
+          userAccessToken: z.string(),
+          pageId: z.string(),
+        }),
+        publish,
+      };
+      const execution = {
+        jobId: "actual-job",
+        queue: "private-publish",
+        startedOn: new Date(),
+        retryCount: 0,
+        readinessQueue: "private-ready",
+      };
+      const service = new PublishService(extended as never, () => publisher as never, undefined, 0);
+      await service.handle({ orgId: "o1", adaptationId: "a1" }, {} as never, execution);
+      expect(managedCredentialSnapshot).toHaveBeenCalledWith("o1", "c1", "facebook_page");
+      expect(publish.mock.calls[0]?.[2]).toEqual(
+        expect.objectContaining({
+          facebookPage: { clientId: "321", clientSecret: "fixture-page-secret" },
+          beforeFacebookPageCreate: expect.any(Function),
+        }),
+      );
+      expect(facebookPageSendCurrent).toHaveBeenCalledWith(
+        "o1",
+        "a1",
+        CLAIM,
+        { ...snapshot, text: "Hello", scheduledAt: null },
+        execution,
+      );
+      if (current) expect(repo.markPublished).toHaveBeenCalled();
+      else {
+        expect(repo.markPublished).not.toHaveBeenCalled();
+        expect(repo.markFailed).toHaveBeenCalled();
+      }
+    },
+  );
+
   it("dispatches a staged readiness job and recovery through the existing receipt recorder", async () => {
     const { repo } = fixture({ platform: "threads" });
     const staged = {
@@ -170,7 +269,7 @@ describe("PublishService.handle", () => {
       retryCount: 0,
     };
     await service.handleStaged(job, boss, execution);
-    await service.recoverStaged("o1", boss);
+    await service.recoverStaged("o1", boss, "fixture-stages");
     expect(staged.resume).toHaveBeenCalledWith(
       "o1",
       job,
@@ -182,6 +281,7 @@ describe("PublishService.handle", () => {
       "o1",
       boss,
       expect.objectContaining({ failed: expect.any(Function) }),
+      "fixture-stages",
     );
     expect(repo.markPublishing).not.toHaveBeenCalled();
   });

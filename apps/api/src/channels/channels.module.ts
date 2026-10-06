@@ -10,7 +10,13 @@ import { MetaConnectionsService } from "./meta-connections.service";
 
 @Module({
   controllers: [ChannelsController, LinkedInConnectionsController, MetaConnectionsController],
-  providers: [ChannelsRepository, LinkedInConnectionsRepository, LinkedInConnectionsService, MetaConnectionsRepository, MetaConnectionsService],
+  providers: [
+    ChannelsRepository,
+    LinkedInConnectionsRepository,
+    LinkedInConnectionsService,
+    MetaConnectionsRepository,
+    MetaConnectionsService,
+  ],
   exports: [ChannelsRepository],
 })
 export class ChannelsModule {}

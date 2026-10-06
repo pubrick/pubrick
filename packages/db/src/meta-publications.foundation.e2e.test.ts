@@ -26,6 +26,7 @@ describe.skipIf(!baseUrl)("Meta checkpoint foundation and populated upgrade on P
   let directory: string | undefined;
   let predecessorWhen: number;
   let migrationWhen: number;
+  let latestMigrationWhen: number;
   let oldChannelId: string;
   let oldAdaptationId: string;
   let oldReceiptId: string;
@@ -67,6 +68,7 @@ describe.skipIf(!baseUrl)("Meta checkpoint foundation and populated upgrade on P
     expect(predecessor.tag).toMatch(/^0134_/);
     predecessorWhen = predecessor.when;
     migrationWhen = checkpoint.when;
+    latestMigrationWhen = journal.entries.at(-1)?.when ?? checkpoint.when;
     directory = await fs.mkdtemp(path.join(tmpdir(), "pubrick-meta-migration-"));
     await fs.mkdir(path.join(directory, "meta"));
     for (const entry of journal.entries.slice(0, cut))
@@ -135,7 +137,12 @@ describe.skipIf(!baseUrl)("Meta checkpoint foundation and populated upgrade on P
 
   async function legacyRows(): Promise<unknown[]> {
     return [
-      (await pool.query("SELECT * FROM channels WHERE id=$1", [oldChannelId])).rows,
+      (
+        await pool.query(
+          "SELECT to_jsonb(c) - 'connection_application_id' AS legacy FROM channels c WHERE id=$1",
+          [oldChannelId],
+        )
+      ).rows,
       (await pool.query("SELECT * FROM adaptations WHERE id=$1", [oldAdaptationId])).rows,
       (await pool.query("SELECT * FROM publications WHERE id=$1", [oldReceiptId])).rows,
     ];
@@ -185,7 +192,7 @@ describe.skipIf(!baseUrl)("Meta checkpoint foundation and populated upgrade on P
     const last = await pool.query(
       "SELECT max(created_at)::text AS created_at FROM drizzle.__drizzle_migrations",
     );
-    expect(last.rows[0]?.created_at).toBe(String(migrationWhen));
+    expect(last.rows[0]?.created_at).toBe(String(latestMigrationWhen));
     expect(await legacyRows()).toEqual(before);
     expect(
       (await pool.query("SELECT to_regclass('public.meta_publication_stages') AS target")).rows[0]

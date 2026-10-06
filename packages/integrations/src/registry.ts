@@ -1,33 +1,17 @@
-import type { PublishablePlatformId } from "@pubrick/shared";
+import type { DirectPublishablePlatformId, PublishablePlatformId } from "@pubrick/shared";
 import { blueskyPublisher } from "./bluesky.js";
+import { facebookPagePublisher } from "./facebook-page.js";
 import { linkedinPublisher } from "./linkedin.js";
 import { mastodonPublisher } from "./mastodon.js";
 import { maxPublisher } from "./max.js";
+import { STAGED_PUBLISHABLE_PLATFORMS } from "./staged-registry.js";
 import { telegramPublisher } from "./telegram.js";
 import type { Publisher } from "./types.js";
 import { vkPublisher } from "./vk.js";
 import { wordpressPublisher } from "./wordpress.js";
 
-/**
- * Every platform Pubrick can deliver a post to — one entry per implemented
- * adapter, and the product's answer to "can this be published?".
- *
- * Annotated `Record<PublishablePlatformId, …>` rather than
- * `Record<string, …>`, which makes this map and `PUBLISHABLE_PLATFORM_IDS`
- * (`@pubrick/shared`) the same set by compilation rather than by diligence: an
- * adapter added here whose id is not declared there is an excess property, and
- * an id declared there with no adapter here is a missing one. Neither builds.
- *
- * That matters because the two are read from different sides of the wire. The
- * API refuses to create a channel for a platform this map has no entry for —
- * derived here, at the moment of creation — while the browser's platform
- * picker cannot import this package at all and reads the shared declaration
- * instead. Before both existed, the picker offered eight platforms, this map
- * held one, and the other seven could be connected, have credentials stored,
- * be adapted for by a paid model call, and then fail approval forever with
- * "no adapter for platform X".
- */
-const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
+/** Direct send adapters. Staged adapters have their own durable worker protocol. */
+const PUBLISHERS: Record<DirectPublishablePlatformId, Publisher<never>> = {
   telegram: telegramPublisher as unknown as Publisher<never>,
   vk: vkPublisher as unknown as Publisher<never>,
   max: maxPublisher as unknown as Publisher<never>,
@@ -35,6 +19,7 @@ const PUBLISHERS: Record<PublishablePlatformId, Publisher<never>> = {
   mastodon: mastodonPublisher as unknown as Publisher<never>,
   wordpress: wordpressPublisher as unknown as Publisher<never>,
   linkedin: linkedinPublisher as unknown as Publisher<never>,
+  facebook_page: facebookPagePublisher as unknown as Publisher<never>,
 };
 
 /**
@@ -61,5 +46,5 @@ export function getPublisher(platform: string): Publisher<never> | undefined {
  * what the product claims it can publish to.
  */
 export const PUBLISHABLE_PLATFORMS: readonly PublishablePlatformId[] = Object.freeze(
-  (Object.keys(PUBLISHERS) as PublishablePlatformId[]).sort(),
+  ([...Object.keys(PUBLISHERS), ...STAGED_PUBLISHABLE_PLATFORMS] as PublishablePlatformId[]).sort(),
 );

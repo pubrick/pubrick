@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Injectable } from "@nestjs/common";
-import { schema } from "@pubrick/db";
+import { blockingMetaStageHistorySql, blockingPublicationHistorySql, schema } from "@pubrick/db";
 import { PermanentPublishError, type PublishResult } from "@pubrick/integrations";
 import {
   type FrozenMetaPublicationInput,
@@ -14,7 +14,7 @@ import {
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { fromDrizzle, type PgBoss } from "pg-boss";
 import { db } from "../db";
-import { env } from "../env";
+import { env, metaApplications } from "../env";
 import { holdOrganization } from "../organization-lock";
 import type { SendClaim } from "./publish.repository";
 import type { StagedDelivery, StagedExecution, StageLease } from "./staged-publication.contract";
@@ -23,15 +23,6 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Reader = Pick<Tx, "select">;
 type Policy = { delayMs: number; maxPolls: number; deadlineMs: number };
 const t = schema.metaPublicationStages;
-const ACTIVE_OR_UNRESOLVED_PHASES: MetaPublicationPhase[] = [
-  "preparation_intent",
-  "waiting",
-  "final_intent",
-  "preparation_unknown",
-  "final_unknown",
-  "published_without_receipt",
-  "published",
-];
 const stageColumns = {
   id: t.id,
   orgId: t.orgId,
@@ -85,7 +76,7 @@ export function metaPublicationInputHash(input: FrozenMetaPublicationInput): str
     .digest("hex");
 }
 
-async function readDelivery(
+export async function readStagedDelivery(
   reader: Reader,
   orgId: string,
   adaptationId: string,
@@ -114,6 +105,7 @@ async function readDelivery(
       >`case when ${a.scheduledAt} is null then null else extract(epoch from clock_timestamp() - ${a.scheduledAt})::double precision end`,
       target: c.connectionTarget,
       credentialGeneration: c.connectionGeneration,
+      applicationId: c.connectionApplicationId,
       ciphertext: c.credentialsEncrypted,
       coverMediaId: i.coverMediaId,
       videoMediaId: i.videoMediaId,
@@ -139,14 +131,14 @@ async function readDelivery(
 }
 
 /** Parent-first order: organization, brand, adaptation, channel, content, then checkpoint. */
-async function lockDelivery(
+export async function lockStagedDelivery(
   tx: Tx,
   orgId: string,
   adaptationId: string,
   itemLock: "share" | "update" = "share",
 ): Promise<StagedDelivery | null> {
   if (!(await holdOrganization(tx, orgId))) return null;
-  const before = await readDelivery(tx, orgId, adaptationId);
+  const before = await readStagedDelivery(tx, orgId, adaptationId);
   if (!before) return null;
   const [brand] = await tx
     .select({ id: schema.brands.id })
@@ -170,7 +162,7 @@ async function lockDelivery(
     .from(schema.contentItems)
     .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, a.itemId)))
     .for(itemLock);
-  return readDelivery(tx, orgId, adaptationId);
+  return readStagedDelivery(tx, orgId, adaptationId);
 }
 
 /** Late read-only proof cannot fail or admit a newer decision or reused job incarnation. */
@@ -183,7 +175,12 @@ export async function holdStagedPreflight(
 ): Promise<StagedDelivery | null> {
   // Terminal recording recomputes the item's status. Take its final lock mode
   // directly: two siblings upgrading SHARE to UPDATE would deadlock each other.
-  const live = await lockDelivery(tx, orgId, expected.adaptationId, terminal ? "update" : "share");
+  const live = await lockStagedDelivery(
+    tx,
+    orgId,
+    expected.adaptationId,
+    terminal ? "update" : "share",
+  );
   if (
     !live ||
     !["queued", "scheduled"].includes(live.status) ||
@@ -199,6 +196,7 @@ export async function holdStagedPreflight(
     live.text !== expected.text ||
     live.target !== expected.target ||
     live.credentialGeneration !== expected.credentialGeneration ||
+    live.applicationId !== expected.applicationId ||
     live.ciphertext !== expected.ciphertext ||
     live.scheduledAt?.getTime() !== expected.scheduledAt?.getTime() ||
     live.coverMediaId !== expected.coverMediaId ||
@@ -212,31 +210,16 @@ export async function holdStagedPreflight(
   )
     return null;
   if (!(await holdStagedExecution(tx, orgId, expected.adaptationId, execution))) return null;
-  const [blocking] = await tx
-    .select({ id: t.id })
-    .from(t)
-    .where(
-      and(
-        eq(t.orgId, orgId),
-        eq(t.adaptationId, live.adaptationId),
-        inArray(t.phase, ACTIVE_OR_UNRESOLVED_PHASES),
-      ),
-    )
-    .limit(1);
-  const [receipt] = await tx
-    .select({ id: schema.publications.id })
-    .from(schema.publications)
-    .where(
-      and(
-        eq(schema.publications.orgId, orgId),
-        eq(schema.publications.adaptationId, live.adaptationId),
-        inArray(schema.publications.status, ["published", "in_flight", "unknown"]),
-      ),
-    )
-    .limit(1);
-  return blocking || receipt ? null : live;
+  const [history] = await tx
+    .select({
+      blocked: sql<boolean>`${blockingMetaStageHistorySql(orgId, live.adaptationId)}
+        or ${blockingPublicationHistorySql(orgId, live.adaptationId)}`,
+    })
+    .from(schema.adaptations)
+    .where(and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, live.adaptationId)));
+  return history && !history.blocked ? live : null;
 }
-async function holdStagedExecution(
+export async function holdStagedExecution(
   tx: Tx,
   orgId: string,
   adaptationId: string,
@@ -270,6 +253,8 @@ function matches(delivery: StagedDelivery, stage: SelectedStage): boolean {
   const image = stage.frozenInput.image;
   return (
     delivery.status === "publishing" &&
+    !!metaApplications[stage.platform] &&
+    delivery.applicationId === metaApplications[stage.platform]?.clientId &&
     delivery.attemptCount === stage.attempt &&
     (delivery.lateBySeconds === null ||
       (delivery.lateBySeconds >= 0 &&
@@ -300,6 +285,7 @@ function leaseRow(
   stage: SelectedStage,
   ciphertext: string,
   execution?: StagedExecution,
+  applicationId: string | null = null,
 ): StageLease {
   if (!stage.leaseToken) throw new Error("Staged publication lease is missing");
   return {
@@ -325,6 +311,7 @@ function leaseRow(
     deadline: stage.preparationDeadline,
     pollCount: stage.pollCount,
     ciphertext,
+    applicationId,
     execution,
   };
 }
@@ -343,13 +330,14 @@ async function enqueue(
   boss: PgBoss,
   stage: SelectedStage,
   startAfter: Date,
+  readinessQueue = META_PUBLICATION_QUEUE,
 ): Promise<void> {
   const job: MetaPublicationJob = {
     orgId: stage.orgId,
     adaptationId: stage.adaptationId,
     stageId: stage.id,
   };
-  const id = await boss.send(META_PUBLICATION_QUEUE, job, {
+  const id = await boss.send(readinessQueue, job, {
     startAfter,
     group: { id: stage.channelId },
     db: fromDrizzle(tx, sql),
@@ -360,7 +348,7 @@ async function enqueue(
 @Injectable()
 export class StagedPublicationRepository {
   async load(orgId: string, adaptationId: string): Promise<StagedDelivery | null> {
-    return readDelivery(db, orgId, adaptationId);
+    return readStagedDelivery(db, orgId, adaptationId);
   }
 
   async begin(
@@ -390,9 +378,15 @@ export class StagedPublicationRepository {
       )
         return null;
       if (live.scheduledAt?.getTime() !== expected.scheduledAt?.getTime()) return null;
-      const {
-        rows: [clock],
-      } = await tx.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+      if (
+        !metaApplications[frozen.platform] ||
+        live.applicationId !== metaApplications[frozen.platform]?.clientId
+      )
+        return null;
+      const [clock] = await tx
+        .select({ now: sql<Date>`clock_timestamp()`.mapWith(t.updatedAt) })
+        .from(schema.organization)
+        .where(eq(schema.organization.id, orgId));
       if (!clock || (live.scheduledAt && live.scheduledAt > clock.now)) return null;
       const postingDeadline = live.scheduledAt
         ? live.scheduledAt.getTime() + env.PUBLISH_MAX_LATENESS_HOURS * 3_600_000
@@ -453,7 +447,7 @@ export class StagedPublicationRepository {
           updatedAt: clock.now,
         })
         .returning(stageColumns);
-      return stage ? leaseRow(stage, live.ciphertext, execution) : null;
+      return stage ? leaseRow(stage, live.ciphertext, execution, live.applicationId) : null;
     });
   }
 
@@ -464,7 +458,7 @@ export class StagedPublicationRepository {
     execution: StagedExecution,
   ): Promise<StageLease | null> {
     return db.transaction(async (tx) => {
-      const live = await lockDelivery(tx, orgId, job.adaptationId);
+      const live = await lockStagedDelivery(tx, orgId, job.adaptationId);
       if (!live?.ciphertext) return null;
       const [stage] = await tx
         .select(stageColumns)
@@ -493,7 +487,7 @@ export class StagedPublicationRepository {
           ),
         )
         .returning(stageColumns);
-      return taken ? leaseRow(taken, live.ciphertext, execution) : null;
+      return taken ? leaseRow(taken, live.ciphertext, execution, live.applicationId) : null;
     });
   }
 
@@ -505,7 +499,7 @@ export class StagedPublicationRepository {
     boss: PgBoss,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
-      const live = await lockDelivery(tx, orgId, stage.identity.adaptationId);
+      const live = await lockStagedDelivery(tx, orgId, stage.identity.adaptationId);
       const [current] = await tx
         .select(stageColumns)
         .from(t)
@@ -513,7 +507,51 @@ export class StagedPublicationRepository {
         .for("update");
       if (!current) return false;
       // A late preparation receipt is useful evidence but cannot revive lost authority.
-      if (!live || !matches(live, current)) {
+      if (
+        !live ||
+        !matches(live, current) ||
+        live.ciphertext !== stage.ciphertext ||
+        live.applicationId !== stage.applicationId
+      ) {
+        if (!current.containerId)
+          await tx
+            .update(t)
+            .set({
+              containerId,
+              phase: current.phase === "preparation_intent" ? "cancelled" : current.phase,
+              failureReason: "input_changed",
+              leaseToken: null,
+              leaseUntil: null,
+              updatedAt: sql`clock_timestamp()`,
+            })
+            .where(and(eq(t.orgId, orgId), eq(t.id, stage.id)));
+        return false;
+      }
+      if (
+        !stage.execution ||
+        !(await holdStagedExecution(tx, orgId, stage.identity.adaptationId, stage.execution))
+      ) {
+        if (!current.containerId)
+          await tx
+            .update(t)
+            .set({
+              containerId,
+              phase: current.phase === "preparation_intent" ? "preparation_unknown" : current.phase,
+              failureReason: "preparation_receipt_lost",
+              leaseToken: null,
+              leaseUntil: null,
+              updatedAt: sql`clock_timestamp()`,
+            })
+            .where(and(eq(t.orgId, orgId), eq(t.id, stage.id)));
+        return false;
+      }
+      const freshDelivery = await readStagedDelivery(tx, orgId, stage.identity.adaptationId);
+      if (
+        !freshDelivery ||
+        !matches(freshDelivery, current) ||
+        freshDelivery.ciphertext !== stage.ciphertext ||
+        freshDelivery.applicationId !== stage.applicationId
+      ) {
         if (!current.containerId)
           await tx
             .update(t)
@@ -553,7 +591,7 @@ export class StagedPublicationRepository {
             .where(and(eq(t.orgId, orgId), eq(t.id, stage.id)));
         return false;
       }
-      await enqueue(tx, boss, saved, saved.nextPollAt);
+      await enqueue(tx, boss, saved, saved.nextPollAt, stage.execution?.readinessQueue);
       return true;
     });
   }
@@ -565,13 +603,19 @@ export class StagedPublicationRepository {
     phase: "preparation_intent" | "waiting" | "final_intent",
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
-      const live = await lockDelivery(tx, orgId, stage.identity.adaptationId);
+      const live = await lockStagedDelivery(tx, orgId, stage.identity.adaptationId);
       const [current] = await tx
         .select(stageColumns)
         .from(t)
         .where(fence(orgId, stage, phase))
         .for("update");
-      if (!live || !current || !matches(live, current) || live.ciphertext !== stage.ciphertext)
+      if (
+        !live ||
+        !current ||
+        !matches(live, current) ||
+        live.ciphertext !== stage.ciphertext ||
+        live.applicationId !== stage.applicationId
+      )
         return false;
       if (
         !stage.execution ||
@@ -582,6 +626,14 @@ export class StagedPublicationRepository {
           stage.execution,
           phase === "preparation_intent" ? undefined : stage.id,
         ))
+      )
+        return false;
+      const freshDelivery = await readStagedDelivery(tx, orgId, stage.identity.adaptationId);
+      if (
+        !freshDelivery ||
+        !matches(freshDelivery, current) ||
+        freshDelivery.ciphertext !== stage.ciphertext ||
+        freshDelivery.applicationId !== stage.applicationId
       )
         return false;
       if (phase === "final_intent") {
@@ -608,13 +660,39 @@ export class StagedPublicationRepository {
 
   async defer(orgId: string, stage: StageLease, policy: Policy, boss: PgBoss): Promise<boolean> {
     return db.transaction(async (tx) => {
-      const live = await lockDelivery(tx, orgId, stage.identity.adaptationId);
+      const live = await lockStagedDelivery(tx, orgId, stage.identity.adaptationId);
       const [current] = await tx
         .select(stageColumns)
         .from(t)
         .where(and(eq(t.orgId, orgId), eq(t.id, stage.id)))
         .for("update");
-      if (!live || !current || !matches(live, current)) return false;
+      if (
+        !live ||
+        !current ||
+        !matches(live, current) ||
+        live.ciphertext !== stage.ciphertext ||
+        live.applicationId !== stage.applicationId
+      )
+        return false;
+      if (
+        !stage.execution ||
+        !(await holdStagedExecution(
+          tx,
+          orgId,
+          stage.identity.adaptationId,
+          stage.execution,
+          stage.id,
+        ))
+      )
+        return false;
+      const freshDelivery = await readStagedDelivery(tx, orgId, stage.identity.adaptationId);
+      if (
+        !freshDelivery ||
+        !matches(freshDelivery, current) ||
+        freshDelivery.ciphertext !== stage.ciphertext ||
+        freshDelivery.applicationId !== stage.applicationId
+      )
+        return false;
       const [saved] = await tx
         .update(t)
         .set({
@@ -626,14 +704,14 @@ export class StagedPublicationRepository {
         .where(fence(orgId, stage, "waiting"))
         .returning(stageColumns);
       if (!saved?.nextPollAt) return false;
-      await enqueue(tx, boss, saved, saved.nextPollAt);
+      await enqueue(tx, boss, saved, saved.nextPollAt, stage.execution?.readinessQueue);
       return true;
     });
   }
 
   async finalIntent(orgId: string, stage: StageLease): Promise<SendClaim | null> {
     return db.transaction(async (tx) => {
-      const live = await lockDelivery(tx, orgId, stage.identity.adaptationId);
+      const live = await lockStagedDelivery(tx, orgId, stage.identity.adaptationId);
       const [current] = await tx
         .select(stageColumns)
         .from(t)
@@ -658,18 +736,24 @@ export class StagedPublicationRepository {
         ))
       )
         return null;
-      const [prior] = await tx
-        .select({ id: schema.publications.id })
-        .from(schema.publications)
+      const freshDelivery = await readStagedDelivery(tx, orgId, stage.identity.adaptationId);
+      if (
+        !freshDelivery ||
+        !matches(freshDelivery, current) ||
+        freshDelivery.ciphertext !== stage.ciphertext ||
+        freshDelivery.applicationId !== stage.applicationId
+      )
+        return null;
+      const [history] = await tx
+        .select({
+          blocked: sql<boolean>`${blockingMetaStageHistorySql(orgId, live.adaptationId, stage.id)}
+            or ${blockingPublicationHistorySql(orgId, live.adaptationId)}`,
+        })
+        .from(schema.adaptations)
         .where(
-          and(
-            eq(schema.publications.orgId, orgId),
-            eq(schema.publications.adaptationId, live.adaptationId),
-            inArray(schema.publications.status, ["published", "unknown", "in_flight"]),
-          ),
-        )
-        .limit(1);
-      if (prior) return null;
+          and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.id, live.adaptationId)),
+        );
+      if (!history || history.blocked) return null;
       const [claim] = await tx
         .insert(schema.publications)
         .values({
@@ -767,11 +851,29 @@ export class StagedPublicationRepository {
       );
   }
 
+  /** Global read-only maintenance selection; every resulting action is tenant-scoped. */
+  async recoveryOrganizations(): Promise<string[]> {
+    const rows = await db
+      .selectDistinct({ orgId: t.orgId })
+      .from(t)
+      .where(
+        and(
+          inArray(t.phase, ["preparation_intent", "waiting", "final_intent"]),
+          sql`(${t.leaseUntil} is null or ${t.leaseUntil} <= clock_timestamp())`,
+          sql`not exists(select 1 from pgboss.job j where j.state < 'completed'::pgboss.job_state and j.data->>'orgId' = ${t.orgId} and j.data->>'adaptationId' = ${t.adaptationId}::text)`,
+        ),
+      )
+      .orderBy(t.orgId)
+      .limit(50);
+    return rows.map((row) => row.orgId);
+  }
+
   /** Recovery never issues HTTP. Preparation and final intent have different consequences. */
   async recover(
     orgId: string,
     boss: PgBoss,
     policyFor: (platform: string) => Policy | undefined,
+    readinessQueue = META_PUBLICATION_QUEUE,
   ): Promise<Array<{ stage: StageLease; outcome: "failed" | "unknown" }>> {
     const noJob = sql`not exists(select 1 from pgboss.job j where j.state < 'completed'::pgboss.job_state and j.data->>'orgId' = ${orgId} and j.data->>'adaptationId' = ${t.adaptationId}::text)`;
     const candidates = await db
@@ -790,7 +892,7 @@ export class StagedPublicationRepository {
     const ended: Array<{ stage: StageLease; outcome: "failed" | "unknown" }> = [];
     for (const candidate of candidates) {
       const result = await db.transaction(async (tx) => {
-        const live = await lockDelivery(tx, orgId, candidate.adaptationId);
+        const live = await lockStagedDelivery(tx, orgId, candidate.adaptationId);
         if (!(await holdOrganization(tx, orgId))) return null;
         // Missing targets take the remaining parent before the audit checkpoint.
         if (!live)
@@ -813,12 +915,18 @@ export class StagedPublicationRepository {
           )
           .for("update");
         if (!current) return null;
-        const lease = leaseRow({ ...current, leaseToken: randomUUID() }, live?.ciphertext ?? "");
+        const lease = leaseRow(
+          { ...current, leaseToken: randomUUID() },
+          live?.ciphertext ?? "",
+          undefined,
+          live?.applicationId ?? null,
+        );
         if (current.phase === "waiting" && live && matches(live, current)) {
           const policy = policyFor(current.platform);
-          const {
-            rows: [clock],
-          } = await tx.execute<{ now: Date }>(sql`select clock_timestamp() as now`);
+          const [clock] = await tx
+            .select({ now: sql<Date>`clock_timestamp()`.mapWith(t.updatedAt) })
+            .from(schema.organization)
+            .where(eq(schema.organization.id, orgId));
           if (
             policy &&
             clock &&
@@ -827,7 +935,7 @@ export class StagedPublicationRepository {
           ) {
             const startAfter =
               current.nextPollAt && current.nextPollAt > clock.now ? current.nextPollAt : clock.now;
-            await enqueue(tx, boss, current, startAfter);
+            await enqueue(tx, boss, current, startAfter, readinessQueue);
             await tx
               .update(t)
               .set({ leaseToken: null, leaseUntil: null, updatedAt: sql`clock_timestamp()` })

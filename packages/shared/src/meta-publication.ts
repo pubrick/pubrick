@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MAX_BODY_LENGTH } from "./dto/content.js";
 
-/** Internal transport IDs. These are deliberately absent from the channel picker. */
+/** Native destinations that prepare containers before final publication. */
 export const META_STAGED_PLATFORM_IDS = ["threads", "instagram_native"] as const;
 export type MetaStagedPlatformId = (typeof META_STAGED_PLATFORM_IDS)[number];
 

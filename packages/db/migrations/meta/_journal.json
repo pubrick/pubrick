@@ -946,6 +946,13 @@
       "when": 1791323937865,
       "tag": "0135_meta_publication_stages",
       "breakpoints": true
+    },
+    {
+      "idx": 136,
+      "version": "7",
+      "when": 1791324788428,
+      "tag": "0136_native_meta_connections",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import { metaRequest, PlatformRejectionError } from "@pubrick/integrations";
 import {
-  META_MAX_DISCOVERED_PAGES,
   META_GRAPH_API_VERSION,
+  META_MAX_DISCOVERED_PAGES,
   type MetaApplicationCredentials,
   type MetaConnectionProvider,
   metaApplicationCredentialsSchema,

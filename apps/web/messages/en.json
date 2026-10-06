@@ -770,7 +770,7 @@
     "generateCover": "Generate a cover image for this draft",
     "generateCoverHint": "Usually uses one extra Gemini image call billed to your Google key; interruption or retry can make another billable call. The image is attached to the draft for review. Cost may be unknown.",
     "generateCoverNeedsGoogle": "Add a Google AI key in Settings to enable this option.",
-    "generateCoverUnsupported": "Covers are available only for Telegram, VK, MAX, and Bluesky channels.",
+    "generateCoverUnsupported": "Covers are available for Telegram, VK, MAX, Bluesky, and automatic Instagram channels.",
     "generateInlineImages": "Generate article images for this draft",
     "generateInlineImagesHint": "Creates up to two inline images with Gemini, billed to your Google key. Review each image, its placement, and description before approving the draft. A retry may make another billable call.",
     "generateInlineImagesNeedsGoogle": "Add a Google AI key in Settings to enable article images.",
@@ -1933,14 +1933,18 @@
     "inbox_reply_inspection_required": "Check and inspect the sending account before resolving this reply.",
     "inbox_collection_busy": "Collection is in progress. Wait briefly and reload.",
     "meta_unavailable": "This server does not have this provider’s application configured. Ask the server administrator to configure it.",
-    "meta_authorization_invalid": "This Page selection has expired or was used. Start a new connection.",
+    "meta_authorization_invalid": "This authorization expired, changed or was already used. Start a new connection from your brand.",
     "meta_authorization_failed": "The account could not be connected. Start again from your brand.",
-    "meta_authorization_unavailable": "The account could not be connected. Start again from your brand.",
-    "meta_authorization_capacity": "The account could not be connected. Start again from your brand.",
+    "meta_authorization_unavailable": "Meta could not confirm access right now. Start a new connection from your brand.",
+    "meta_authorization_capacity": "Too many connection requests are pending. Wait up to ten minutes for them to expire, then try again.",
     "meta_authority_changed": "Your session or manager access changed. Sign in and check your permissions before trying again.",
-    "meta_connection_changed": "This LinkedIn connection changed. Reload the channel before reconnecting or disconnecting.",
+    "meta_connection_changed": "This connection changed. Reload the channel before reconnecting or disconnecting.",
     "meta_reconnect_required": "Reconnect required",
-    "meta_oauth_required": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token."
+    "meta_oauth_required": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token.",
+    "content_meta_invalid": "Instagram needs one JPEG up to 8 MB, width 320–1440 pixels, aspect ratio 4:5–1.91:1 and a caption up to 2200 characters. Threads allows 500 characters. Threads and Facebook Page support text only; remove video and article images.",
+    "meta_preparation_changed": "This preparation or delivery changed. Reload and inspect this post’s channel delivery record before taking action.",
+    "meta_preparation_authority_changed": "Your session or editorial access changed. Sign in and reload before taking action.",
+    "meta_preparation_not_found": "This preparation is no longer available in this post. Reload the current records."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -2355,7 +2359,7 @@
     "back": "Back to brand",
     "hint": "JPEG, PNG, or WebP up to 10 MB; MP4 video up to 20 MB. Images become JPEG. Video publishes to Telegram and VK; Pubrick does not transcode or validate codecs.",
     "add": "Add image or video",
-    "empty": "Add an image to use as a Telegram, VK, MAX, or Bluesky cover.",
+    "empty": "Add an image to use as a Telegram, VK, MAX, Bluesky, or automatic Instagram cover.",
     "selected": "Current media",
     "use": "Use",
     "remove": "Remove",
@@ -3503,9 +3507,9 @@
       "reconnect": "Reconnect required"
     },
     "capability": {
-      "threads": "Text posts · 500 characters",
-      "instagram_native": "Professional account · one JPEG and caption",
-      "facebook_page": "Facebook Page · text posts"
+      "threads": "Text only · up to 500 characters",
+      "instagram_native": "Professional account · one JPEG up to 8 MB · caption up to 2200 characters",
+      "facebook_page": "Facebook Page · text only"
     },
     "connect": "Connect account",
     "reconnect": "Reconnect",
@@ -3527,6 +3531,62 @@
     "checking": "Checking server configuration…",
     "unavailable": "This server does not have this provider’s application configured. Ask the server administrator to configure it.",
     "retry": "Try again",
-    "personalOnly": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token."
+    "personalOnly": "Connect through the provider’s authorization screen. Pubrick never asks you to paste a social access token.",
+    "providers": {
+      "threads": "Threads",
+      "instagram_native": "Instagram · automatic",
+      "facebook_page": "Facebook Page"
+    },
+    "editHint": "Rename this channel here. Use Reconnect to renew access to the same account.",
+    "pageIdentity": "Page ID: {id}",
+    "reloadRequired": "Reload this channel to read its current connection.",
+    "reload": "Reload channel"
+  },
+  "MetaPreparations": {
+    "title": "Meta preparation",
+    "help": "Recent preparation records update while work is active. Load more shows older records; Reload refreshes their state. Final delivery evidence and resolution actions are in this post’s channel section.",
+    "reload": "Reload",
+    "loadMore": "Load more",
+    "failed": "Could not load or update preparation records. Reload before taking action.",
+    "refreshFailed": "The preparation was discarded, but its refreshed history could not be loaded. Reload to see the latest records.",
+    "reloadRequired": "Reload the current records before confirming another action.",
+    "discarded": "Preparation discarded. Its history is retained. Review this post, then Approve separately to start a new attempt.",
+    "removedChannel": "Removed channel",
+    "attempt": "Attempt {attempt}",
+    "container": "Preparation ID: {id}",
+    "record": "Record: {id}",
+    "unknownHelp": "The preparation response was not recorded. A nonpublic container may remain with Meta and may have used quota.",
+    "blocked": "This preparation cannot currently be discarded. Reload when active work finishes, or inspect the delivery record in this post’s channel section.",
+    "finalHelp": "Inspect the final delivery record and resolve it in this post’s channel section. Discarding a preparation cannot settle an uncertain or accepted final delivery.",
+    "discard": "Discard",
+    "confirmTitle": "Discard preparation?",
+    "confirmHelp": "This changes only this retained preparation record. Review and Approve remain separate actions. Meta may retain the nonpublic preparation and charge its quota.",
+    "confirmRecord": "{channel} · attempt {attempt} · record {id}",
+    "acknowledge": "I understand that a nonpublic preparation may remain with Meta and may consume quota. I will review the post before approving a new attempt.",
+    "cancel": "Cancel",
+    "working": "Working…",
+    "phases": {
+      "preparation_intent": "Preparing",
+      "waiting": "Waiting for Meta",
+      "final_intent": "Sending",
+      "published": "Published",
+      "preparation_unknown": "Preparation uncertain",
+      "final_unknown": "Final delivery uncertain",
+      "published_without_receipt": "Accepted · receipt missing",
+      "failed": "Preparation failed",
+      "cancelled": "Preparation cancelled"
+    },
+    "reasons": {
+      "preparation_receipt_lost": "No usable preparation receipt was recorded.",
+      "container_rejected": "Meta rejected the prepared container.",
+      "container_expired": "The prepared container expired.",
+      "preparation_deadline": "The preparation deadline was reached.",
+      "input_changed": "The reviewed content changed.",
+      "connection_changed": "The connected account changed.",
+      "permission_refused": "Meta refused the account permission.",
+      "final_outcome_unknown": "The final delivery outcome needs inspection.",
+      "published_without_receipt": "Meta accepted publication without a usable receipt.",
+      "recording_failed": "Delivery evidence could not be recorded."
+    }
   }
 }

@@ -770,7 +770,7 @@
     "generateCover": "Generar una imagen de portada para este borrador",
     "generateCoverHint": "Normalmente usa una llamada adicional a Gemini facturada a tu clave de Google; una interrupción o reintento puede generar otra llamada facturable. La portada se adjunta al borrador para revisión. El coste puede ser desconocido.",
     "generateCoverNeedsGoogle": "Añade una clave de Google AI en Ajustes para activar esta opción.",
-    "generateCoverUnsupported": "Las portadas solo están disponibles para canales de Telegram, VK, MAX y Bluesky.",
+    "generateCoverUnsupported": "Las portadas están disponibles para canales de Telegram, VK, MAX, Bluesky e Instagram automático.",
     "generateInlineImages": "Generar imágenes para este borrador",
     "generateInlineImagesHint": "Gemini crea hasta dos imágenes internas con cargo a tu clave de Google. Revisa cada imagen, su ubicación y descripción antes de aprobar el borrador. Un reintento puede generar otro cargo.",
     "generateInlineImagesNeedsGoogle": "Añade una clave de Google AI en Configuración para generar imágenes.",
@@ -1933,14 +1933,18 @@
     "inbox_reply_inspection_required": "Verifica e inspecciona la cuenta emisora de este envío antes de resolver.",
     "inbox_collection_busy": "Hay una recopilación en curso. Espera y recarga.",
     "meta_unavailable": "El servidor no tiene configurada la aplicación de este proveedor. Pide al administrador que la configure.",
-    "meta_authorization_invalid": "La selección ha caducado o ya se usó. Inicia una nueva conexión.",
+    "meta_authorization_invalid": "Esta autorización caducó, cambió o ya se usó. Inicia una nueva conexión desde tu marca.",
     "meta_authorization_failed": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
-    "meta_authorization_unavailable": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
-    "meta_authorization_capacity": "No se pudo conectar la cuenta. Empieza de nuevo desde tu marca.",
+    "meta_authorization_unavailable": "Meta no pudo confirmar el acceso ahora. Inicia una nueva conexión desde tu marca.",
+    "meta_authorization_capacity": "Hay demasiadas solicitudes de conexión pendientes. Espera hasta diez minutos a que caduquen e inténtalo de nuevo.",
     "meta_authority_changed": "Tu sesión o acceso de administrador cambió. Inicia sesión y comprueba tus permisos antes de reintentar.",
-    "meta_connection_changed": "Esta conexión de LinkedIn cambió. Recarga el canal antes de reconectar o desconectar.",
+    "meta_connection_changed": "Esta conexión cambió. Recarga el canal antes de reconectarlo o desconectarlo.",
     "meta_reconnect_required": "Es necesario reconectar",
-    "meta_oauth_required": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social."
+    "meta_oauth_required": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social.",
+    "content_meta_invalid": "Instagram requiere un JPEG de hasta 8 MB, ancho de 320–1440 píxeles, proporción de 4:5–1,91:1 y un texto de hasta 2200 caracteres. Threads admite 500 caracteres. Threads y las páginas de Facebook solo admiten texto; elimina vídeos e imágenes del artículo.",
+    "meta_preparation_changed": "Esta preparación o envío cambió. Recarga y revisa el registro de envío del canal de esta publicación antes de actuar.",
+    "meta_preparation_authority_changed": "Cambió tu sesión o acceso editorial. Inicia sesión y recarga antes de actuar.",
+    "meta_preparation_not_found": "Esta preparación ya no está disponible en esta publicación. Recarga los registros actuales."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -2355,7 +2359,7 @@
     "back": "Volver a la marca",
     "hint": "JPEG, PNG o WebP hasta 10 MB; vídeo MP4 hasta 20 MB. Las imágenes se convierten a JPEG. Los vídeos se publican en Telegram y VK; Pubrick no transcodifica ni valida códecs.",
     "add": "Añadir imagen o vídeo",
-    "empty": "Añade una imagen para usarla como portada de Telegram, VK, MAX o Bluesky.",
+    "empty": "Añade una imagen como portada para Telegram, VK, MAX, Bluesky o Instagram automático.",
     "selected": "Medio actual",
     "use": "Usar",
     "remove": "Eliminar",
@@ -3503,9 +3507,9 @@
       "reconnect": "Es necesario reconectar"
     },
     "capability": {
-      "threads": "Texto · 500 caracteres",
-      "instagram_native": "Cuenta profesional · un JPEG y texto",
-      "facebook_page": "Página de Facebook · publicaciones de texto"
+      "threads": "Solo texto · hasta 500 caracteres",
+      "instagram_native": "Cuenta profesional · un JPEG de hasta 8 MB · texto de hasta 2200 caracteres",
+      "facebook_page": "Página de Facebook · solo texto"
     },
     "connect": "Conectar cuenta",
     "reconnect": "Reconectar",
@@ -3527,6 +3531,62 @@
     "checking": "Comprobando la configuración del servidor…",
     "unavailable": "El servidor no tiene configurada la aplicación de este proveedor. Pide al administrador que la configure.",
     "retry": "Intentar de nuevo",
-    "personalOnly": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social."
+    "personalOnly": "Conecta desde la autorización del proveedor. Pubrick nunca te pide pegar un token de acceso social.",
+    "providers": {
+      "threads": "Threads",
+      "instagram_native": "Instagram · automático",
+      "facebook_page": "Página de Facebook"
+    },
+    "editHint": "Cambia aquí el nombre del canal. Usa Reconectar para renovar el acceso a la misma cuenta.",
+    "pageIdentity": "ID de página: {id}",
+    "reloadRequired": "Recarga este canal para consultar su conexión actual.",
+    "reload": "Recargar canal"
+  },
+  "MetaPreparations": {
+    "title": "Preparación de Meta",
+    "help": "Los registros recientes se actualizan mientras hay trabajo activo. Cargar más muestra registros anteriores; Recargar actualiza su estado. Los comprobantes y las acciones para resolver el envío final están en la sección del canal de esta publicación.",
+    "reload": "Recargar",
+    "loadMore": "Cargar más",
+    "failed": "No se pudieron cargar o actualizar los registros de preparación. Recarga antes de actuar.",
+    "refreshFailed": "Se descartó la preparación, pero no se pudo cargar su historial actualizado. Recarga para ver los registros actuales.",
+    "reloadRequired": "Recarga los registros actuales antes de confirmar otra acción.",
+    "discarded": "Preparación descartada. Se conserva su historial. Revisa esta publicación y después apruébala por separado para iniciar otro intento.",
+    "removedChannel": "Canal eliminado",
+    "attempt": "Intento {attempt}",
+    "container": "ID de preparación: {id}",
+    "record": "Registro: {id}",
+    "unknownHelp": "No se registró la respuesta de preparación. Meta puede conservar un contenedor no público que haya consumido cuota.",
+    "blocked": "Esta preparación no se puede descartar ahora. Recarga cuando termine el trabajo activo o revisa el registro de envío en la sección del canal de esta publicación.",
+    "finalHelp": "Revisa y resuelve el registro de envío final en la sección del canal de esta publicación. Descartar una preparación no resuelve un envío final incierto o aceptado.",
+    "discard": "Descartar",
+    "confirmTitle": "¿Descartar la preparación?",
+    "confirmHelp": "Esto solo cambia este registro de preparación conservado. Revisar y Aprobar siguen siendo acciones separadas. Meta puede conservar la preparación no pública y descontar cuota.",
+    "confirmRecord": "{channel} · intento {attempt} · registro {id}",
+    "acknowledge": "Entiendo que Meta puede conservar una preparación no pública y que puede consumir cuota. Revisaré la publicación antes de aprobar otro intento.",
+    "cancel": "Cancelar",
+    "working": "Procesando…",
+    "phases": {
+      "preparation_intent": "Preparando",
+      "waiting": "Esperando a Meta",
+      "final_intent": "Enviando",
+      "published": "Publicada",
+      "preparation_unknown": "Preparación incierta",
+      "final_unknown": "Envío final incierto",
+      "published_without_receipt": "Aceptada · falta comprobante",
+      "failed": "Preparación fallida",
+      "cancelled": "Preparación cancelada"
+    },
+    "reasons": {
+      "preparation_receipt_lost": "No se registró un comprobante de preparación válido.",
+      "container_rejected": "Meta rechazó el contenedor preparado.",
+      "container_expired": "El contenedor preparado caducó.",
+      "preparation_deadline": "Se alcanzó el plazo de preparación.",
+      "input_changed": "Cambió el contenido revisado.",
+      "connection_changed": "Cambió la cuenta conectada.",
+      "permission_refused": "Meta rechazó el permiso de la cuenta.",
+      "final_outcome_unknown": "Debe inspeccionarse el resultado del envío final.",
+      "published_without_receipt": "Meta aceptó la publicación sin un comprobante válido.",
+      "recording_failed": "No se pudieron registrar las pruebas del envío."
+    }
   }
 }

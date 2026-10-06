@@ -50,3 +50,16 @@ followed by available real provider test accounts with explicit receipts.
 Record evidence once per reviewed source, and rerun only affected checks for
 minor corrections. Publish meaningful feature milestones, keep the goal open
 while required work remains, and record concrete external launch prerequisites.
+
+## Implementation evidence
+
+The selected contracts of all six milestones are implemented. Core review,
+scheduling, composer and calendar acceptance is recorded in
+[core workflow evidence](../verification/competitive-parity-core.md).
+WordPress/LinkedIn, team review, results/CSV and the supported Telegram Inbox are
+recorded in [native/team/results/inbox evidence](../verification/competitive-parity-native-team-results.md).
+The remaining native Meta connection/media/readiness and recovery contract is
+recorded in [Meta evidence](../verification/competitive-parity-meta.md).
+These reports state the supported formats, metrics and permissions; they do
+not claim broader platform coverage or live provider approvals. Payments remain
+deferred, and public hosted launch has separate domain/mail/operations acceptance.

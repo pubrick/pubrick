@@ -417,6 +417,18 @@ export class RunsRepository {
       // caller's side it is the identical mistake.
       throw notFound("channels_not_in_brand", "One or more channels do not belong to this brand");
     }
+    if (
+      data.generateInlineImages &&
+      brandChannels.some(
+        (channel) =>
+          data.channelIds.includes(channel.id) &&
+          ["threads", "instagram_native", "facebook_page"].includes(channel.platform),
+      )
+    )
+      throw badRequest(
+        "content_meta_invalid",
+        "Native Meta destinations currently do not support article images",
+      );
     if (data.generateCover) {
       const chosen = brandChannels.filter((channel) => data.channelIds.includes(channel.id));
       if (
@@ -426,7 +438,7 @@ export class RunsRepository {
       ) {
         throw badRequest(
           "content_media_unsupported",
-          "Covers currently publish only to Telegram, VK, MAX, and Bluesky channels",
+          "A selected destination does not support image covers",
         );
       }
     }

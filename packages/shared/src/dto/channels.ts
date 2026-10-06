@@ -30,31 +30,7 @@ export const PLATFORM_IDS = [
  */
 export type PlatformId = (typeof PLATFORM_IDS)[number];
 
-/**
- * The platforms Pubrick can actually publish to today — a subset of
- * `PLATFORM_IDS`, and the only ones a channel may be created for.
- *
- * `PLATFORM_IDS` is the wider set of platforms this product intends to support:
- * it names them, and `PLATFORM_FIELDS` knows the credentials each would need.
- * Knowing a platform's name is not being able to post to it. Every other entry
- * could be picked in the channel form, have its credentials encrypted and
- * stored, and then be adapted for by a paid model call, only for approval to
- * fail permanently with "no adapter for platform X" — money spent on a post
- * that could never be delivered.
- *
- * THE LIST IS WRITTEN ONCE, HERE, AND `packages/integrations` IS TYPED AGAINST
- * IT. Its `PUBLISHERS` map is annotated `Record<PublishablePlatformId, …>`, so
- * a publisher added there without a name here is an excess property and a name
- * here without a publisher is a missing one — neither compiles. This is not a
- * second list kept in sync by hand; it is the same list, readable from a
- * browser bundle that cannot import a server-only package (the problem
- * `adaptationLimit` solved the same way).
- *
- * The API does not read this constant to decide: it asks the registry
- * (`getPublisher`) at the moment of creation, so the refusal is derived from
- * the adapters that actually exist. This constant is what lets the picker say
- * the same thing before the request is made.
- */
+/** Direct and staged registries are typed against these browser-safe declarations. */
 export const DIRECT_PUBLISHABLE_PLATFORM_IDS = [
   "telegram",
   "vk",
@@ -68,6 +44,7 @@ export const DIRECT_PUBLISHABLE_PLATFORM_IDS = [
 export type DirectPublishablePlatformId = (typeof DIRECT_PUBLISHABLE_PLATFORM_IDS)[number];
 /** Container preparation and readiness are durable worker stages, not direct sends. */
 export const STAGED_PUBLISHABLE_PLATFORM_IDS = ["threads", "instagram_native"] as const;
+export type StagedPublishablePlatformId = (typeof STAGED_PUBLISHABLE_PLATFORM_IDS)[number];
 export const PUBLISHABLE_PLATFORM_IDS = [
   ...DIRECT_PUBLISHABLE_PLATFORM_IDS,
   ...STAGED_PUBLISHABLE_PLATFORM_IDS,

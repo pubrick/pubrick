@@ -74,6 +74,13 @@ services:
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
       LINKEDIN_CLIENT_ID: "${LINKEDIN_CLIENT_ID:-}"
       LINKEDIN_CLIENT_SECRET: "${LINKEDIN_CLIENT_SECRET:-}"
+      THREADS_CLIENT_ID: "${THREADS_CLIENT_ID:-}"
+      THREADS_CLIENT_SECRET: "${THREADS_CLIENT_SECRET:-}"
+      INSTAGRAM_CLIENT_ID: "${INSTAGRAM_CLIENT_ID:-}"
+      INSTAGRAM_CLIENT_SECRET: "${INSTAGRAM_CLIENT_SECRET:-}"
+      FACEBOOK_CLIENT_ID: "${FACEBOOK_CLIENT_ID:-}"
+      FACEBOOK_CLIENT_SECRET: "${FACEBOOK_CLIENT_SECRET:-}"
+      META_GRAPH_API_VERSION: "${META_GRAPH_API_VERSION:-v26.0}"
       GOOGLE_API_PROXY: "${GOOGLE_API_PROXY:-}"
       MEDIA_STORAGE_DIR: /data/media
     volumes:
@@ -96,6 +103,8 @@ services:
     restart: unless-stopped
 
   worker:
+    # Outlast bounded Meta verification/create and accepted-receipt recording.
+    stop_grace_period: 270s
     build: { context: ., dockerfile: docker/worker.Dockerfile }
     environment:
       WEB_ORIGIN: "${PUBLIC_ORIGIN:?set it in .env - the origin browsers use}"
@@ -131,6 +140,13 @@ services:
       MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api2.max.ru}
       LINKEDIN_CLIENT_ID: "${LINKEDIN_CLIENT_ID:-}"
       LINKEDIN_CLIENT_SECRET: "${LINKEDIN_CLIENT_SECRET:-}"
+      THREADS_CLIENT_ID: "${THREADS_CLIENT_ID:-}"
+      THREADS_CLIENT_SECRET: "${THREADS_CLIENT_SECRET:-}"
+      INSTAGRAM_CLIENT_ID: "${INSTAGRAM_CLIENT_ID:-}"
+      INSTAGRAM_CLIENT_SECRET: "${INSTAGRAM_CLIENT_SECRET:-}"
+      FACEBOOK_CLIENT_ID: "${FACEBOOK_CLIENT_ID:-}"
+      FACEBOOK_CLIENT_SECRET: "${FACEBOOK_CLIENT_SECRET:-}"
+      META_GRAPH_API_VERSION: "${META_GRAPH_API_VERSION:-v26.0}"
       GOOGLE_API_PROXY: "${GOOGLE_API_PROXY:-}"
       MEDIA_STORAGE_DIR: /data/media
     volumes:

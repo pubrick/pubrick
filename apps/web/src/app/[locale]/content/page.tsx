@@ -920,15 +920,13 @@ export default function ContentQueuePage() {
             {item.title || t("untitled")}
           </Link>
           <OriginBadge origin={deriveOrigin(item)} />
-          {item.assignment && (
-            <span className="text-xs font-normal text-fg-secondary">
-              {item.assignment.assignee
-                ? ta(item.assignment.assignee.eligible ? "assigned" : "unavailable", {
-                    name: item.assignment.assignee.name,
-                  })
-                : ta("unassigned")}
-            </span>
-          )}
+          <span className="text-xs font-normal text-fg-secondary">
+            {item.assignment?.assignee
+              ? ta(item.assignment.assignee.eligible ? "assigned" : "unavailable", {
+                  name: item.assignment.assignee.name,
+                })
+              : ta("unassigned")}
+          </span>
           {item.qualityScore !== null && (
             <span className="text-[12px] text-fg-tertiary" title={t("qualityScoreHint")}>
               {t("qualityScore", { score: Math.round(item.qualityScore * 100) })}

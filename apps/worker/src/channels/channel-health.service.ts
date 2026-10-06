@@ -4,7 +4,7 @@ import { getPublisher, getStagedPublisher } from "@pubrick/integrations";
 import { CHANNEL_HEALTH_TTL_MS, decryptJson, isUnreadableCiphertext } from "@pubrick/shared";
 import { and, asc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
-import { env, linkedinApplication } from "../env";
+import { env, linkedinApplication, metaApplications } from "../env";
 
 /** Five serial checks per tick bound platform traffic and the job's runtime. */
 export const CHANNEL_HEALTH_SCAN_LIMIT = 5;
@@ -20,6 +20,9 @@ export class ChannelHealthService {
         orgId: schema.channels.orgId,
         platform: schema.channels.platform,
         credentialsEncrypted: schema.channels.credentialsEncrypted,
+        generation: schema.channels.connectionGeneration,
+        applicationId: schema.channels.connectionApplicationId,
+        target: schema.channels.connectionTarget,
       })
       .from(schema.channels)
       .where(
@@ -39,8 +42,20 @@ export class ChannelHealthService {
       const ciphertext = candidate.credentialsEncrypted;
       if (ciphertext === null) continue;
       const publisher = getPublisher(candidate.platform) ?? getStagedPublisher(candidate.platform);
-      let ok: boolean | null = publisher ? null : false;
-      if (publisher) {
+      const metaApplication =
+        candidate.platform === "threads" ||
+        candidate.platform === "instagram_native" ||
+        candidate.platform === "facebook_page"
+          ? metaApplications[candidate.platform]
+          : undefined;
+      const meta =
+        candidate.platform === "threads" ||
+        candidate.platform === "instagram_native" ||
+        candidate.platform === "facebook_page";
+      const lineageCurrent =
+        !meta || (!!metaApplication && candidate.applicationId === metaApplication.clientId);
+      let ok: boolean | null = publisher && lineageCurrent ? null : false;
+      if (publisher && lineageCurrent) {
         let credentials: Record<string, string> | null = null;
         try {
           credentials = decryptJson(ciphertext, env.APP_ENCRYPTION_KEY);
@@ -65,8 +80,16 @@ export class ChannelHealthService {
               const result = await publisher.verify(parsed.data, {
                 baseUrl,
                 ...(candidate.platform === "linkedin" ? { linkedin: linkedinApplication } : {}),
+                ...(candidate.platform === "threads" ? { threads: metaApplication } : {}),
+                ...(candidate.platform === "facebook_page"
+                  ? { facebookPage: metaApplication }
+                  : {}),
               });
-              ok = result.ok ? true : result.indeterminate ? null : false;
+              ok = result.ok
+                ? !meta || result.target === candidate.target
+                : result.indeterminate
+                  ? null
+                  : false;
             } catch {
               // A check that could not complete is inconclusive, never broken.
             }
@@ -81,6 +104,13 @@ export class ChannelHealthService {
             eq(schema.channels.orgId, candidate.orgId),
             eq(schema.channels.id, candidate.id),
             eq(schema.channels.credentialsEncrypted, ciphertext),
+            eq(schema.channels.connectionGeneration, candidate.generation),
+            candidate.applicationId === null
+              ? isNull(schema.channels.connectionApplicationId)
+              : eq(schema.channels.connectionApplicationId, candidate.applicationId),
+            candidate.target === null
+              ? isNull(schema.channels.connectionTarget)
+              : eq(schema.channels.connectionTarget, candidate.target),
           ),
         );
     }

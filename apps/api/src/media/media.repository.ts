@@ -3,7 +3,11 @@ import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Injectable } from "@nestjs/common";
 import { schema, stageMediaCleanup, withTenantResourceAdmission } from "@pubrick/db";
-import { RUN_ADMISSION_LOCK_NAMESPACE } from "@pubrick/shared";
+import {
+  COVER_SUPPORTED_PLATFORMS,
+  metaContentProblem,
+  RUN_ADMISSION_LOCK_NAMESPACE,
+} from "@pubrick/shared";
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
 import sharp from "sharp";
@@ -115,6 +119,7 @@ export class MediaRepository {
       const output = await source
         .rotate()
         .resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true })
+        .toColourspace("srgb")
         .jpeg({ quality: 85, mozjpeg: true })
         .toBuffer({ resolveWithObject: true });
       normalized = output.data;
@@ -463,6 +468,9 @@ export class MediaRepository {
             id: schema.mediaAssets.id,
             kind: schema.mediaAssets.kind,
             byteSize: schema.mediaAssets.byteSize,
+            mimeType: schema.mediaAssets.mimeType,
+            width: schema.mediaAssets.width,
+            height: schema.mediaAssets.height,
           })
           .from(schema.mediaAssets)
           .where(
@@ -484,11 +492,13 @@ export class MediaRepository {
             and(eq(schema.adaptations.orgId, orgId), eq(schema.adaptations.contentItemId, itemId)),
           );
         if (
-          targets.some((target) => !["telegram", "vk", "max", "bluesky"].includes(target.platform))
+          targets.some(
+            (target) => !(COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(target.platform),
+          )
         ) {
           throw conflict(
             "content_media_unsupported",
-            "Covers currently publish only to Telegram, VK, MAX, and Bluesky; remove other channels from this post",
+            "This post includes a destination that does not support image covers",
           );
         }
         if (targets.some((target) => target.platform === "bluesky") && asset.byteSize > 2_000_000) {
@@ -496,6 +506,10 @@ export class MediaRepository {
             "content_media_too_large_for_bluesky",
             "Bluesky covers must be 2 MB or smaller; choose a smaller image",
           );
+        }
+        if (targets.some((target) => target.platform === "instagram_native")) {
+          const problem = metaContentProblem("instagram_native", "", { cover: asset });
+          if (problem) throw conflict("content_meta_invalid", problem);
         }
       }
       await tx

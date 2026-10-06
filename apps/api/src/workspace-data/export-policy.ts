@@ -1012,6 +1012,8 @@ export const WORKSPACE_EXPORT_TABLES = [
 
 /** Internal work and authentication state are deliberately excluded from user exports. */
 export const WORKSPACE_EXPORT_OMISSIONS = {
+  metaAuthorizationRequests: "One-use actor-bound OAuth state and encrypted Page choices",
+  metaPublicationStages: "Internal publication authority, immutable media hashes and stage leases",
   inboxSenderPreviews: "One-use session and Telegram account generation proofs",
   inboxCollectionClaims: "Short-lived bounded Telegram read leases",
   linkedinAuthorizationRequests: "Short-lived OAuth state and encrypted authorization nonce",

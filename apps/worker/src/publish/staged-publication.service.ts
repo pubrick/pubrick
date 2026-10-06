@@ -13,9 +13,10 @@ import {
   decryptJson,
   type FrozenMetaPublicationInput,
   type MetaPublicationJob,
+  metaContentProblem,
 } from "@pubrick/shared";
 import type { PgBoss } from "pg-boss";
-import { env } from "../env";
+import { env, metaApplications } from "../env";
 import type { AttemptFence } from "./publish.repository";
 import type {
   StagedAssetProvider,
@@ -127,6 +128,13 @@ export class StagedPublicationService {
         );
       if (!delivery.ciphertext || !delivery.target)
         throw new PermanentPublishError("Meta is disconnected; reconnect the saved destination");
+      if (
+        !metaApplications[publisher.platform] ||
+        delivery.applicationId !== metaApplications[publisher.platform]?.clientId
+      )
+        throw new PermanentPublishError(
+          "The Meta server application changed; reconnect the saved destination",
+        );
       const credentials = this.credentials(publisher, delivery.ciphertext);
       const input: FrozenMetaPublicationInput = {
         version: 1,
@@ -146,6 +154,12 @@ export class StagedPublicationService {
       }
       if (publisher.platform === "instagram_native" && !input.image)
         throw new PermanentPublishError("Instagram requires one approved JPEG image");
+      const problem = metaContentProblem(publisher.platform, input.text, {
+        cover: input.image,
+        video: !!delivery.videoMediaId,
+        inlineImages: delivery.hasInlineImages,
+      });
+      if (problem) throw new PermanentPublishError(problem);
       // Read-only proof can safely precede admission. Admission rechecks its exact encrypted bag.
       await this.verify(publisher, credentials, delivery.target);
       stage = await this.repo.begin(orgId, delivery, input, publisher.pollPolicy, execution);
@@ -410,11 +424,26 @@ export class StagedPublicationService {
     }
   }
 
-  async recover(orgId: string, boss: PgBoss, recorder: StagedReceiptRecorder): Promise<void> {
+  async recoverAll(
+    boss: PgBoss,
+    recorder: StagedReceiptRecorder,
+    readinessQueue?: string,
+  ): Promise<void> {
+    for (const orgId of await this.repo.recoveryOrganizations())
+      await this.recover(orgId, boss, recorder, readinessQueue);
+  }
+
+  async recover(
+    orgId: string,
+    boss: PgBoss,
+    recorder: StagedReceiptRecorder,
+    readinessQueue?: string,
+  ): Promise<void> {
     for (const result of await this.repo.recover(
       orgId,
       boss,
       (platform) => this.lookup(platform)?.pollPolicy,
+      readinessQueue,
     )) {
       const stage = result.stage;
       if (result.outcome === "unknown")

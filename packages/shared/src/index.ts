@@ -72,6 +72,7 @@ export * from "./dto/linkedin-connections.js";
 export * from "./dto/media.js";
 export * from "./dto/memorable-dates.js";
 export * from "./dto/meta-connections.js";
+export * from "./dto/meta-preparation-recovery.js";
 export * from "./dto/notifications.js";
 export * from "./dto/paid-replies.js";
 export * from "./dto/posting-schedule.js";
@@ -194,6 +195,7 @@ export {
 } from "./jobs.js";
 export * from "./link-policy-defaults.js";
 export * from "./linkedin-environment.js";
+export * from "./meta-content.js";
 export * from "./meta-environment.js";
 export * from "./meta-media-access.js";
 export * from "./meta-publication.js";

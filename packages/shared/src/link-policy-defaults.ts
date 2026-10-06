@@ -19,4 +19,7 @@ export const DEFAULT_UTM: Record<PlatformId, { source: string; medium: string }>
   x: { source: "x", medium: "post" },
   wordpress: { source: "wordpress", medium: "article" },
   linkedin: { source: "linkedin", medium: "social" },
+  threads: { source: "threads", medium: "social" },
+  instagram_native: { source: "instagram", medium: "social" },
+  facebook_page: { source: "facebook", medium: "social" },
 };

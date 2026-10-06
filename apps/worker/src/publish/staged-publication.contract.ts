@@ -28,6 +28,7 @@ export interface StagedDelivery {
   lateBySeconds: number | null;
   target: string | null;
   credentialGeneration: number;
+  applicationId: string | null;
   ciphertext: string | null;
   coverMediaId: string | null;
   videoMediaId: string | null;
@@ -46,6 +47,8 @@ export interface StagedExecution {
   queue: string;
   startedOn: Date;
   retryCount: number;
+  /** Private readiness destination derived from the actual publish queue. */
+  readinessQueue?: string;
 }
 export interface StagedPreflightFence {
   delivery: StagedDelivery;
@@ -64,6 +67,7 @@ export interface StageLease {
   pollCount: number;
   /** Used only inside the worker; never returned in a DTO, checkpoint or job payload. */
   ciphertext: string;
+  applicationId: string | null;
   /** Current queue incarnation; recovery records do not authorize any HTTP send. */
   execution?: StagedExecution;
 }
@@ -120,5 +124,10 @@ export interface StagedPublicationHandler {
     recorder: StagedReceiptRecorder,
     execution?: StagedExecution,
   ): Promise<void>;
-  recover(orgId: string, boss: PgBoss, recorder: StagedReceiptRecorder): Promise<void>;
+  recover(
+    orgId: string,
+    boss: PgBoss,
+    recorder: StagedReceiptRecorder,
+    readinessQueue?: string,
+  ): Promise<void>;
 }

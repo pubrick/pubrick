@@ -10,6 +10,8 @@ import { ContentCostRepository } from "./content-cost.repository";
 import { ContentImagesRepository } from "./content-images.repository";
 import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
+import { MetaPreparationsController } from "./meta-preparations.controller";
+import { MetaPreparationsRepository } from "./meta-preparations.repository";
 import { PostingQueueRepository } from "./posting-queue.repository";
 import { PostingScheduleController } from "./posting-schedule.controller";
 import { PublicationCalendarRepository } from "./publication-calendar.repository";
@@ -36,10 +38,12 @@ import { RefineCaller } from "./refine.caller";
     PublicationOperationsController,
     ArchivedPublicationsController,
     PostingScheduleController,
+    MetaPreparationsController,
   ],
   providers: [
     ContentRepository,
     PostingQueueRepository,
+    MetaPreparationsRepository,
     PublicationCalendarRepository,
     ArchivedPublicationsRepository,
     ContentCostRepository,

@@ -11,6 +11,8 @@ import {
   isPublishablePlatform,
   type LinkedInConnection,
   linkedinAuthorizationStartSchema,
+  type MetaConnectionProvider,
+  metaAuthorizationStartSchema,
   NON_SECRET_FIELDS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
@@ -26,6 +28,7 @@ import {
   LinkedInConnectionActions,
   LinkedInConnectionSummary,
 } from "@/components/linkedin-connection";
+import { MetaConnectionActions, MetaConnectionSummary } from "@/components/meta-connection";
 import { PostingScheduleSettings } from "@/components/posting-schedule-settings";
 import { Advanced } from "@/components/ui/advanced";
 import { Button } from "@/components/ui/button";
@@ -41,6 +44,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { authClient } from "@/lib/auth-client";
 import { openLinkedInAuthorization } from "@/lib/linkedin";
+import {
+  isMetaConnectionProvider,
+  openMetaAuthorization,
+  readMetaConfiguration,
+} from "@/lib/meta-connections";
 import { channelLabel, credentialFieldLabel, platformName } from "@/lib/platform";
 import { BrandImport } from "./brand-import";
 
@@ -132,20 +140,20 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const te = useTranslations("Errors");
   const tp = useTranslations("PostingSchedule");
   const tl = useTranslations("LinkedIn");
+  const tm = useTranslations("MetaConnections");
   const locale = useLocale();
   const ti = useTranslations("Inbox");
   const router = useRouter();
   const { data: session } = authClient.useSession();
   const { data: organization } = authClient.useActiveOrganization();
-  const activeMember = organization?.members?.find(
+  const activeMembers = organization?.members?.filter(
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   );
-  const canManageAccess = isOrganizationManager(activeMember?.role);
+  const activeRole = activeMembers?.map((member) => member.role).join(",");
+  const canManageAccess = isOrganizationManager(activeRole);
   // Legacy members retain channel access; brand writes require a manager.
-  const canEditBrandSettings =
-    canManageAccess || hasOrganizationRole(activeMember?.role, ["member"]);
-  const canEditPostingTimes =
-    canEditBrandSettings || hasOrganizationRole(activeMember?.role, ["editor"]);
+  const canEditBrandSettings = canManageAccess || hasOrganizationRole(activeRole, ["member"]);
+  const canEditPostingTimes = canEditBrandSettings || hasOrganizationRole(activeRole, ["editor"]);
   const [brand, setBrand] = useState<Brand | null>(null);
   const [claimEvidenceBusy, setClaimEvidenceBusy] = useState(false);
   const [claimEvidenceError, setClaimEvidenceError] = useState<string | null>(null);
@@ -181,6 +189,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const [linkedinAvailable, setLinkedinAvailable] = useState<boolean | null>(null);
   const [linkedinConfigurationError, setLinkedinConfigurationError] = useState<string | null>(null);
   const [linkedinConfigurationRetry, setLinkedinConfigurationRetry] = useState(0);
+  const [metaConfiguration, setMetaConfiguration] = useState<{
+    brandId: string;
+    providers: Record<MetaConnectionProvider, boolean>;
+  } | null>(null);
+  const [metaConfigurationError, setMetaConfigurationError] = useState<string | null>(null);
+  const [metaConfigurationRetry, setMetaConfigurationRetry] = useState(0);
+  const metaSelected = isMetaConnectionProvider(platform);
+  const metaAvailable =
+    metaConfiguration?.brandId === id
+      ? metaConfiguration.providers[platform as MetaConnectionProvider] === true
+      : false;
   const [name, setName] = useState("");
   const [creds, setCreds] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -193,6 +212,17 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   // impatient second click can be dispatched — and a disabled submit takes
   // Enter-in-the-field with it.
   const [busy, setBusy] = useState(false);
+  const addBusyRef = useRef(false);
+  const metaEntryMounted = useRef(true);
+  const metaEntryScope = `${id}/${platform}`;
+  const currentMetaEntryScope = useRef(metaEntryScope);
+  currentMetaEntryScope.current = metaEntryScope;
+  useEffect(() => {
+    metaEntryMounted.current = true;
+    return () => {
+      metaEntryMounted.current = false;
+    };
+  }, []);
   // Removing a channel destroys credentials that are encrypted at rest and
   // never returned by any endpoint: nothing on this screen, and nothing in the
   // database, can put them back. Hence a confirmation — and a `Modal` rather
@@ -273,6 +303,25 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     };
   }, [platform, canManageAccess, id, describeError, linkedinConfigurationRetry]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: A deliberate retry repeats the selected provider's configuration read.
+  useEffect(() => {
+    if (!metaSelected || !canManageAccess) return;
+    let active = true;
+    setMetaConfiguration(null);
+    setMetaConfigurationError(null);
+    api<unknown>(`/api/channels/meta/configuration?brandId=${id}`)
+      .then((value) => {
+        const providers = readMetaConfiguration(value);
+        if (active) setMetaConfiguration({ brandId: id, providers });
+      })
+      .catch((caught) => {
+        if (active) setMetaConfigurationError(describeError(caught));
+      });
+    return () => {
+      active = false;
+    };
+  }, [platform, metaSelected, canManageAccess, id, describeError, metaConfigurationRetry]);
+
   const load = useCallback(() => {
     api<Brand>(`/api/brands/${id}`)
       .then(setBrand)
@@ -338,9 +387,26 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
 
   async function addChannel(e: React.FormEvent) {
     e.preventDefault();
+    if (addBusyRef.current || (metaSelected && (!canManageAccess || !metaAvailable))) return;
+    addBusyRef.current = true;
     setError(null);
     setBusy(true);
     try {
+      if (isMetaConnectionProvider(platform)) {
+        const body = metaAuthorizationStartSchema.parse({
+          provider: platform,
+          brandId: id,
+          name,
+          locale,
+        });
+        const result = await api("/api/channels/meta/authorize", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        if (metaEntryMounted.current && currentMetaEntryScope.current === metaEntryScope)
+          openMetaAuthorization(platform, result);
+        return;
+      }
       if (platform === "linkedin") {
         const body = linkedinAuthorizationStartSchema.parse({ brandId: id, name, locale });
         openLinkedInAuthorization(
@@ -366,6 +432,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
     } catch (err) {
       setError(describeError(err));
     } finally {
+      addBusyRef.current = false;
       setBusy(false);
     }
   }
@@ -598,13 +665,16 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
       primaryAction={
         canEditBrandSettings && (
           <Button
+            className="min-h-11"
             type="submit"
             form={FORM_ID}
             disabled={
-              busy || (platform === "linkedin" && (!canManageAccess || linkedinAvailable !== true))
+              busy ||
+              (platform === "linkedin" && (!canManageAccess || linkedinAvailable !== true)) ||
+              (metaSelected && (!canManageAccess || !metaAvailable))
             }
           >
-            {platform === "linkedin" ? tl("connect") : t("add")}
+            {metaSelected ? tm("connect") : platform === "linkedin" ? tl("connect") : t("add")}
           </Button>
         )
       }
@@ -883,7 +953,10 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                       {c.platform === "linkedin" && (
                         <LinkedInConnectionSummary connection={c.connection} />
                       )}
-                      {c.platform !== "linkedin" && (
+                      {isMetaConnectionProvider(c.platform) && (
+                        <MetaConnectionSummary provider={c.platform} connection={c.connection} />
+                      )}
+                      {c.platform !== "linkedin" && !isMetaConnectionProvider(c.platform) && (
                         <StatusBadge
                           status={
                             health === "ok" ? "published" : health === "failed" ? "review" : "draft"
@@ -924,6 +997,14 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                         {canManageAccess && c.platform === "linkedin" && (
                           <LinkedInConnectionActions
                             brandId={id}
+                            channel={c}
+                            onChanged={loadChannels}
+                          />
+                        )}
+                        {canManageAccess && isMetaConnectionProvider(c.platform) && (
+                          <MetaConnectionActions
+                            brandId={id}
+                            provider={c.platform}
                             channel={c}
                             onChanged={loadChannels}
                           />
@@ -983,6 +1064,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             <div className="flex flex-wrap gap-3">
               <Select
                 label={t("platformLabel")}
+                disabled={busy}
                 value={platform}
                 onChange={(e) => {
                   setPlatform(e.target.value as PlatformId);
@@ -990,12 +1072,18 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                   // submitted and encrypted alongside (or instead of) the ones
                   // this platform needs.
                   setCreds({});
+                  setMetaConfiguration(null);
+                  setMetaConfigurationError(null);
                 }}
-                className="min-w-[160px]"
+                className="min-h-11 min-w-[160px]"
               >
                 {OFFERED_PLATFORMS.map((p) => (
-                  <option key={p} value={p} disabled={p === "linkedin" && !canManageAccess}>
-                    {platformName(p)}
+                  <option
+                    key={p}
+                    value={p}
+                    disabled={(p === "linkedin" || isMetaConnectionProvider(p)) && !canManageAccess}
+                  >
+                    {isMetaConnectionProvider(p) ? tm(`providers.${p}`) : platformName(p)}
                   </option>
                 ))}
                 {/* Named, and plainly marked as not yet deliverable. Disabled
@@ -1018,10 +1106,11 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
               <Input
                 id={NAME_INPUT_ID}
                 value={name}
+                disabled={busy}
                 onChange={(e) => setName(e.target.value)}
                 label={t("namePlaceholder")}
                 required
-                className="min-w-[200px] flex-1"
+                className="min-h-11 min-w-[200px] flex-1"
               />
             </div>
             <div className="flex flex-wrap gap-3">
@@ -1071,6 +1160,32 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
                   </p>
                 ) : !linkedinAvailable ? (
                   <p className="mt-2">{tl("configurationUnavailable")}</p>
+                ) : null}
+              </div>
+            )}
+            {metaSelected && (
+              <div className="text-sm text-fg-secondary">
+                <p>{tm("personalOnly")}</p>
+                <p className="mt-2">{tm(`capability.${platform as MetaConnectionProvider}`)}</p>
+                {metaConfigurationError ? (
+                  <>
+                    <p role="alert" className="mt-2 text-danger">
+                      {metaConfigurationError}
+                    </p>
+                    <Button
+                      className="mt-2 min-h-11"
+                      variant="secondary"
+                      onClick={() => setMetaConfigurationRetry((value) => value + 1)}
+                    >
+                      {tm("retry")}
+                    </Button>
+                  </>
+                ) : metaConfiguration?.brandId !== id ? (
+                  <p role="status" className="mt-2">
+                    {tm("checking")}
+                  </p>
+                ) : !metaAvailable ? (
+                  <p className="mt-2">{tm("unavailable")}</p>
                 ) : null}
               </div>
             )}
@@ -1178,6 +1293,8 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
           />
           {editing?.platform === "linkedin" ? (
             <p className="text-sm text-fg-secondary">{tl("editHint")}</p>
+          ) : editing && isMetaConnectionProvider(editing.platform) ? (
+            <p className="text-sm text-fg-secondary">{tm("editHint")}</p>
           ) : editing && isManualPlatform(editing.platform) ? (
             <p className="text-sm text-fg-secondary">
               {t("manualHint", { platform: platformName(editing.platform) })}

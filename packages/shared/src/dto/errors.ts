@@ -64,6 +64,10 @@
  * `ERROR_MESSAGE_KEYS`, which is the point of the record being total.
  */
 export const API_ERROR_CODES = [
+  "content_meta_invalid",
+  "meta_preparation_changed",
+  "meta_preparation_authority_changed",
+  "meta_preparation_not_found",
   "public_authority_revoked",
   "idempotency_conflict",
   "public_result_gone",

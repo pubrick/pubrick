@@ -212,6 +212,36 @@ beforeEach(() => {
 });
 
 describe("responsibility filters", () => {
+  it("renders omitted never-created assignments like saved clears while retaining assigned and unavailable labels", async () => {
+    const member = { memberId: "member-1", userId: "user-1", name: "Morgan" };
+    installHandlers([], () => [
+      item("new", "Never assigned", "draft"),
+      {
+        ...item("cleared", "Cleared assignment", "draft"),
+        assignment: { revision: 2, assignee: null },
+      },
+      {
+        ...item("assigned", "Assigned post", "draft"),
+        assignment: { revision: 1, assignee: { ...member, eligible: true } },
+      },
+      {
+        ...item("unavailable", "Unavailable member", "draft"),
+        assignment: { revision: 3, assignee: { ...member, eligible: false } },
+      },
+    ]);
+    render(<ContentQueuePage />);
+    async function label(title: string, text: string) {
+      const link = await screen.findByRole("link", { name: title });
+      const row = link.closest("li");
+      if (!row) throw new Error("Expected content queue row");
+      expect(within(row).getByText(text)).toBeVisible();
+    }
+    await label("Never assigned", en.Assignment.unassigned);
+    await label("Cleared assignment", en.Assignment.unassigned);
+    await label("Assigned post", en.Assignment.assigned.replace("{name}", "Morgan"));
+    await label("Unavailable member", en.Assignment.unavailable.replace("{name}", "Morgan"));
+  });
+
   it("requests Mine and Unassigned on the server and preserves the scope on later pages", async () => {
     const calls: Call[] = [];
     installHandlers(calls, () => []);

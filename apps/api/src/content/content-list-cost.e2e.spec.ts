@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
+import { contentAssignmentSummarySchema } from "@pubrick/shared";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -412,6 +414,124 @@ describe.skipIf(!url)("the cost of one queue list", () => {
     }
     const withChannel = rows.filter((row) => row.adaptations.length > 0);
     expect(withChannel.map((row) => row.id)).toEqual([created.body.id]);
+  });
+
+  it("keeps saved assignment summaries scoped to the exact brand and membership within the existing read budget", async () => {
+    const { agent, orgId } = await orgAgent();
+    const person = await orgAgent();
+    const brand = await agent.post("/api/brands").send({ name: "Assigned brand" }).expect(201);
+    const otherBrand = await agent
+      .post("/api/brands")
+      .send({ name: "Different grant" })
+      .expect(201);
+    const channel = await agent
+      .post("/api/channels")
+      .send({
+        brandId: brand.body.id,
+        platform: "telegram",
+        name: "Assigned",
+        credentials: { botToken: "123:abc", chatId: "-1001111111111" },
+      })
+      .expect(201);
+    const created = await agent
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        title: "Assigned",
+        body: "Saved assigned content.",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const unassigned = await agent
+      .post("/api/content")
+      .send({
+        brandId: brand.body.id,
+        title: "Unassigned",
+        body: "Saved unassigned content.",
+        channelIds: [channel.body.id],
+      })
+      .expect(201);
+    const { createDb, schema } = await import("@pubrick/db");
+    const { and, eq } = await import("drizzle-orm");
+    const direct = createDb(url as string);
+    try {
+      const [personMember] = await direct.db
+        .select({ userId: schema.member.userId })
+        .from(schema.member)
+        .where(eq(schema.member.organizationId, person.orgId));
+      if (!personMember) throw new Error("Missing assignment user fixture");
+      const memberId = randomUUID();
+      await direct.db.insert(schema.member).values({
+        id: memberId,
+        organizationId: orgId,
+        userId: personMember.userId,
+        role: "author",
+      });
+      await direct.db
+        .insert(schema.brandAccess)
+        .values({ orgId, brandId: brand.body.id as string, memberId });
+      const assigned = await agent
+        .put(`/api/content/${created.body.id}/assignment`)
+        .send({ memberId, expectedRevision: 0 })
+        .expect(200);
+      const expected = contentAssignmentSummarySchema.parse({
+        revision: assigned.body.revision,
+        assignee: assigned.body.assignee,
+      });
+      expect(expected.assignee?.eligible).toBe(true);
+      async function summary() {
+        const [response, statements] = await countingStatements(() =>
+          agent.get("/api/content?limit=200").expect(200),
+        );
+        expect(statements.length).toBeLessThanOrEqual(4);
+        for (const statement of statements)
+          expect(statement.values.length, statement.text).toBeLessThanOrEqual(4);
+        const rows = response.body as { id: string; assignment: unknown }[];
+        const neverAssigned = rows.find((row) => row.id === unassigned.body.id);
+        expect(neverAssigned).toBeDefined();
+        expect(neverAssigned).not.toHaveProperty("assignment");
+        return contentAssignmentSummarySchema.parse(
+          rows.find((row) => row.id === created.body.id)?.assignment,
+        );
+      }
+      expect(await summary()).toEqual(expected);
+      await direct.db
+        .delete(schema.brandAccess)
+        .where(
+          and(
+            eq(schema.brandAccess.orgId, orgId),
+            eq(schema.brandAccess.brandId, brand.body.id as string),
+            eq(schema.brandAccess.memberId, memberId),
+          ),
+        );
+      await direct.db
+        .insert(schema.brandAccess)
+        .values({ orgId, brandId: otherBrand.body.id as string, memberId });
+      // Another brand's grant must not become a self-comparison in a nested SELECT.
+      const unavailable = { ...expected, assignee: { ...expected.assignee, eligible: false } };
+      expect(await summary()).toEqual(unavailable);
+      await direct.db.delete(schema.member).where(eq(schema.member.id, memberId));
+      expect(await summary()).toEqual(unavailable);
+      const rejoinedId = randomUUID();
+      await direct.db.insert(schema.member).values({
+        id: rejoinedId,
+        organizationId: orgId,
+        userId: personMember.userId,
+        role: "author",
+      });
+      await direct.db
+        .insert(schema.brandAccess)
+        .values({ orgId, brandId: brand.body.id as string, memberId: rejoinedId });
+      expect(await summary()).toEqual(unavailable);
+      await agent
+        .put(`/api/content/${created.body.id}/assignment`)
+        .send({ memberId: null, expectedRevision: expected.revision })
+        .expect(200);
+      // An explicit clear is saved state; only never-created revision zero is compacted away.
+      expect(await summary()).toEqual({ revision: expected.revision + 1, assignee: null });
+    } finally {
+      await direct.pool.end();
+    }
   });
 
   /**

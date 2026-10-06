@@ -48,6 +48,14 @@ vi.mock("./content-assignment", () => ({
   },
 }));
 vi.mock("./claim-evidence", () => ({ ClaimEvidence: () => null }));
+// Preparation progress and explicit recovery own their requests in the component suite.
+const { preparationView } = vi.hoisted(() => ({ preparationView: vi.fn() }));
+vi.mock("@/components/meta-preparations", () => ({
+  MetaPreparations: (props: { itemId: string; canRecover: boolean }) => {
+    preparationView(props);
+    return null;
+  },
+}));
 
 // Imported after the mock so this binding is the mocked export.
 import { ApiError, api, apiPage, apiVoid } from "@/lib/api";
@@ -514,6 +522,7 @@ function resultsList(): HTMLElement {
 
 beforeEach(() => {
   assignmentView.mockReset();
+  preparationView.mockReset();
   mockApi.mockReset();
   mockApiPage.mockReset();
   mockApiPage.mockResolvedValue({ rows: [], nextCursor: null });
@@ -554,6 +563,32 @@ describe("assignment permission wiring", () => {
     expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toBeVisible();
     expect(assignmentView).toHaveBeenLastCalledWith({ itemId: "c1", canAssign: expected });
   });
+});
+
+describe("nonpublic preparation recovery wiring", () => {
+  it.each([
+    { roles: ["author", "editor"], expected: true },
+    { roles: ["author", " editor"], expected: false },
+    { roles: ["author"], expected: false },
+  ])(
+    "uses exact current-user role union $roles for the saved content resource",
+    async ({ roles, expected }) => {
+      vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+        data: {
+          id: "org-1",
+          members: [
+            ...roles.map((role) => ({ role, userId: "test-user" })),
+            { role: "owner", userId: "another-user" },
+          ],
+        },
+        isPending: false,
+      } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+      installBaseHandlers({ current: makeItem() }, [], undefined, []);
+      await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+      // Audit history survives the last native channel: its presence cannot be inferred from live channels.
+      expect(preparationView).toHaveBeenLastCalledWith({ itemId: "c1", canRecover: expected });
+    },
+  );
 });
 
 describe("channel composer", () => {

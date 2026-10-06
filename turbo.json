@@ -52,6 +52,12 @@
         "GOOGLE_API_PROXY",
         "LINKEDIN_CLIENT_ID",
         "LINKEDIN_CLIENT_SECRET",
+        "THREADS_CLIENT_ID",
+        "THREADS_CLIENT_SECRET",
+        "INSTAGRAM_CLIENT_ID",
+        "INSTAGRAM_CLIENT_SECRET",
+        "FACEBOOK_CLIENT_ID",
+        "FACEBOOK_CLIENT_SECRET",
         "TELEGRAM_API_BASE_URL",
         // The worker's staleness bound. Declared not because a test reads it
         // through `process.env` — it is read through apps/worker/src/env.ts,

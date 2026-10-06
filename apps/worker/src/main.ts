@@ -20,7 +20,7 @@ async function bootstrap(): Promise<void> {
     // own request timeout, so a send that started a moment before SIGTERM is
     // guaranteed to be still in flight when `failWip()` fails its job — and a
     // failed job is a redelivered job, which is a second post. The window is
-    // derived from the adapter's timeout plus the recording budget; see
+    // derived from the longest bounded provider sequence plus the receipt budget; see
     // PUBLISH_STOP_TIMEOUT_MS for why, and for why it is only defence in depth.
     await boss.stop({ graceful: true, timeout: PUBLISH_STOP_TIMEOUT_MS });
     await app.close();

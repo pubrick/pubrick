@@ -1,8 +1,9 @@
 # Meta connections and asynchronous publication
 
-Date: 2026-10-06. Proposed continuation of competitive-parity milestone 3,
-tracked in Beads `Ozon-tools-zib2q.11`. This design is not an availability claim.
-Independent review precedes implementation.
+Date: 2026-10-06. Implementation contract for competitive-parity milestone 3,
+tracked in Beads `Ozon-tools-zib2q.11` and `.13`. Independent reviews and local
+acceptance are recorded in [the Meta verification report](../verification/competitive-parity-meta.md).
+Implementation and fixture acceptance do not establish live provider approval.
 
 ## Provider contracts
 

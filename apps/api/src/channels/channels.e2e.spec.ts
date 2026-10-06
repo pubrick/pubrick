@@ -3,6 +3,7 @@ import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import {
   isAvailablePlatform,
+  META_CONNECTION_PROVIDERS,
   PLATFORM_FIELDS,
   PLATFORM_IDS,
   PUBLISHABLE_PLATFORM_IDS,
@@ -167,7 +168,10 @@ describe.skipIf(!url)("channels e2e", () => {
       });
     }
 
-    for (const platform of PUBLISHABLE_PLATFORM_IDS.filter((id) => id !== "linkedin")) {
+    const managedPlatforms = ["linkedin", ...META_CONNECTION_PROVIDERS];
+    for (const platform of PUBLISHABLE_PLATFORM_IDS.filter(
+      (id) => !managedPlatforms.includes(id),
+    )) {
       it(`still accepts a ${platform} channel, which the picker still offers`, async () => {
         const agent = await orgAgent();
         const brand = await agent
@@ -196,8 +200,28 @@ describe.skipIf(!url)("channels e2e", () => {
       });
     }
 
-    // LinkedIn is publishable but creates channels through verified OAuth only.
-    // Its independent lifecycle suite exercises the offered connection flow.
+    // Managed connections are publishable but only verified OAuth may create
+    // them. Their lifecycle suites exercise that separate connection flow.
+    for (const platform of managedPlatforms) {
+      it(`refuses credential injection for managed ${platform}, and stores nothing`, async () => {
+        const agent = await orgAgent();
+        const brand = await agent
+          .post("/api/brands")
+          .send({ name: `Managed ${platform}` })
+          .expect(201);
+        await agent
+          .post("/api/channels")
+          .send({
+            brandId: brand.body.id,
+            platform,
+            name: "Unverified account",
+            credentials: { accessToken: "unverified-secret", accountId: "123" },
+          })
+          .expect(400);
+        const list = await agent.get(`/api/channels?brandId=${brand.body.id}`).expect(200);
+        expect(list.body).toEqual([]);
+      });
+    }
     it("creates a VC.ru channel without a token and rejects credential injection", async () => {
       const agent = await orgAgent();
       const brand = await agent.post("/api/brands").send({ name: "Manual VC" }).expect(201);

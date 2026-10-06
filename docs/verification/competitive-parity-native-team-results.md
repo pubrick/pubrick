@@ -22,7 +22,7 @@ Source contracts and setup:
 [LinkedIn](../linkedin.md), [results](../publication-results.md),
 [Telegram inbox](../telegram-inbox.md), and
 [Meta lifecycle design](../specs/0026-meta-publication-lifecycle.md).
-Meta's new public connections and staged delivery are the next implementation
+Meta's new public connections and staged delivery are a subsequent implementation
 package; the design alone does not enable them in this release.
 
 ## Local integration gates
@@ -112,8 +112,9 @@ processes, media files and disposable database after each terminal run.
 
 ## Remaining acceptance prerequisites
 
-- Meta connection/media/staged worker integration and its real database/browser
-  acceptance remain under implementation.
+- The subsequent Meta connection/media/staged worker package and its local
+  acceptance are recorded in [its own evidence report](competitive-parity-meta.md).
+  This historical package does not include those connections.
 - Real LinkedIn application approval/accounts and WordPress/Telegram test-account
   receipts remain external live-provider acceptance prerequisites.
 - Cross-platform metrics and Inbox access require their own actual grants and

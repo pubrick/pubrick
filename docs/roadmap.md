@@ -20,12 +20,14 @@ passed; see the [core workflow evidence](verification/competitive-parity-core.md
 WordPress and personal LinkedIn native publishing and their credential lifecycle
 are also implemented and locally accepted. Team assignments, saved-version batch
 and mobile guest review, capability-based results/CSV and the supported public
-Telegram discussion Inbox form the next coherent release package. See the
+Telegram discussion Inbox were integrated in `main` at `72c4527f`. See the
 [native/team/results/inbox evidence](verification/competitive-parity-native-team-results.md)
 for exact limits, local gates and browser repairs. Native Instagram, Facebook
-Pages and Threads connections, approved public media and durable container
-readiness are the current implementation priority. Existing manual Instagram
-channels remain manual.
+Pages and Threads connections, approved public media, durable container readiness
+and explicit recovery are implemented; see the [Meta acceptance evidence](verification/competitive-parity-meta.md).
+Existing manual Instagram channels remain manual. Approved provider applications,
+eligible accounts and a reachable public HTTPS origin remain live acceptance
+prerequisites; this implementation does not announce live provider approval.
 
 ## Current position
 
