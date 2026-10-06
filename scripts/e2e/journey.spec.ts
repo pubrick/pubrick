@@ -135,7 +135,7 @@ test("account, manual approval, verified channel, worker publication and UI tena
   await postingDialog.getByRole("button", { name: "Add", exact: true }).click();
   const tomorrow = new Date(Date.now() + 86_400_000);
   await postingDialog
-    .getByLabel("Weekday", { exact: true })
+    .getByRole("combobox", { name: "Weekday", exact: true })
     .selectOption(String(tomorrow.getUTCDay() || 7));
   await postingDialog.getByLabel("Time", { exact: true }).fill("09:00");
   await postingDialog.getByRole("button", { name: "Save", exact: true }).click();
