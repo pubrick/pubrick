@@ -67,8 +67,14 @@ export async function assertPostingTimesAvailable(
     channelId: string;
     scheduledAt: Date;
   }[],
+  movingIds: readonly string[] = slots.map((slot) => slot.adaptationId),
 ): Promise<void> {
+  const pairs = new Set<string>();
   for (const slot of slots) {
+    const pair = `${slot.channelId}:${slot.scheduledAt.toISOString()}`;
+    if (pairs.has(pair))
+      throw conflict("posting_slot_occupied", "Two deliveries cannot occupy the same channel time");
+    pairs.add(pair);
     const [occupied] = await tx
       .select({ id: schema.adaptations.id })
       .from(schema.adaptations)
@@ -78,7 +84,7 @@ export async function assertPostingTimesAvailable(
           eq(schema.adaptations.channelId, slot.channelId),
           eq(schema.adaptations.scheduledAt, slot.scheduledAt),
           inArray(schema.adaptations.status, ["scheduled", "queued", "publishing"]),
-          sql`${schema.adaptations.id} <> ${slot.adaptationId}`,
+          sql`${schema.adaptations.id} <> all(${sql.param([...movingIds])}::uuid[])`,
         ),
       )
       .limit(1);

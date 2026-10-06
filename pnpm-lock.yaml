@@ -247,6 +247,9 @@ importers:
       html-escaper:
         specifier: ^3.0.3
         version: 3.0.3
+      luxon:
+        specifier: 3.7.2
+        version: 3.7.2
       media-captions:
         specifier: ^0.0.18
         version: 0.0.18
@@ -284,6 +287,9 @@ importers:
       '@types/html-escaper':
         specifier: ^3.0.4
         version: 3.0.4
+      '@types/luxon':
+        specifier: ^3.7.6
+        version: 3.7.6
       '@types/node':
         specifier: ^22
         version: 22.20.1

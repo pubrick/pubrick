@@ -1218,15 +1218,30 @@ export class ContentRepository {
     query: PublicationOperationsQuery,
   ): Promise<PublicationOperationsPageDto> {
     const upcoming = query.filter === "scheduled";
+    // A calendar cursor cannot silently skip rows after its range/channel changes.
+    const scoped = query.from !== undefined || query.channelId !== undefined;
+    const scopeHash = scoped
+      ? createHash("sha256")
+          .update(
+            JSON.stringify([
+              orgId,
+              brandId,
+              query.filter,
+              query.from ?? null,
+              query.to ?? null,
+              query.channelId ?? null,
+            ]),
+          )
+          .digest("hex")
+      : null;
+    const prefix = scopeHash ? `pc1.${scopeHash}.` : upcoming ? "pq1." : "";
     const rawCursor = query.cursor;
     const cursor =
       rawCursor === undefined
         ? null
-        : upcoming && rawCursor.startsWith("pq1.")
-          ? decodeContentCursor(rawCursor.slice(4))
-          : !upcoming
-            ? decodeContentCursor(rawCursor)
-            : null;
+        : rawCursor.startsWith(prefix)
+          ? decodeContentCursor(rawCursor.slice(prefix.length))
+          : null;
     if (query.cursor !== undefined && cursor === null) {
       throw badRequest("invalid_request", "Malformed publication cursor");
     }
@@ -1251,6 +1266,7 @@ export class ContentRepository {
         deliveryOutcome: ADAPTATION_COLUMNS.deliveryOutcome,
         failureReason: schema.adaptations.failureReason,
         scheduledAt: schema.adaptations.scheduledAt,
+        attemptCount: schema.adaptations.attemptCount,
         publishedAt: sql<Date | null>`(
           select p.created_at from publications p
           where p.adaptation_id = adaptations.id and p.status = 'published'
@@ -1284,6 +1300,11 @@ export class ContentRepository {
           eq(schema.adaptations.orgId, orgId),
           filter,
           upcoming ? isNotNull(schema.adaptations.scheduledAt) : undefined,
+          query.from
+            ? sql`${schema.adaptations.scheduledAt} >= ${query.from}::timestamptz`
+            : undefined,
+          query.to ? sql`${schema.adaptations.scheduledAt} < ${query.to}::timestamptz` : undefined,
+          query.channelId ? eq(schema.adaptations.channelId, query.channelId) : undefined,
           cursor
             ? upcoming
               ? sql`(${sortAt}, ${schema.adaptations.id}) > (${sql.param(cursor.createdAt)}::timestamptz, ${sql.param(cursor.id)}::uuid)`
@@ -1309,7 +1330,7 @@ export class ContentRepository {
       })),
       nextCursor:
         rows.length > query.limit && last
-          ? `${upcoming ? "pq1." : ""}${encodeContentCursor({ createdAt: last.cursorAt, id: last.id })}`
+          ? `${prefix}${encodeContentCursor({ createdAt: last.cursorAt, id: last.id })}`
           : null,
     };
   }

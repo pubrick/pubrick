@@ -12,6 +12,7 @@ import { DraftRevisionCaller } from "./draft-revision.caller";
 import { EditorialNotesRepository } from "./editorial-notes.repository";
 import { PostingQueueRepository } from "./posting-queue.repository";
 import { PostingScheduleController } from "./posting-schedule.controller";
+import { PublicationCalendarRepository } from "./publication-calendar.repository";
 import { PublicationOperationsController } from "./publication-operations.controller";
 import { ReadaptCaller } from "./readapt.caller";
 import { RefineCaller } from "./refine.caller";
@@ -39,6 +40,7 @@ import { RefineCaller } from "./refine.caller";
   providers: [
     ContentRepository,
     PostingQueueRepository,
+    PublicationCalendarRepository,
     ArchivedPublicationsRepository,
     ContentCostRepository,
     ContentImagesRepository,
