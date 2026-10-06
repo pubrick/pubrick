@@ -331,6 +331,7 @@ describe.skipIf(!url)("atomic publication calendar moves", () => {
         await tx.execute(
           sql`select id from adaptations where org_id=${f.orgId} and id=${target.id}::uuid for update`,
         );
+        const holder = first((await tx.execute(sql`select pg_backend_pid() as pid`)).rows);
         response = f.agent
           .post(path(f))
           .send({ moves: before.rows.map((row, index) => move(row, future(index + 3))) })
@@ -340,8 +341,10 @@ describe.skipIf(!url)("atomic publication calendar moves", () => {
           });
         const deadline = Date.now() + 5000;
         for (;;) {
-          const waiting = await tx.execute(
-            sql`select count(*)::int as n from pg_stat_activity where application_name=${applicationName} and wait_event_type='Lock' and query ilike '%adaptations%'`,
+          // Observe from a separate connection: statistics snapshots are cached
+          // within the transaction deliberately holding the worker's row lock.
+          const waiting = await connection.db.execute(
+            sql`select count(*)::int as n from pg_stat_activity where application_name=${applicationName} and wait_event_type='Lock' and ${Number(holder.pid)}::int = any(pg_blocking_pids(pid)) and query ilike '%adaptations%'`,
           );
           if (Number(first(waiting.rows).n) > 0) break;
           if (settled || Date.now() >= deadline)
