@@ -60,10 +60,13 @@ describe.skipIf(!url)("supported Telegram inbox", () => {
   let completeCreate: ((receipt: DiscussionReplyReceipt) => void) | null = null;
   let createEntered: (() => void) | null = null;
   let collection: (() => Promise<DiscussionPage>) | null = null;
+  let createSignal: AbortSignal | undefined;
+  let applicationName: string;
 
   beforeAll(async () => {
     const scoped = new URL(url as string);
-    scoped.searchParams.set("application_name", `inbox-${randomUUID()}`);
+    applicationName = `inbox-${randomUUID()}`;
+    scoped.searchParams.set("application_name", applicationName);
     process.env.DATABASE_URL = scoped.toString();
     process.env.TELEGRAM_API_ID = "123";
     process.env.TELEGRAM_API_HASH = "synthetic-telegram-app";
@@ -78,8 +81,9 @@ describe.skipIf(!url)("supported Telegram inbox", () => {
       collect: async () => (collection ? collection() : collectPage),
       reply: async (_cipher: string, input: Parameters<InboxTransport["reply"]>[1]) => {
         if (preflight) await preflight();
-        const create = async (): Promise<DiscussionReplyReceipt> => {
+        const create = async (signal?: AbortSignal): Promise<DiscussionReplyReceipt> => {
           creates++;
+          createSignal = signal;
           if (replyMode === "pending") {
             createEntered?.();
             return new Promise((resolve) => {
@@ -134,6 +138,7 @@ describe.skipIf(!url)("supported Telegram inbox", () => {
     accountId = 7;
     completeCreate = null;
     createEntered = null;
+    createSignal = undefined;
   });
   const base = () => `/api/brands/${brandId}/inbox`;
   async function organization() {
@@ -464,6 +469,65 @@ describe.skipIf(!url)("supported Telegram inbox", () => {
     expect((await original).body.status).toBe("sent");
     expect(creates).toBe(1);
   });
+  it("refuses a simultaneous global operation reused across conversations without consuming the losing proof", async () => {
+    const first = await fixture();
+    const second = await fixture();
+    const left = await draft(first);
+    const right = { ...(await draft(second)), operationKey: left.operationKey };
+    const holder = createDb(url as string);
+    const connection = await holder.pool.connect();
+    let attempts: Promise<request.Response>[] = [];
+    try {
+      await connection.query("begin");
+      const pid = fixtureRow(
+        (await connection.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0],
+      ).pid;
+      await connection.query(
+        "select id from inbox_sender_previews where id=any($1::uuid[]) order by id for update",
+        [[left.senderPreviewId, right.senderPreviewId]],
+      );
+      attempts = [
+        owner
+          .post(`${first.path}/replies`)
+          .send(left)
+          .then((result) => result),
+        owner
+          .post(`${second.path}/replies`)
+          .send(right)
+          .then((result) => result),
+      ];
+      // Both lookups must miss before either claim commits; observe from another connection, never the held transaction.
+      await vi.waitFor(
+        async () => {
+          const waiting = await holder.pool.query<{ n: number }>(
+            "select count(*)::int as n from pg_stat_activity where application_name=$1 and wait_event_type='Lock' and $2::int=any(pg_blocking_pids(pid))",
+            [applicationName, pid],
+          );
+          expect(fixtureRow(waiting.rows[0]).n).toBe(2);
+        },
+        { timeout: 5000, interval: 20 },
+      );
+      await connection.query("commit");
+      const responses = await Promise.all(attempts);
+      expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+      const rejectedIndex = responses.findIndex((r) => r.status === 409);
+      expect(fixtureRow(responses[rejectedIndex]).body.code).toBe("inbox_snapshot_changed");
+      expect(creates).toBe(1);
+      const losing =
+        rejectedIndex === 0 ? { fixture: first, input: left } : { fixture: second, input: right };
+      expect(await stored(losing.fixture.id)).toBeUndefined();
+      const [proof] = await db
+        .select({ consumedAt: schema.inboxSenderPreviews.consumedAt })
+        .from(schema.inboxSenderPreviews)
+        .where(eq(schema.inboxSenderPreviews.id, losing.input.senderPreviewId));
+      expect(fixtureRow(proof).consumedAt).toBeNull();
+    } finally {
+      await connection.query("rollback");
+      connection.release();
+      await Promise.allSettled(attempts);
+      await holder.pool.end();
+    }
+  });
   it("rejects an unseen body even if a raw writer did not advance its revision", async () => {
     const f = await fixture();
     const input = await draft(f);
@@ -641,6 +705,68 @@ describe.skipIf(!url)("supported Telegram inbox", () => {
           .where(eq(schema.session.id, session.id));
     }
   });
+  it.each(["session", "sender preview"] as const)(
+    "aborts the locked create when the %s naturally expires",
+    async (kind) => {
+      const f = await fixture();
+      const input = await draft(f);
+      const sessions = await db
+        .select({ id: schema.session.id, expiresAt: schema.session.expiresAt })
+        .from(schema.session)
+        .where(
+          and(eq(schema.session.userId, actorId), eq(schema.session.activeOrganizationId, orgId)),
+        );
+      replyMode = "pending";
+      preflight = async () => {
+        if (kind === "session") {
+          for (const session of sessions)
+            await db
+              .update(schema.session)
+              .set({ expiresAt: sql`clock_timestamp() + interval '1 second'` })
+              .where(eq(schema.session.id, session.id));
+        } else
+          await db
+            .update(schema.inboxSenderPreviews)
+            .set({ expiresAt: sql`clock_timestamp() + interval '1 second'` })
+            .where(eq(schema.inboxSenderPreviews.id, input.senderPreviewId));
+      };
+      const started = Date.now();
+      try {
+        const pending = owner
+          .post(`${f.path}/replies`)
+          .send(input)
+          .then((result) => result);
+        await vi.waitFor(() => expect(creates).toBe(1), { timeout: 3000 });
+        const response = await pending;
+        expect(Date.now() - started).toBeLessThan(4000);
+        // A naturally expired session also refuses the post-send read, while the durable exact claim remains unknown.
+        expect(response.status).toBe(kind === "session" ? 403 : 200);
+        expect(createSignal?.aborted).toBe(true);
+        expect(await stored(f.id)).toMatchObject({ status: "unknown", externalMessageId: null });
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`select id from inbox_conversations where id=${f.id}::uuid for update nowait`,
+          );
+        });
+      } finally {
+        for (const session of sessions)
+          await db
+            .update(schema.session)
+            .set({ expiresAt: session.expiresAt })
+            .where(eq(schema.session.id, session.id));
+        // A real provider may still report acceptance after cancellation; preserve that exact late claim.
+        completeCreate?.(receipt);
+      }
+      await vi.waitFor(
+        async () =>
+          expect(await stored(f.id)).toMatchObject({ status: "sent", externalMessageId: 991 }),
+        { timeout: 5000 },
+      );
+      await owner.post(`${f.path}/replies`).send(input).expect(200);
+      expect(creates).toBe(1);
+    },
+    10_000,
+  );
   it("unknown blocks resend and requires original-account inspection plus exact unresolved receipt", async () => {
     const f = await fixture();
     const input = await draft(f);

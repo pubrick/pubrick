@@ -62,7 +62,14 @@ the database clock after lock waits, and refuses stale state. The maintained
 automatic replies are introduced.
 
 Retries of the same operation return the same receipt and never call Telegram
-again. A confirmed send records its message ID/link. Pre-create refusals are
+again. The discussion sender opts into mtcute’s maintained middleware with zero
+application RPC retries and waits, so a provider 500/flood response cannot trigger
+another `messages.sendMessage` after the human authority fence. Other Telegram
+readers retain their existing defaults. Stable `random_id` remains for protocol/DC
+retransmissions. The SDK receives an abort signal capped by the transport budget
+and the locked session/sender preview's database expiry. Natural expiry cancels
+the pending create and releases authority locks; cancellation does not prove that
+Telegram rejected a message already in flight. A confirmed send records its message ID/link. Pre-create refusals are
 known not sent. A post-create timeout or lost confirmation is **unknown** and
 blocks another send. Recording retries have PostgreSQL lock/statement limits and
 a bounded local budget. If storage remains unavailable, the original durable

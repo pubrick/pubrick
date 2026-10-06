@@ -12,6 +12,7 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock("@mtcute/core", () => ({
   MemoryStorage: class {},
+  networkMiddlewares: { basic: () => [] },
   Long: { ZERO: 0, fromString: (v: string) => v },
 }));
 vi.mock("@mtcute/node", () => ({
@@ -107,7 +108,14 @@ describe("normalized Telegram discussion transport", () => {
     expect(fake.sendText.mock.calls[0]).toEqual([
       root.chat.inputPeer,
       { text: "Human reply", entities: [] },
-      { replyTo: 21, threadId: 15, sendAs: "me", randomId: "123", disableWebPreview: true },
+      {
+        replyTo: 21,
+        threadId: 15,
+        sendAs: "me",
+        randomId: "123",
+        disableWebPreview: true,
+        abortSignal: expect.any(AbortSignal),
+      },
     ]);
   });
   it.each(["thread", "body", "account"])("refuses changed %s without create", async (kind) => {
@@ -155,7 +163,35 @@ describe("normalized Telegram discussion transport", () => {
     await vi.advanceTimersByTimeAsync(20_001);
     await refusal;
     expect(fake.sendText).toHaveBeenCalledTimes(1);
+    expect(fake.sendText.mock.calls[0]?.[2].abortSignal.aborted).toBe(true);
     vi.useRealTimers();
+  });
+  it("passes locked authority cancellation to the maintained sender and keeps the outcome unknown", async () => {
+    const authority = new AbortController();
+    input.beforeSend.mockImplementation(async (_account, create) => create(authority.signal));
+    fake.sendText.mockImplementation(
+      (_peer, _text, options) =>
+        new Promise((_, reject) => {
+          options.abortSignal.addEventListener(
+            "abort",
+            () => reject(new Error("fixture_cancelled")),
+            { once: true },
+          );
+        }),
+    );
+    const pending = replyToDiscussion(credentials, input);
+    const refusal = expect(pending).rejects.toMatchObject({ uncertain: true });
+    await vi.waitFor(() => expect(fake.sendText).toHaveBeenCalledTimes(1));
+    authority.abort();
+    await refusal;
+    expect(fake.sendText.mock.calls[0]?.[2].abortSignal.aborted).toBe(true);
+  });
+  it("refuses an already cancelled authority boundary without provider create", async () => {
+    const authority = new AbortController();
+    authority.abort();
+    input.beforeSend.mockImplementation(async (_account, create) => create(authority.signal));
+    await expect(replyToDiscussion(credentials, input)).rejects.toMatchObject({ uncertain: false });
+    expect(fake.sendText).not.toHaveBeenCalled();
   });
   it("returns at the deadline even if client shutdown never settles", async () => {
     vi.useFakeTimers();

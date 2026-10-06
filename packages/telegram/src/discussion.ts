@@ -36,10 +36,12 @@ export class DiscussionError extends Error {
 
 async function bounded<T>(
   credentials: Credentials,
-  action: (client: TelegramClient, alive: () => void) => Promise<T>,
+  action: (client: TelegramClient, alive: () => void, signal: AbortSignal) => Promise<T>,
+  singleAttempt = false,
 ): Promise<T> {
-  const client = createClient(credentials);
+  const client = createClient(credentials, { singleAttempt });
   let expired = false;
+  const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const alive = () => {
     if (expired) throw new DiscussionError("unavailable", true);
@@ -47,6 +49,7 @@ async function bounded<T>(
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       expired = true;
+      abort.abort();
       void client.destroy().catch(() => undefined);
       reject(new DiscussionError("unavailable", true));
     }, 20_000);
@@ -57,11 +60,12 @@ async function bounded<T>(
       (async () => {
         await client.importSession(credentials.session);
         alive();
-        return action(client, alive);
+        return action(client, alive, abort.signal);
       })(),
     ]);
   } finally {
     expired = true;
+    abort.abort();
     if (timer) clearTimeout(timer);
     // Cleanup must not extend the network deadline when the SDK's shutdown is stuck.
     void client.destroy().catch(() => undefined);
@@ -155,59 +159,67 @@ export async function replyToDiscussion(
     expectedAccountId: number;
     beforeSend: (
       account: DiscussionAccount,
-      create: () => Promise<DiscussionReplyReceipt>,
+      create: (signal?: AbortSignal) => Promise<DiscussionReplyReceipt>,
     ) => Promise<DiscussionReplyReceipt>;
   },
 ): Promise<DiscussionReplyReceipt> {
   let createStarted = false;
   let acceptedReceipt: DiscussionReplyReceipt | undefined;
   try {
-    return await bounded(credentials, async (client, alive) => {
-      const root = await discussion(client, input.postUrl);
-      if (root.chat.id !== input.identity.peerId || root.id !== input.identity.rootId)
-        throw new DiscussionError("target_changed");
-      const [target] = await client.getMessages(root.chat.inputPeer, input.message.messageId);
-      if (
-        !target ||
-        target.isContentProtected ||
-        target.isService ||
-        (target.replyToMessage?.threadId ?? target.replyToMessage?.id) !== root.id ||
-        target.text.replaceAll("\u0000", "").slice(0, 4000) !== input.message.body ||
-        Boolean(target.text.replaceAll("\u0000", "").length > 4000) !==
-          input.message.bodyTruncated ||
-        (target.editDate?.getTime() ?? null) !== (input.message.editedAt?.getTime() ?? null)
-      )
-        throw new DiscussionError("message_changed");
-      const me = await client.getMe();
-      if (me.id !== input.expectedAccountId) throw new DiscussionError("target_changed");
-      alive();
-      return input.beforeSend(
-        { id: me.id, label: me.username ? `@${me.username}` : me.displayName },
-        async () => {
-          alive();
-          createStarted = true;
-          const sent = await client.sendText(
-            root.chat.inputPeer,
-            { text: input.body, entities: [] },
-            {
-              replyTo: target.id,
-              threadId: root.id,
-              sendAs: "me",
-              randomId: Long.fromString(input.randomId),
-              disableWebPreview: true,
-            },
-          );
-          let url: string | null = null;
-          try {
-            url = sent.link;
-          } catch {
-            /* ID still proves acceptance when a permalink is unavailable. */
-          }
-          acceptedReceipt = { messageId: sent.id, url };
-          return acceptedReceipt;
-        },
-      );
-    });
+    return await bounded(
+      credentials,
+      async (client, alive, networkSignal) => {
+        const root = await discussion(client, input.postUrl);
+        if (root.chat.id !== input.identity.peerId || root.id !== input.identity.rootId)
+          throw new DiscussionError("target_changed");
+        const [target] = await client.getMessages(root.chat.inputPeer, input.message.messageId);
+        if (
+          !target ||
+          target.isContentProtected ||
+          target.isService ||
+          (target.replyToMessage?.threadId ?? target.replyToMessage?.id) !== root.id ||
+          target.text.replaceAll("\u0000", "").slice(0, 4000) !== input.message.body ||
+          Boolean(target.text.replaceAll("\u0000", "").length > 4000) !==
+            input.message.bodyTruncated ||
+          (target.editDate?.getTime() ?? null) !== (input.message.editedAt?.getTime() ?? null)
+        )
+          throw new DiscussionError("message_changed");
+        const me = await client.getMe();
+        if (me.id !== input.expectedAccountId) throw new DiscussionError("target_changed");
+        alive();
+        return input.beforeSend(
+          { id: me.id, label: me.username ? `@${me.username}` : me.displayName },
+          async (authoritySignal) => {
+            alive();
+            authoritySignal?.throwIfAborted();
+            createStarted = true;
+            const sent = await client.sendText(
+              root.chat.inputPeer,
+              { text: input.body, entities: [] },
+              {
+                replyTo: target.id,
+                threadId: root.id,
+                sendAs: "me",
+                randomId: Long.fromString(input.randomId),
+                disableWebPreview: true,
+                abortSignal: authoritySignal
+                  ? AbortSignal.any([networkSignal, authoritySignal])
+                  : networkSignal,
+              },
+            );
+            let url: string | null = null;
+            try {
+              url = sent.link;
+            } catch {
+              /* ID still proves acceptance when a permalink is unavailable. */
+            }
+            acceptedReceipt = { messageId: sent.id, url };
+            return acceptedReceipt;
+          },
+        );
+      },
+      true,
+    );
   } catch (error) {
     if (error instanceof DiscussionError && !createStarted)
       throw new DiscussionError(error.code, false);

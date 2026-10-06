@@ -913,134 +913,159 @@ export class InboxRepository {
   }
 
   async reply(orgId: string, brandId: string, id: string, input: InboxReplyInput) {
-    const admission = await db.transaction(async (tx) => {
-      const user = await actor(tx, orgId, brandId);
-      // Immutable operation identity survives HTTP retries and never invokes the provider twice.
-      const [old] = await tx
-        .select(REPLY_COLUMNS)
-        .from(replies)
-        .where(
-          and(
-            eq(replies.orgId, orgId),
-            eq(replies.actorId, user.userId),
-            eq(replies.operationKey, input.operationKey),
-          ),
-        );
-      if (old) return { replay: replyDto(replay(old, brandId, id, input), await databaseNow(tx)) };
-      const [read] = await tx
-        .select(CONVERSATION_COLUMNS)
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.orgId, orgId),
-            eq(conversations.brandId, brandId),
-            eq(conversations.id, id),
-          ),
-        );
-      if (!read) throw new NotFoundException();
-      const publication = await livePublication(tx, orgId, brandId, read.publicationId);
-      const connected = await account(tx, orgId);
-      const row = await lockedConversation(tx, orgId, brandId, id);
-      const [committed] = await tx
-        .select(REPLY_COLUMNS)
-        .from(replies)
-        .where(
-          and(
-            eq(replies.orgId, orgId),
-            eq(replies.actorId, user.userId),
-            eq(replies.operationKey, input.operationKey),
-          ),
-        );
-      if (committed)
-        return { replay: replyDto(replay(committed, brandId, id, input), await databaseNow(tx)) };
-      if (publication.url !== row.postUrl)
-        throw conflict("inbox_target_changed", "The publication target changed");
-      const [message] = await tx
-        .select(MESSAGE_COLUMNS)
-        .from(messages)
-        .where(
-          and(
-            eq(messages.orgId, orgId),
-            eq(messages.brandId, brandId),
-            eq(messages.conversationId, id),
-            eq(messages.id, input.messageId),
-          ),
+    const admission = await db
+      .transaction(async (tx) => {
+        const user = await actor(tx, orgId, brandId);
+        // Immutable operation identity survives HTTP retries and never invokes the provider twice.
+        const [old] = await tx
+          .select(REPLY_COLUMNS)
+          .from(replies)
+          .where(
+            and(
+              eq(replies.orgId, orgId),
+              eq(replies.actorId, user.userId),
+              eq(replies.operationKey, input.operationKey),
+            ),
+          );
+        if (old)
+          return { replay: replyDto(replay(old, brandId, id, input), await databaseNow(tx)) };
+        const [read] = await tx
+          .select(CONVERSATION_COLUMNS)
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.orgId, orgId),
+              eq(conversations.brandId, brandId),
+              eq(conversations.id, id),
+            ),
+          );
+        if (!read) throw new NotFoundException();
+        const publication = await livePublication(tx, orgId, brandId, read.publicationId);
+        const connected = await account(tx, orgId);
+        const row = await lockedConversation(tx, orgId, brandId, id);
+        const [committed] = await tx
+          .select(REPLY_COLUMNS)
+          .from(replies)
+          .where(
+            and(
+              eq(replies.orgId, orgId),
+              eq(replies.actorId, user.userId),
+              eq(replies.operationKey, input.operationKey),
+            ),
+          );
+        if (committed)
+          return { replay: replyDto(replay(committed, brandId, id, input), await databaseNow(tx)) };
+        if (publication.url !== row.postUrl)
+          throw conflict("inbox_target_changed", "The publication target changed");
+        const [message] = await tx
+          .select(MESSAGE_COLUMNS)
+          .from(messages)
+          .where(
+            and(
+              eq(messages.orgId, orgId),
+              eq(messages.brandId, brandId),
+              eq(messages.conversationId, id),
+              eq(messages.id, input.messageId),
+            ),
+          )
+          .for("share");
+        if (
+          !message ||
+          message.revision !== input.expectedMessageRevision ||
+          messageFingerprint(message) !== input.expectedMessageFingerprint ||
+          message.bodyTruncated
         )
-        .for("share");
-      if (
-        !message ||
-        message.revision !== input.expectedMessageRevision ||
-        messageFingerprint(message) !== input.expectedMessageFingerprint ||
-        message.bodyTruncated
-      )
-        throw conflict(
-          "inbox_message_changed",
-          "Review the complete latest message before replying",
-        );
-      const [blocked] = await tx
-        .select({ id: replies.id })
-        .from(replies)
-        .where(
-          and(
-            eq(replies.orgId, orgId),
-            eq(replies.brandId, brandId),
-            eq(replies.conversationId, id),
-            sql`${replies.status} in ('sending', 'unknown')`,
-          ),
-        );
-      if (blocked)
-        throw conflict(
-          "inbox_reply_unsettled",
-          "Inspect and settle the previous uncertain reply before sending",
-        );
-      const [preview] = await tx
-        .select({
-          id: previews.id,
-          accountId: previews.accountId,
-          accountLabel: previews.accountLabel,
-          expiresAt: previews.expiresAt,
-        })
-        .from(previews)
-        .where(
-          and(
-            eq(previews.orgId, orgId),
-            eq(previews.brandId, brandId),
-            eq(previews.id, input.senderPreviewId),
-            eq(previews.actorId, user.userId),
-            eq(previews.sessionId, user.sessionId),
-            eq(previews.accountGeneration, connected.generation),
-            isNull(previews.consumedAt),
-            sql`${previews.expiresAt} > clock_timestamp()`,
-          ),
+          throw conflict(
+            "inbox_message_changed",
+            "Review the complete latest message before replying",
+          );
+        const [blocked] = await tx
+          .select({ id: replies.id })
+          .from(replies)
+          .where(
+            and(
+              eq(replies.orgId, orgId),
+              eq(replies.brandId, brandId),
+              eq(replies.conversationId, id),
+              sql`${replies.status} in ('sending', 'unknown')`,
+            ),
+          );
+        if (blocked)
+          throw conflict(
+            "inbox_reply_unsettled",
+            "Inspect and settle the previous uncertain reply before sending",
+          );
+        const [preview] = await tx
+          .select({
+            id: previews.id,
+            accountId: previews.accountId,
+            accountLabel: previews.accountLabel,
+            expiresAt: previews.expiresAt,
+          })
+          .from(previews)
+          .where(
+            and(
+              eq(previews.orgId, orgId),
+              eq(previews.brandId, brandId),
+              eq(previews.id, input.senderPreviewId),
+              eq(previews.actorId, user.userId),
+              eq(previews.sessionId, user.sessionId),
+              eq(previews.accountGeneration, connected.generation),
+              isNull(previews.consumedAt),
+              sql`${previews.expiresAt} > clock_timestamp()`,
+            ),
+          )
+          .for("update");
+        if (!preview || preview.expiresAt.getTime() <= (await databaseNow(tx)).getTime())
+          throw conflict(
+            "inbox_snapshot_changed",
+            "Check the Telegram sender again before sending",
+          );
+        const replyId = randomUUID();
+        await tx
+          .update(previews)
+          .set({ consumedAt: sql`clock_timestamp()` })
+          .where(eq(previews.id, preview.id));
+        await tx.insert(replies).values({
+          id: replyId,
+          orgId,
+          brandId,
+          conversationId: id,
+          messageId: message.id,
+          actorId: user.userId,
+          operationKey: input.operationKey,
+          senderPreviewId: preview.id,
+          messageRevision: message.revision,
+          messageFingerprint: input.expectedMessageFingerprint,
+          targetBody: message.body,
+          targetProviderMessageId: message.providerMessageId,
+          body: input.body,
+          senderLabel: preview.accountLabel,
+          accountId: preview.accountId,
+          accountGeneration: connected.generation,
+        });
+        return { claim: { replyId, user, connected, row, message, publication, preview } };
+      })
+      .catch((error: unknown) => {
+        // Other conversations do not share the row lock, but this actor's operation identity is global.
+        // Match only the exact unique fence; unrelated storage/constraint failures must remain errors.
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "cause" in error &&
+          typeof error.cause === "object" &&
+          error.cause !== null &&
+          "code" in error.cause &&
+          error.cause.code === "23505" &&
+          "constraint" in error.cause &&
+          error.cause.constraint === "inbox_replies_operation_idx"
         )
-        .for("update");
-      if (!preview || preview.expiresAt.getTime() <= (await databaseNow(tx)).getTime())
-        throw conflict("inbox_snapshot_changed", "Check the Telegram sender again before sending");
-      const replyId = randomUUID();
-      await tx
-        .update(previews)
-        .set({ consumedAt: sql`clock_timestamp()` })
-        .where(eq(previews.id, preview.id));
-      await tx.insert(replies).values({
-        id: replyId,
-        orgId,
-        brandId,
-        conversationId: id,
-        messageId: message.id,
-        actorId: user.userId,
-        operationKey: input.operationKey,
-        senderPreviewId: preview.id,
-        messageRevision: message.revision,
-        messageFingerprint: input.expectedMessageFingerprint,
-        targetBody: message.body,
-        targetProviderMessageId: message.providerMessageId,
-        body: input.body,
-        senderLabel: preview.accountLabel,
-        accountId: preview.accountId,
-        accountGeneration: connected.generation,
+          throw conflict(
+            "inbox_snapshot_changed",
+            "This send operation belongs to another reviewed reply",
+          );
+        throw error;
       });
-      return { claim: { replyId, user, connected, row, message, publication, preview } };
-    });
     if ("replay" in admission) return admission.replay;
     const claim = admission.claim;
     let createStarted = false;
@@ -1118,7 +1143,7 @@ export class InboxRepository {
               );
             // Re-read the database clock after every lock wait, immediately before provider create.
             const [fresh] = await tx
-              .select({ id: schema.session.id })
+              .select({ id: schema.session.id, expiresAt: schema.session.expiresAt })
               .from(schema.session)
               .where(
                 and(
@@ -1128,7 +1153,7 @@ export class InboxRepository {
               );
             if (!fresh) throw new ForbiddenException("Session expired before send");
             const [currentPreview] = await tx
-              .select({ id: previews.id })
+              .select({ id: previews.id, expiresAt: previews.expiresAt })
               .from(previews)
               .where(
                 and(
@@ -1145,9 +1170,19 @@ export class InboxRepository {
                 "inbox_snapshot_changed",
                 "The reviewed sender expired before sending",
               );
-            if (Date.now() >= sendDeadline) throw new DiscussionError("unavailable");
-            createStarted = true;
-            const provider = create();
+            const clockReadStarted = performance.now();
+            const now = await databaseNow(tx);
+            // Natural authority/proof expiry bounds the network create, as does the transport budget.
+            // Charge the whole clock roundtrip conservatively rather than extending authority by network latency.
+            const remaining =
+              Math.min(
+                sendDeadline - Date.now(),
+                fresh.expiresAt.getTime() - now.getTime(),
+                currentPreview.expiresAt.getTime() - now.getTime(),
+              ) -
+              (performance.now() - clockReadStarted);
+            if (remaining <= 0) throw new DiscussionError("unavailable");
+            const abort = new AbortController();
             let expired = false;
             let timer: ReturnType<typeof setTimeout> | undefined;
             // This boundary is INSIDE the locked transaction. The transport's outer race alone cannot release database locks.
@@ -1155,25 +1190,29 @@ export class InboxRepository {
               timer = setTimeout(
                 () => {
                   expired = true;
+                  abort.abort();
                   reject(new DiscussionError("unavailable", true));
                 },
-                Math.max(1, sendDeadline - Date.now()),
+                Math.max(1, remaining),
               );
             });
-            void provider.then(
-              (late) => {
-                if (expired)
-                  void this.finish(orgId, brandId, id, claim.replyId, "sent", late).catch(
-                    () => undefined,
-                  );
-              },
-              () => undefined,
-            );
             let accepted: DiscussionReplyReceipt;
             try {
+              createStarted = true;
+              const provider = create(abort.signal);
+              void provider.then(
+                (late) => {
+                  if (expired)
+                    void this.finish(orgId, brandId, id, claim.replyId, "sent", late).catch(
+                      () => undefined,
+                    );
+                },
+                () => undefined,
+              );
               accepted = await Promise.race([provider, timeout]);
             } finally {
               if (timer) clearTimeout(timer);
+              abort.abort();
             }
             await this.saveReceipt(tx, orgId, brandId, id, claim.replyId, accepted);
             return accepted;
