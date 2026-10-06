@@ -4,7 +4,7 @@ import { CONTENT_PAGE_SIZE, type PublishFailureReason, runDetailDtoSchema } from
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { OriginBadge } from "@/components/origin-badge";
 import { Button, buttonClasses } from "@/components/ui/button";
@@ -100,6 +100,7 @@ type Adaptation = {
    */
   deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
+  scheduledAt: string | null;
   externalUrl: string | null;
   lastError: string | null;
   /**
@@ -132,6 +133,7 @@ type ContentItem = {
 // `no-store`: a poll exists to see a change, so it must never be answered from
 // the browser's cache with the body it was given a moment ago.
 const fetchOpenRuns = () => api<Run[]>("/api/runs?state=open", { cache: "no-store" });
+const fetchChannels = () => api<Channel[]>("/api/channels", { cache: "no-store" });
 
 /**
  * The open list never settles, and that is not an oversight.
@@ -203,6 +205,7 @@ function loadedQueue(pages: readonly (readonly ContentItem[])[]): ContentItem[] 
 export default function ContentQueuePage() {
   const t = useTranslations("Content");
   const tr = useTranslations("Runs");
+  const tq = useTranslations("ReviewQueue");
   // The refusals' own namespace: `errorMessage` turns the api's `code` into one
   // of these, so what this screen shows for a 4xx is a sentence in the reader's
   // language rather than the English one the server wrote for a network tab.
@@ -210,8 +213,21 @@ export default function ContentQueuePage() {
   const locale = useLocale();
   const router = useRouter();
 
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [channelsFailed, setChannelsFailed] = useState(false);
+  // Health comes from the cached database view; polling never calls a platform.
+  const {
+    data: channelData,
+    error: channelsError,
+    refresh: refreshChannels,
+  } = usePoll(fetchChannels, openListNeverSettles, {
+    intervalMs: 5 * 60_000,
+    hiddenIntervalMs: 5 * 60_000,
+  });
+  const channels = channelData ?? [];
+  const channelsFailed =
+    channelsError !== null && !(channelsError instanceof ApiError && channelsError.noActiveOrg);
+  const [refreshingLists, setRefreshingLists] = useState(false);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const itemLinks = useRef(new Map<string, HTMLAnchorElement>());
   const [status, setStatus] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   /**
@@ -461,13 +477,16 @@ export default function ContentQueuePage() {
       // cannot dismiss.
       setLaterPagesError(failure === undefined ? null : describeFailureRef.current(failure));
     }
-    return first as Page<ContentItem>;
+    return { ...first, filter: at };
   }, [listUrl]);
   const {
-    data: firstPage,
+    data: contentSnapshot,
     error: contentError,
     refresh: refreshContent,
   } = usePoll(fetchContent, contentSettled, { intervalMs: CONTENT_LIST_POLL_INTERVAL_MS });
+  // A poll retains its last good value while fetching. Rows from the previous
+  // filter must not appear under the new heading or remain keyboard targets.
+  const firstPage = contentSnapshot?.filter === status ? contentSnapshot : null;
 
   /**
    * A filter change is a DIFFERENT QUEUE, so the pages loaded under the old one
@@ -550,35 +569,6 @@ export default function ContentQueuePage() {
     }
   }
 
-  useEffect(() => {
-    // A failed read must not look like a list with no names in it. Without
-    // this the only symptom of a dead GET /api/channels is that every row is
-    // labelled with a UUID, which reads as a data problem rather than as the
-    // request that it is.
-    let active = true;
-    const refresh = () => {
-      api<Channel[]>("/api/channels")
-        .then((cs) => {
-          if (!active) return;
-          setChannels(cs);
-          setChannelsFailed(false);
-        })
-        // Except when the account has no active organization: every request
-        // already redirects to onboarding. Hide old health warnings if this
-        // read fails; an old verdict is not a current warning.
-        .catch((err) => {
-          if (active) setChannelsFailed(!(err instanceof ApiError && err.noActiveOrg));
-        });
-    };
-    refresh();
-    // Poll only the cached database view; this never calls a platform.
-    const timer = window.setInterval(refresh, 5 * 60_000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
   const {
     data: runs,
     error: runsError,
@@ -600,11 +590,11 @@ export default function ContentQueuePage() {
   }, [runs, refreshContent]);
 
   useEffect(() => {
-    const failure = runsError ?? contentError;
+    const failure = runsError ?? contentError ?? channelsError;
     if (failure instanceof ApiError && failure.noActiveOrg) {
       router.replace(`/${locale}/onboarding`);
     }
-  }, [runsError, contentError, router, locale]);
+  }, [runsError, contentError, channelsError, router, locale]);
 
   /**
    * Start the run again from what the API already has, and clear the one being
@@ -753,13 +743,14 @@ export default function ContentQueuePage() {
               <Button
                 variant="secondary"
                 size="sm"
+                className="min-h-11"
                 onClick={() => tryAgain(run)}
                 disabled={retrying !== null}
               >
                 {tr("tryAgain")}
               </Button>
             )}
-            <Button variant="ghost" size="sm" onClick={() => dismissRun(run)}>
+            <Button variant="ghost" size="sm" className="min-h-11" onClick={() => dismissRun(run)}>
               {tr("dismiss")}
             </Button>
           </span>
@@ -789,11 +780,22 @@ export default function ContentQueuePage() {
       item.status === "failed" &&
       item.adaptations.every((adaptation) => adaptation.deliveryOutcome === "failed");
     return (
-      <li key={item.id} className="border-b border-border-soft py-3 last:border-b-0">
+      <li
+        key={item.id}
+        className={`scroll-mt-24 border-b border-border-soft py-3 last:border-b-0 ${selectedItemId === item.id ? "bg-bg-sunken" : ""}`}
+      >
         <span className="flex flex-wrap items-center gap-2">
           <Link
             href={`/${locale}/content/${item.id}`}
-            className={`text-[15px] font-semibold hover:text-accent ${failed ? "text-danger" : "text-fg"}`}
+            ref={(link) => {
+              if (link) itemLinks.current.set(item.id, link);
+              else itemLinks.current.delete(item.id);
+            }}
+            data-review-id={item.id}
+            aria-describedby="review-queue-keyboard-hint"
+            onFocus={() => setSelectedItemId(item.id)}
+            onKeyDown={navigateReview}
+            className={`inline-flex min-h-11 min-w-11 items-center rounded-control text-[15px] font-semibold hover:text-accent ${failed ? "text-danger" : "text-fg"}`}
           >
             {item.title || t("untitled")}
           </Link>
@@ -806,7 +808,7 @@ export default function ContentQueuePage() {
           {failed && (
             <Link
               href={`/${locale}/content/${item.id}`}
-              className={buttonClasses("secondary", "sm", "ml-auto")}
+              className={buttonClasses("secondary", "sm", "ml-auto min-h-11")}
             >
               {t("tryAgain")}
             </Link>
@@ -822,6 +824,11 @@ export default function ContentQueuePage() {
               <StatusBadge status={DELIVERY_BADGE_STATUS[a.deliveryOutcome]}>
                 {t(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
+              {a.status === "scheduled" && a.scheduledAt && (
+                <time dateTime={a.scheduledAt} className="text-fg-secondary">
+                  {tq("scheduledFor", { date: scheduledTime.format(new Date(a.scheduledAt)) })}
+                </time>
+              )}
               {/*
                 Said here and not only on the item screen: "check the channel
                 before approving again" is advice about an action that starts
@@ -887,6 +894,66 @@ export default function ContentQueuePage() {
     ? [[status as ContentStatus, items] as const]
     : GROUP_STATUSES.map((s) => [s, items.filter((i) => i.status === s)] as const);
 
+  // The API lists newest-created items, grouped here by status. Navigation
+  // follows those rendered groups; it never claims a global delivery order.
+  const reviewIds = groups.flatMap(([, groupItems]) => groupItems.map((item) => item.id));
+  const scheduledTime = new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
+  function navigateReview(event: KeyboardEvent<HTMLAnchorElement>) {
+    if (
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      !(event.target instanceof HTMLElement)
+    )
+      return;
+    // Single-letter shortcuts are focus-scoped. Inputs, editable content,
+    // filters, retry buttons, and external links keep their native behavior.
+    if (
+      event.target.closest(
+        'input, textarea, select, button, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="listbox"]',
+      )
+    )
+      return;
+    const link = event.target.closest<HTMLAnchorElement>("a[data-review-id]");
+    const id = link?.dataset.reviewId;
+    if (!id) return;
+    const direction =
+      event.key === "j" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "k" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (direction === 0) return; // Enter is the link's native open action.
+    const current = reviewIds.indexOf(id);
+    if (current === -1) return;
+    event.preventDefault();
+    const next = reviewIds[Math.max(0, Math.min(reviewIds.length - 1, current + direction))];
+    if (next) itemLinks.current.get(next)?.focus();
+  }
+
+  async function retryListReads() {
+    if (refreshingLists) return;
+    setRefreshingLists(true);
+    try {
+      // usePoll owns each read's error and protects newer responses from an
+      // older in-flight request. Failed refreshes retain their visible warning.
+      await Promise.all([refreshContent(), refreshRuns(), refreshChannels()]);
+    } finally {
+      setRefreshingLists(false);
+    }
+  }
+
   const filterOptions = [
     { value: "", label: t("filterAll") },
     ...STATUSES.map((s) => ({ value: s, label: t(`status.${s}`) })),
@@ -921,7 +988,14 @@ export default function ContentQueuePage() {
   // `firstPage !== null` rather than `items.length === 0`: before the first
   // read lands there is nothing loaded AND nothing known, and those are not the
   // same screen.
-  const isEmpty = firstPage !== null && items.length === 0 && openRuns.length === 0;
+  const isEmpty =
+    firstPage !== null &&
+    runs !== null &&
+    !contentError &&
+    !runsError &&
+    items.length === 0 &&
+    openRuns.length === 0;
+  const initiallyLoading = (firstPage === null && !contentError) || (runs === null && !runsError);
 
   return (
     <AppShell
@@ -942,6 +1016,19 @@ export default function ContentQueuePage() {
         <p role="alert" className="mb-4 text-sm text-danger">
           {t("channelsUnavailable")}
         </p>
+      )}
+
+      {(readErrorMessage || laterPagesError || channelsFailed) && (
+        <div className="mb-4">
+          <Button
+            variant="secondary"
+            className="min-h-11"
+            onClick={retryListReads}
+            disabled={refreshingLists}
+          >
+            {refreshingLists ? tq("retrying") : tq("retry")}
+          </Button>
+        </div>
       )}
 
       {channelsAtRisk.length > 0 && (
@@ -982,6 +1069,18 @@ export default function ContentQueuePage() {
         <p className="mb-2 text-sm font-medium text-fg-secondary">{t("filterLabel")}</p>
         <Segmented options={filterOptions} value={status} onChange={changeStatus} />
       </div>
+
+      {initiallyLoading && (
+        <p role="status" className="mb-4 text-sm text-fg-secondary">
+          {tq("loading")}
+        </p>
+      )}
+
+      {items.length > 0 && (
+        <p id="review-queue-keyboard-hint" className="mb-3 text-sm text-fg-secondary">
+          {tq("keyboardHint")}
+        </p>
+      )}
 
       {isEmpty && (
         <Card padded={false}>

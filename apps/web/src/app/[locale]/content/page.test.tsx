@@ -45,6 +45,7 @@ type Adaptation = {
   status: AdaptationStatus;
   deliveryOutcome: DeliveryOutcome;
   origin: ContentOrigin;
+  scheduledAt: string | null;
   externalUrl: string | null;
   lastError: string | null;
   failureReason: PublishFailureReason | null;
@@ -81,6 +82,7 @@ function adaptation(overrides: Partial<Adaptation> = {}): Adaptation {
     // explicitly, and every other fixture stays honest for free.
     deliveryOutcome: overrides.status ?? "pending",
     origin: "human",
+    scheduledAt: null,
     externalUrl: null,
     lastError: null,
     // Null on a row that has not failed, and on the one population that failed
@@ -2705,5 +2707,199 @@ describe("paging (0009 T5)", () => {
       // The same window, because the failed tick delivered none of it.
       expect(cursorsSince(beforeGood)).toEqual(spent);
     });
+  });
+});
+
+describe("daily review navigation and feedback", () => {
+  it("shows each scheduled adaptation's delivery time with a timezone, never a stale published slot", async () => {
+    const when = "2026-10-15T09:30:00.000Z";
+    installHandlers([], () => [
+      item("scheduled", "Scheduled post", "approved", [
+        adaptation({ id: "first", status: "scheduled", scheduledAt: when }),
+        adaptation({
+          id: "second",
+          channelId: "ch2",
+          status: "scheduled",
+          scheduledAt: "2026-10-16T11:45:00.000Z",
+        }),
+      ]),
+      item("published", "Published post", "published", [
+        adaptation({ id: "old", status: "published", scheduledAt: when }),
+      ]),
+    ]);
+    const { container } = render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "Scheduled post" });
+    const times = container.querySelectorAll("time");
+    expect(times).toHaveLength(2);
+    expect(times[0]).toHaveAttribute("datetime", when);
+    const formatter = new Intl.DateTimeFormat("en", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    expect(times[0]).toHaveTextContent(
+      en.ReviewQueue.scheduledFor.replace("{date}", formatter.format(new Date(when))),
+    );
+    const published = screen.getByRole("link", { name: "Published post" }).closest("li");
+    expect(published?.querySelector("time")).toBeNull();
+  });
+
+  it("moves focus in rendered group order, retains native Enter, and performs no approval", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => [
+      item("draft", "Draft to review", "draft"),
+      item("failed", "Failed delivery", "failed", [adaptation({ status: "failed" })]),
+      item("approved", "Approved next", "approved"),
+    ]);
+    render(<ContentQueuePage />);
+    const failed = await screen.findByRole("link", { name: "Failed delivery" });
+    const draft = screen.getByRole("link", { name: "Draft to review" });
+    const approved = screen.getByRole("link", { name: "Approved next" });
+    expect(screen.getByText(en.ReviewQueue.keyboardHint)).toBeVisible();
+    expect(failed).toHaveAttribute("aria-describedby", "review-queue-keyboard-hint");
+    act(() => failed.focus());
+    expect(fireEvent.keyDown(failed, { key: "j" })).toBe(false);
+    expect(draft).toHaveFocus();
+    expect(draft.closest("li")).toHaveClass("bg-bg-sunken");
+    fireEvent.keyDown(draft, { key: "ArrowDown" });
+    expect(approved).toHaveFocus();
+    fireEvent.keyDown(approved, { key: "ArrowDown" });
+    expect(approved).toHaveFocus();
+    fireEvent.keyDown(approved, { key: "k" });
+    expect(draft).toHaveFocus();
+    fireEvent.keyDown(draft, { key: "ArrowUp" });
+    expect(failed).toHaveFocus();
+    expect(fireEvent.keyDown(failed, { key: "Enter" })).toBe(true);
+    expect(failed).toHaveAttribute("href", "/en/content/failed");
+    expect(calls.every((call) => call.method === "GET")).toBe(true);
+    expect(routerMock.push).not.toHaveBeenCalled();
+  });
+
+  it("does not hijack typing, composed input, modifiers, controls, or keys outside a focused post", async () => {
+    installHandlers([], () => [
+      item("first", "First review", "draft"),
+      item("second", "Second review", "draft"),
+    ]);
+    render(<ContentQueuePage />);
+    const first = await screen.findByRole("link", { name: "First review" });
+    act(() => first.focus());
+    for (const event of [
+      { key: "j", ctrlKey: true },
+      { key: "j", metaKey: true },
+      { key: "ArrowDown", altKey: true },
+      { key: "ArrowDown", shiftKey: true },
+      { key: "j", isComposing: true },
+    ]) {
+      expect(fireEvent.keyDown(first, event)).toBe(true);
+      expect(first).toHaveFocus();
+    }
+    // Future inline fields must keep their keys even within a review card.
+    for (const element of [
+      document.createElement("input"),
+      document.createElement("textarea"),
+      document.createElement("select"),
+      document.createElement("button"),
+      document.createElement("div"),
+    ]) {
+      if (element.tagName === "DIV") element.setAttribute("contenteditable", "true");
+      first.append(element);
+      expect(fireEvent.keyDown(element, { key: "j" })).toBe(true);
+      expect(fireEvent.keyDown(element, { key: "ArrowDown" })).toBe(true);
+      element.remove();
+    }
+    act(() => first.blur());
+    expect(fireEvent.keyDown(document.body, { key: "j" })).toBe(true);
+    expect(first).not.toHaveFocus();
+  });
+
+  it("includes newly loaded rows in navigation without fetching hidden rows", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => []);
+    mockApiPage.mockImplementation(async (url) => {
+      calls.push({ path: url, method: "GET" });
+      return url.includes("cursor=")
+        ? { rows: [item("second", "Later review", "draft")], nextCursor: null }
+        : { rows: [item("first", "First review", "draft")], nextCursor: "more" };
+    });
+    render(<ContentQueuePage />);
+    const first = await screen.findByRole("link", { name: "First review" });
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: "j" });
+    expect(first).toHaveFocus();
+    expect(calls.filter((call) => call.path.includes("cursor="))).toHaveLength(0);
+    await userEvent.setup().click(screen.getByRole("button", { name: en.Content.loadMore }));
+    const later = await screen.findByRole("link", { name: "Later review" });
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: "j" });
+    expect(later).toHaveFocus();
+    expect(calls.filter((call) => call.path.includes("cursor="))).toHaveLength(1);
+  });
+
+  it("hides the previous filter's rows while the newly selected queue is loading", async () => {
+    installHandlers([], () => [item("draft", "Old draft", "draft")]);
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "Old draft" });
+    let finish!: (value: { rows: ContentItem[]; nextCursor: null }) => void;
+    mockApiPage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await userEvent.setup().click(screen.getByRole("tab", { name: en.Content.status.approved }));
+    expect(screen.queryByRole("link", { name: "Old draft" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(en.ReviewQueue.loading);
+    expect(screen.queryByText(en.Content.empty)).not.toBeInTheDocument();
+    await act(async () => {
+      finish({ rows: [item("approved", "Current approval", "approved")], nextCursor: null });
+    });
+    await screen.findByRole("link", { name: "Current approval" });
+    expect(screen.queryByText(en.ReviewQueue.loading)).not.toBeInTheDocument();
+  });
+
+  it("announces initial loading rather than an empty queue", async () => {
+    installHandlers([], () => []);
+    let finish!: (value: { rows: ContentItem[]; nextCursor: null }) => void;
+    mockApiPage.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<ContentQueuePage />);
+    expect(screen.getByRole("status")).toHaveTextContent(en.ReviewQueue.loading);
+    expect(screen.queryByText(en.Content.empty)).not.toBeInTheDocument();
+    await act(async () => {
+      finish({ rows: [], nextCursor: null });
+    });
+    await screen.findByText(en.Content.empty);
+    expect(screen.queryByText(en.ReviewQueue.loading)).not.toBeInTheDocument();
+  });
+
+  it("lets a reader retry a failed list immediately and disables duplicate refreshes", async () => {
+    installHandlers([], () => []);
+    mockApiPage.mockRejectedValueOnce(new ApiError(500, '{"message":"temporary failure"}'));
+    let finish!: (value: { rows: ContentItem[]; nextCursor: null }) => void;
+    mockApiPage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<ContentQueuePage />, { locale: "ru" });
+    expect(await screen.findByRole("alert")).toHaveTextContent(ru.Content.genericError);
+    expect(screen.queryByText(ru.Content.empty)).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: ru.ReviewQueue.retry }));
+    expect(screen.getByRole("button", { name: ru.ReviewQueue.retrying })).toBeDisabled();
+    expect(mockApiPage).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      finish({ rows: [item("recovered", "Recovered post", "draft")], nextCursor: null });
+    });
+    await screen.findByRole("link", { name: "Recovered post" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ru.ReviewQueue.retry })).not.toBeInTheDocument();
   });
 });

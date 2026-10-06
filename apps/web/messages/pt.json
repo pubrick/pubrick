@@ -3121,5 +3121,12 @@
       "rulesLabel": "As regras criativas",
       "rules": "Publicação curta. Primeira pessoa do plural. Tom de conversa. Manter os detalhes concretos do estúdio."
     }
+  },
+  "ReviewQueue": {
+    "keyboardHint": "Foque uma publicação e use ↑/↓ ou J/K para navegar e Enter para abrir. A navegação inclui apenas as publicações carregadas.",
+    "scheduledFor": "Agendada para {date}",
+    "loading": "Carregando conteúdo…",
+    "retry": "Tentar novamente",
+    "retrying": "Tentando novamente…"
   }
 }

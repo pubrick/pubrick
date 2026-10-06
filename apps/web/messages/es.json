@@ -3121,5 +3121,12 @@
       "rulesLabel": "Las reglas creativas",
       "rules": "Publicación breve. Primera persona del plural. Tono conversacional. Mantener los detalles concretos del estudio."
     }
+  },
+  "ReviewQueue": {
+    "keyboardHint": "Enfoca una publicación y usa ↑/↓ o J/K para desplazarte y Enter para abrirla. Solo se recorren las publicaciones cargadas.",
+    "scheduledFor": "Programada para {date}",
+    "loading": "Cargando contenido…",
+    "retry": "Reintentar",
+    "retrying": "Reintentando…"
   }
 }

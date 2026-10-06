@@ -3121,5 +3121,12 @@
       "rulesLabel": "The creative rules",
       "rules": "Short post. First-person plural. A conversational tone. Keep the concrete studio details."
     }
+  },
+  "ReviewQueue": {
+    "keyboardHint": "Focus a post, then use ↑/↓ or J/K to move and Enter to open. Navigation covers loaded posts only.",
+    "scheduledFor": "Scheduled for {date}",
+    "loading": "Loading content…",
+    "retry": "Retry",
+    "retrying": "Retrying…"
   }
 }
