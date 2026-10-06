@@ -161,6 +161,8 @@ const ZONED_COLUMNS = [
   "client_review_links.expires_at",
   "client_review_links.reviewed_at",
   "client_review_links.revoked_at",
+  "content_assignment_history.created_at",
+  "content_assignments.updated_at",
   "content_items.created_at",
   "content_items.first_opened_at",
   "content_items.updated_at",
@@ -376,6 +378,11 @@ const PINNED_COLUMNS: ReadonlyArray<{ table: string; column: string; bogus: stri
  * number two lists happen to have summed to once.
  */
 const NON_ENUM_CHECKS = [
+  // 0132: assignment identities and revisions are relational bounds, not enums.
+  // content-assignment.e2e.spec.ts proves direct SQL rejects invalid scoped rows.
+  "content_assignments_identity_check",
+  "content_assignments_revision_check",
+  "content_assignment_history_revision_check",
   // 0130: weekly slots/revision are relational bounds, rather than enum pins.
   // posting-schedule.e2e.test.ts proves defaults and invalid direct SQL writes.
   "channels_posting_revision_check",

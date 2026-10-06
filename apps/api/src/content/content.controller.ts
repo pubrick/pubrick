@@ -161,12 +161,18 @@ export class ContentController {
   async list(
     @OrgId() orgId: string,
     @VisibleBrandIds() visibleBrandIds: string[] | null,
+    @UserId() userId: string,
     @Res({ passthrough: true }) res: { setHeader: (name: string, value: string) => void },
     @Query("status") status?: string,
     @Query("limit") limit?: string,
     @Query("cursor") cursor?: string,
+    @Query("assignment") assignment?: string,
   ) {
-    const page = await this.content.list(orgId, { status, limit, cursor }, visibleBrandIds);
+    const page = await this.content.list(
+      orgId,
+      { status, limit, cursor, assignment, assigneeUserId: userId },
+      visibleBrandIds,
+    );
     if (page.nextCursor !== null) res.setHeader(NEXT_CURSOR_HEADER, page.nextCursor);
     return page.rows;
   }

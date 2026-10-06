@@ -1909,7 +1909,9 @@
     "posting_queue_not_ready": "Solo se admite contenido sin enviar para canales automáticos. Revisa los envíos actuales primero.",
     "channel_target_changed": "Esta conexión tiene otro destino. Añade un canal nuevo para usar un destino diferente.",
     "delivery_receipt_changed": "El registro de entrega cambió o no se pudo identificar. Recarga y revisa el intento actual antes de decidir.",
-    "accepted_record_removal_required": "Revisa el registro aceptado en el proveedor y confirma su eliminación antes de volver a enviar."
+    "accepted_record_removal_required": "Revisa el registro aceptado en el proveedor y confirma su eliminación antes de volver a enviar.",
+    "assignment_changed": "La asignación cambió. Recarga antes de guardar.",
+    "assignment_member_unavailable": "Este miembro ya no tiene acceso a la marca. Recarga y elige un miembro actual."
   },
   "CalendarMemorable": {
     "title": "Fechas señaladas",
@@ -3269,5 +3271,30 @@
     "reloadRequired": "Actualiza para seleccionar las horas actuales antes de volver a intentarlo.",
     "moved": "Publicaciones movidas.",
     "movedRefreshFailed": "Publicaciones movidas. Actualiza para ver sus horas actuales."
+  },
+  "Assignment": {
+    "title": "Responsabilidad",
+    "label": "Persona responsable",
+    "assigned": "Asignado a {name}",
+    "unavailable": "{name} ya no tiene acceso. Reasigna o elimina esta asignación.",
+    "unavailableLabel": "Sin acceso",
+    "unassigned": "Sin asignar",
+    "loading": "Cargando…",
+    "saving": "Guardando…",
+    "save": "Guardar",
+    "saved": "Asignación guardada.",
+    "hint": "Solo se muestran miembros actuales del espacio con acceso a esta marca. Asignar no aprueba ni publica contenido.",
+    "unsaved": "La asignación cambió y aún no se ha guardado.",
+    "failed": "No se pudo guardar la asignación.",
+    "changed": "La asignación cambió al cargar el historial. Recarga la asignación actual.",
+    "reloadHint": "Recarga la asignación guardada antes de volver a intentarlo. Se reemplazará tu selección actual.",
+    "reload": "Recargar",
+    "history": "Historial de asignaciones",
+    "historyChange": "{actor}: {before} → {after}",
+    "loadMore": "Cargar más",
+    "filterLabel": "Responsabilidad",
+    "filterAll": "Todas las publicaciones",
+    "filterMine": "Mías",
+    "filterUnassigned": "Sin asignar"
   }
 }

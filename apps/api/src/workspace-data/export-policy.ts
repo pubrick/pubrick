@@ -3,6 +3,38 @@ import { schema } from "@pubrick/db";
 /** Reviewed public data fields. New columns never become exportable implicitly. */
 export const WORKSPACE_EXPORT_TABLES = [
   {
+    key: "contentAssignments",
+    table: schema.contentAssignments,
+    fields: [
+      "orgId",
+      "brandId",
+      "contentItemId",
+      "revision",
+      "assigneeMemberId",
+      "assigneeUserId",
+      "assigneeName",
+      "updatedAt",
+    ],
+  },
+  {
+    key: "contentAssignmentHistory",
+    table: schema.contentAssignmentHistory,
+    fields: [
+      "id",
+      "orgId",
+      "brandId",
+      "contentItemId",
+      "revision",
+      "previousMemberId",
+      "previousName",
+      "assigneeMemberId",
+      "assigneeName",
+      "actorUserId",
+      "actorName",
+      "createdAt",
+    ],
+  },
+  {
     key: "telegramDecisionAudit",
     table: schema.telegramDecisionAudit,
     fields: [

@@ -107,6 +107,8 @@ export const API_ERROR_CODES = [
   "claim_correction_failed",
   "claim_correction_timed_out",
   "editorial_note_stale",
+  "assignment_changed",
+  "assignment_member_unavailable",
   "draft_revision_stale",
   "draft_revision_incomplete",
   "draft_revision_note_not_found",

@@ -3,6 +3,7 @@ import { normalizeNewlines } from "../provenance.js";
 import { projectRichBody, richBodySchema } from "../rich-body.js";
 import { TELEGRAM_LONG_POST_LENGTH } from "../telegram-photo-parts.js";
 import type { ManualPlatformId } from "./channels.js";
+import { contentAssignmentSummarySchema } from "./content-assignment.js";
 import { CONTENT_ORIGINS } from "./content-origins.js";
 import { contentReuseAttributionSchema } from "./content-reuse-attribution.js";
 
@@ -941,6 +942,7 @@ export const contentListItemDtoSchema = z.strictObject({
   origin: z.enum(CONTENT_ORIGINS),
   bodyIsAiVerbatim: z.boolean(),
   qualityScore: z.number().finite().min(0).max(1).nullable(),
+  assignment: contentAssignmentSummarySchema.optional(),
   adaptations: z.array(adaptationListDtoSchema),
   createdAt: z.string(),
   updatedAt: z.string(),

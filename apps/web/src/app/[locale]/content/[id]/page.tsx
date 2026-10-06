@@ -73,6 +73,7 @@ import {
 import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
 import { type ComposerState, ComposerTabs, composerPanelId, composerTabId } from "./composer-tabs";
+import { ContentAssignment } from "./content-assignment";
 import { CoverRegenerate } from "./cover-regenerate";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
@@ -346,6 +347,14 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     (member) => member.userId === session?.user.id || member.user?.id === session?.user.id,
   )?.role;
   const canDecideDelivery = hasOrganizationRole(role, ["owner", "admin", "member", "editor"]);
+  const canAssignContent = Boolean(
+    session?.user.id &&
+      organization?.members?.some(
+        (member) =>
+          (member.userId === session.user.id || member.user?.id === session.user.id) &&
+          hasOrganizationRole(member.role, ["owner", "admin", "member", "editor"]),
+      ),
+  );
   const canManageDraft = hasOrganizationRole(role, [
     "owner",
     "admin",
@@ -2389,6 +2398,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           {t("backToQueue")}
         </Link>
       </p>
+      <ContentAssignment
+        key={`${organization?.id ?? ""}:${id}`}
+        itemId={id}
+        canAssign={canAssignContent}
+      />
       {canDecideDelivery && approvalEditsPending && (
         <Card className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-3">

@@ -57,6 +57,7 @@ export * from "./dto/channels.js";
 export * from "./dto/claim-review.js";
 export * from "./dto/client-review.js";
 export * from "./dto/content.js";
+export * from "./dto/content-assignment.js";
 export * from "./dto/content-images.js";
 export * from "./dto/content-reuse.js";
 export * from "./dto/draft-revision.js";

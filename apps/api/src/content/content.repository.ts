@@ -31,6 +31,7 @@ import {
   type ContentStatus,
   type ContentUpdate,
   type ContentVersionRestore,
+  contentAssignmentFilterSchema,
   type DeliveryAssertion,
   type DraftRevisionImagePlan,
   type DraftRevisionProposal,
@@ -83,6 +84,10 @@ import { z } from "zod";
 import { AiCredentialsRepository } from "../ai-credentials/ai-credentials.repository";
 import { badRequest, conflict, forbidden, notFound } from "../api-error";
 import { requireClientReviewApproval } from "../client-review/client-review.repository";
+import {
+  assignmentQueuePredicate,
+  contentAssignmentSummaries,
+} from "../content-assignment/content-assignment.query";
 import { db } from "../db";
 import { MediaRepository } from "../media/media.repository";
 import { MediaImageService } from "../media/media-image.service";
@@ -1150,6 +1155,9 @@ function anyOf(column: PgColumn, ids: string[]) {
 /** What `GET /api/content` accepts, exactly as the query string carries it. */
 export type ContentListOptions = {
   status?: string;
+  assignment?: string;
+  /** Bound to the authenticated session by the controller, never a query parameter. */
+  assigneeUserId?: string;
   /** Still a string: it comes off a URL, and refusing a bad one is this file's job. */
   limit?: string;
   cursor?: string;
@@ -1499,6 +1507,10 @@ export class ContentRepository {
     visibleBrandIds: string[] | null = null,
   ) {
     const { status, cursor: rawCursor } = options;
+    const assignment = contentAssignmentFilterSchema.safeParse(options.assignment ?? "all");
+    if (!assignment.success || (assignment.data === "mine" && !options.assigneeUserId)) {
+      throw badRequest("invalid_request", "Invalid assignment filter");
+    }
     // CODED, like every other refusal on this route. A bare
     // `BadRequestException` carries no `code`, and `errorMessage` on the web
     // has nothing to translate — so the reader gets the api's English, which is
@@ -1530,6 +1542,9 @@ export class ContentRepository {
         ? eq(schema.contentItems.status, status as ContentStatus)
         : ne(schema.contentItems.status, "archived"),
       cursor ? afterCursor(cursor) : undefined,
+      assignment.data === "all"
+        ? undefined
+        : assignmentQueuePredicate(orgId, assignment.data, options.assigneeUserId ?? ""),
     );
     const page = await db
       .select({ ...ITEM_COLUMNS, cursorAt: CURSOR_AT })
@@ -1556,11 +1571,11 @@ export class ContentRepository {
     const hasNext = page.length > limit;
     const items = hasNext ? page.slice(0, limit) : page;
     const itemIds = items.map((item) => item.id);
-    // Two independent reads of the same page, so they go together: neither
-    // needs the other's answer, and the pool is the resource being spared.
-    const [aiEvidence, adaptations] = await Promise.all([
+    // Independent bounded reads of this page share one wait.
+    const [aiEvidence, adaptations, assignments] = await Promise.all([
       this.itemAiEvidence(orgId, itemIds),
       this.adaptationsForMany(orgId, itemIds),
+      contentAssignmentSummaries(orgId, itemIds),
     ]);
     const rows = items.map((item) => {
       // The gate's question, on the card. See `get` for why the badge is a
@@ -1585,6 +1600,7 @@ export class ContentRepository {
         ...card,
         bodyIsAiVerbatim: allSentencesAi(body, evidence.rows, evidence.firstFullBody),
         adaptations: adaptations.get(item.id) ?? [],
+        assignment: assignments.get(item.id) ?? { revision: 0, assignee: null },
       };
     });
     // The LAST ROW OF THE PAGE, not the extra one: the cursor means "start

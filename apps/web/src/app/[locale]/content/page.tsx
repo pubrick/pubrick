@@ -1,6 +1,13 @@
 "use client";
 
-import { CONTENT_PAGE_SIZE, type PublishFailureReason, runDetailDtoSchema } from "@pubrick/shared";
+import {
+  CONTENT_PAGE_SIZE,
+  type ContentAssignmentFilter,
+  type ContentAssignmentSummary,
+  contentAssignmentFilterSchema,
+  type PublishFailureReason,
+  runDetailDtoSchema,
+} from "@pubrick/shared";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
@@ -127,6 +134,7 @@ type ContentItem = {
    */
   bodyIsAiVerbatim: boolean;
   qualityScore: number | null;
+  assignment?: ContentAssignmentSummary;
   adaptations: Adaptation[];
 };
 
@@ -206,6 +214,7 @@ export default function ContentQueuePage() {
   const t = useTranslations("Content");
   const tr = useTranslations("Runs");
   const tq = useTranslations("ReviewQueue");
+  const ta = useTranslations("Assignment");
   // The refusals' own namespace: `errorMessage` turns the api's `code` into one
   // of these, so what this screen shows for a 4xx is a sentence in the reader's
   // language rather than the English one the server wrote for a network tab.
@@ -229,6 +238,10 @@ export default function ContentQueuePage() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const itemLinks = useRef(new Map<string, HTMLAnchorElement>());
   const [status, setStatus] = useState("");
+  const [assignment, setAssignment] = useState<ContentAssignmentFilter>("all");
+  const assignmentRef = useRef<ContentAssignmentFilter>("all");
+  // Every filter change is a new read generation, including All → Mine → All.
+  const filterGeneration = useRef(0);
   const [actionError, setActionError] = useState<string | null>(null);
   /**
    * The last tick's verdict on the LATER pages' reads — a sentence while one of
@@ -367,10 +380,10 @@ export default function ContentQueuePage() {
   /** One page of the queue under the current filter; no cursor means page 1. */
   const listUrl = useCallback(
     (cursor: string | null) =>
-      `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}${
+      `/api/content?limit=${CONTENT_PAGE_SIZE}${status ? `&status=${status}` : ""}${assignment === "all" ? "" : `&assignment=${assignment}`}${
         cursor === null ? "" : `&cursor=${encodeURIComponent(cursor)}`
       }`,
-    [status],
+    [status, assignment],
   );
 
   /**
@@ -409,7 +422,7 @@ export default function ContentQueuePage() {
    * a change, so it must never be answered from the browser's cache.
    */
   const fetchContent = useCallback(async () => {
-    const at = statusRef.current;
+    const at = filterGeneration.current;
     const unsettled = laterPagesRef.current.filter((page) => !queueSettled(page.rows));
     const from = unsettled.length > 0 ? refreshFrom.current % unsettled.length : 0;
     const stale = Array.from(
@@ -449,7 +462,7 @@ export default function ContentQueuePage() {
     // pages of a queue nobody is looking at. The ref is written before the
     // state for the same reason `loadMore` writes it first: `contentSettled`
     // runs on the value returned here, before the next render.
-    if (statusRef.current === at) {
+    if (filterGeneration.current === at) {
       const next = [...laterPagesRef.current];
       let changed = false;
       let failure: unknown;
@@ -486,7 +499,7 @@ export default function ContentQueuePage() {
   } = usePoll(fetchContent, contentSettled, { intervalMs: CONTENT_LIST_POLL_INTERVAL_MS });
   // A poll retains its last good value while fetching. Rows from the previous
   // filter must not appear under the new heading or remain keyboard targets.
-  const firstPage = contentSnapshot?.filter === status ? contentSnapshot : null;
+  const firstPage = contentSnapshot?.filter === filterGeneration.current ? contentSnapshot : null;
 
   /**
    * A filter change is a DIFFERENT QUEUE, so the pages loaded under the old one
@@ -506,6 +519,7 @@ export default function ContentQueuePage() {
     // nothing, which is what it looks like it does.
     if (statusRef.current === next) return;
     statusRef.current = next;
+    filterGeneration.current += 1;
     // `refreshFrom` is deliberately NOT reset: every read of it is taken modulo
     // the current number of unsettled pages, so a counter left mid-lap over a
     // page set that no longer exists names an in-range page of the new one. A
@@ -515,6 +529,18 @@ export default function ContentQueuePage() {
     setLaterPages([]);
     setLaterCursor(null);
     setStatus(next);
+  }
+
+  function changeAssignment(next: string) {
+    const parsed = contentAssignmentFilterSchema.safeParse(next);
+    if (!parsed.success || assignmentRef.current === parsed.data) return;
+    assignmentRef.current = parsed.data;
+    filterGeneration.current += 1;
+    laterPagesRef.current = [];
+    setLaterPages([]);
+    setLaterCursor(null);
+    setLaterPagesError(null);
+    setAssignment(parsed.data);
   }
 
   const items = loadedQueue([firstPage?.rows ?? [], ...laterPages.map((p) => p.rows)]);
@@ -536,10 +562,10 @@ export default function ContentQueuePage() {
    */
   async function loadMore() {
     if (nextCursor === null || loadingMore) return;
+    const at = filterGeneration.current;
     setActionError(null);
     setLoadingMore(true);
     try {
-      const at = statusRef.current;
       const page = await apiPage<ContentItem>(listUrl(nextCursor), { cache: "no-store" });
       // A PAGE OF A QUEUE THE READER HAS LEFT IS DROPPED. A chip pressed while
       // this was out has already reset the loaded pages, and these rows are of
@@ -548,7 +574,7 @@ export default function ContentQueuePage() {
       // `[[status, items]]` and nothing there re-checks a row's own status.
       // The guard is here rather than on the chip: disabling the filter for a
       // network round trip is the worse trade.
-      if (statusRef.current !== at) return;
+      if (filterGeneration.current !== at) return;
       // A PAGE THAT ARRIVES WITH A DELIVERY STILL MOVING HAS TO RESTART THE
       // POLL, not merely be counted by it. `usePoll` stops the moment a fetched
       // value is terminal and asks again only when something fetches; page 1
@@ -563,7 +589,7 @@ export default function ContentQueuePage() {
       setLaterCursor(page.nextCursor);
       if (wasSettled && !queueSettled(page.rows)) await refreshContent();
     } catch (err) {
-      handleError(err);
+      if (filterGeneration.current === at) handleError(err);
     } finally {
       setLoadingMore(false);
     }
@@ -800,6 +826,15 @@ export default function ContentQueuePage() {
             {item.title || t("untitled")}
           </Link>
           <OriginBadge origin={deriveOrigin(item)} />
+          {item.assignment && (
+            <span className="text-xs font-normal text-fg-secondary">
+              {item.assignment.assignee
+                ? ta(item.assignment.assignee.eligible ? "assigned" : "unavailable", {
+                    name: item.assignment.assignee.name,
+                  })
+                : ta("unassigned")}
+            </span>
+          )}
           {item.qualityScore !== null && (
             <span className="text-[12px] text-fg-tertiary" title={t("qualityScoreHint")}>
               {t("qualityScore", { score: Math.round(item.qualityScore * 100) })}
@@ -1067,7 +1102,25 @@ export default function ContentQueuePage() {
 
       <div className="mb-5">
         <p className="mb-2 text-sm font-medium text-fg-secondary">{t("filterLabel")}</p>
-        <Segmented options={filterOptions} value={status} onChange={changeStatus} />
+        <Segmented
+          label={t("filterLabel")}
+          className="[&_button]:min-h-11"
+          options={filterOptions}
+          value={status}
+          onChange={changeStatus}
+        />
+        <p className="mb-2 mt-4 text-sm font-medium text-fg-secondary">{ta("filterLabel")}</p>
+        <Segmented
+          label={ta("filterLabel")}
+          className="[&_button]:min-h-11"
+          options={[
+            { value: "all", label: ta("filterAll") },
+            { value: "mine", label: ta("filterMine") },
+            { value: "unassigned", label: ta("filterUnassigned") },
+          ]}
+          value={assignment}
+          onChange={changeAssignment}
+        />
       </div>
 
       {initiallyLoading && (

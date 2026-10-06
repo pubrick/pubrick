@@ -1909,7 +1909,9 @@
     "posting_queue_not_ready": "Esta fila aceita apenas conteúdo não enviado para canais automáticos. Revise os envios atuais primeiro.",
     "channel_target_changed": "Esta conexão tem outro destino. Adicione um novo canal para usar um destino diferente.",
     "delivery_receipt_changed": "O registro de entrega mudou ou não pôde ser identificado. Recarregue e verifique a tentativa atual antes de decidir.",
-    "accepted_record_removal_required": "Verifique o registro aceito no provedor e confirme sua remoção antes de enviar novamente."
+    "accepted_record_removal_required": "Verifique o registro aceito no provedor e confirme sua remoção antes de enviar novamente.",
+    "assignment_changed": "A atribuição mudou. Recarregue antes de salvar.",
+    "assignment_member_unavailable": "Este membro não tem mais acesso à marca. Recarregue e escolha um membro atual."
   },
   "CalendarMemorable": {
     "title": "Datas comemorativas",
@@ -3269,5 +3271,30 @@
     "reloadRequired": "Atualize para selecionar os horários atuais antes de tentar novamente.",
     "moved": "Publicações movidas.",
     "movedRefreshFailed": "Publicações movidas. Atualize para ver seus horários atuais."
+  },
+  "Assignment": {
+    "title": "Responsabilidade",
+    "label": "Pessoa responsável",
+    "assigned": "Atribuído a {name}",
+    "unavailable": "{name} não tem mais acesso. Reatribua ou remova esta atribuição.",
+    "unavailableLabel": "Sem acesso",
+    "unassigned": "Sem responsável",
+    "loading": "Carregando…",
+    "saving": "Salvando…",
+    "save": "Salvar",
+    "saved": "Responsável salvo.",
+    "hint": "A lista mostra apenas membros atuais do espaço com acesso a esta marca. A atribuição não aprova nem publica conteúdo.",
+    "unsaved": "A atribuição mudou e ainda não foi salva.",
+    "failed": "Não foi possível salvar o responsável.",
+    "changed": "A atribuição mudou durante o carregamento do histórico. Recarregue a atribuição atual.",
+    "reloadHint": "Recarregue a atribuição salva antes de tentar novamente. Sua seleção atual será substituída.",
+    "reload": "Recarregar",
+    "history": "Histórico de atribuições",
+    "historyChange": "{actor}: {before} → {after}",
+    "loadMore": "Carregar mais",
+    "filterLabel": "Responsabilidade",
+    "filterAll": "Todos os conteúdos",
+    "filterMine": "Minhas",
+    "filterUnassigned": "Sem responsável"
   }
 }

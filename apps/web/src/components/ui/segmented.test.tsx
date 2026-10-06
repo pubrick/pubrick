@@ -17,6 +17,16 @@ function Controlled({ initial = "system" }: { initial?: string }) {
 }
 
 describe("Segmented", () => {
+  it("gives independent filter tablists distinct accessible group names", () => {
+    render(
+      <>
+        <Segmented label="Status" options={THREE} value="system" onChange={vi.fn()} />
+        <Segmented label="Responsibility" options={THREE} value="light" onChange={vi.fn()} />
+      </>,
+    );
+    expect(screen.getByRole("tablist", { name: "Status" })).toBeVisible();
+    expect(screen.getByRole("tablist", { name: "Responsibility" })).toBeVisible();
+  });
   it("renders a tablist of tabs with the selected one marked", () => {
     render(<Controlled />);
     expect(screen.getByRole("tablist")).toBeInTheDocument();

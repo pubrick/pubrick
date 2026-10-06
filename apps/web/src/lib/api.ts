@@ -153,6 +153,8 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_not_found: "content_not_found",
   content_image_not_found: "content_image_not_found",
   editorial_note_stale: "editorial_note_stale",
+  assignment_changed: "assignment_changed",
+  assignment_member_unavailable: "assignment_member_unavailable",
   publication_not_found: "publication_not_found",
   publication_comments_unavailable: "publication_comments_unavailable",
   publication_comments_refresh_cooldown: "publication_comments_refresh_cooldown",

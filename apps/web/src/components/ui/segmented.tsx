@@ -6,6 +6,7 @@ import { TRANSITION_COLORS } from "./transition";
 export type SegmentedOption = { value: string; label: string };
 
 export type SegmentedProps = {
+  label?: string;
   options: SegmentedOption[];
   value: string;
   onChange: (value: string) => void;
@@ -42,7 +43,7 @@ const FADE = "24px";
  * Settings, the page in the queue) — a mask fades to whatever is actually
  * behind it, a gradient would have to guess.
  */
-export function Segmented({ options, value, onChange, className }: SegmentedProps) {
+export function Segmented({ label, options, value, onChange, className }: SegmentedProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [edges, setEdges] = useState({ start: false, end: false });
@@ -117,6 +118,7 @@ export function Segmented({ options, value, onChange, className }: SegmentedProp
     <div
       ref={scrollerRef}
       role="tablist"
+      aria-label={label}
       onKeyDown={handleKeyDown}
       style={maskImage ? { maskImage, WebkitMaskImage: maskImage } : undefined}
       className={["flex max-w-full items-center gap-1 overflow-x-auto", className]

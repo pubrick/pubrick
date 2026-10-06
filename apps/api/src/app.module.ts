@@ -13,6 +13,7 @@ import { ChannelsModule } from "./channels/channels.module";
 import { ClaimReviewModule } from "./claim-review/claim-review.module";
 import { ClientReviewModule } from "./client-review/client-review.module";
 import { ContentModule } from "./content/content.module";
+import { ContentAssignmentModule } from "./content-assignment/content-assignment.module";
 import { FeedsModule } from "./feeds/feeds.module";
 import { HealthModule } from "./health/health.module";
 import { HostedAdmissionModule } from "./hosted-admission/hosted-admission.module";
@@ -53,6 +54,7 @@ import { WorkspaceDataModule } from "./workspace-data/workspace-data.module";
     ClaimReviewModule,
     ClientReviewModule,
     ContentModule,
+    ContentAssignmentModule,
     FeedsModule,
     OrgModule,
     PaidRepliesModule,

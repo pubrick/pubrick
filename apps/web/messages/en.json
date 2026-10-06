@@ -1909,7 +1909,9 @@
     "posting_queue_not_ready": "Only unsent native-channel posts can enter this queue. Inspect the current deliveries first.",
     "channel_target_changed": "This connection has a different destination. Add a new channel to use another destination.",
     "delivery_receipt_changed": "The delivery record changed or could not be identified. Reload and inspect the current attempt before deciding.",
-    "accepted_record_removal_required": "Inspect the accepted provider record and confirm it was removed before sending again."
+    "accepted_record_removal_required": "Inspect the accepted provider record and confirm it was removed before sending again.",
+    "assignment_changed": "Assignment changed. Reload before saving.",
+    "assignment_member_unavailable": "This member no longer has access to the brand. Reload and choose a current member."
   },
   "CalendarMemorable": {
     "title": "Memorable dates",
@@ -3269,5 +3271,30 @@
     "reloadRequired": "Reload to select current delivery times before trying again.",
     "moved": "Deliveries moved.",
     "movedRefreshFailed": "Deliveries moved. Reload to see their current times."
+  },
+  "Assignment": {
+    "title": "Responsibility",
+    "label": "Responsible person",
+    "assigned": "Assigned to {name}",
+    "unavailable": "{name} no longer has access. Reassign or clear this assignment.",
+    "unavailableLabel": "Unavailable",
+    "unassigned": "Unassigned",
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "save": "Save",
+    "saved": "Assignment saved.",
+    "hint": "Only current workspace members with access to this brand are listed. Assignment does not approve or publish content.",
+    "unsaved": "Assignment changed, not yet saved.",
+    "failed": "Could not update the assignment.",
+    "changed": "Assignment changed while loading history. Reload the current assignment.",
+    "reloadHint": "Reload the saved assignment before trying again. Your current selection will be replaced.",
+    "reload": "Reload",
+    "history": "Assignment history",
+    "historyChange": "{actor}: {before} → {after}",
+    "loadMore": "Load more",
+    "filterLabel": "Responsibility",
+    "filterAll": "All posts",
+    "filterMine": "Mine",
+    "filterUnassigned": "Unassigned"
   }
 }

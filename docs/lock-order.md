@@ -709,6 +709,18 @@ apart, they are two transactions that never hold each other's rows.
 
 ## Tenant deletion and API child inserts
 
+Content assignments use organization `FOR KEY SHARE` → brand `FOR KEY SHARE`
+→ the assigning and selected users' memberships in ID order `FOR SHARE` →
+content item `FOR NO KEY UPDATE` → assignment `FOR UPDATE`. The item lock also
+serializes the first assignment when no assignment row exists. Brand grant
+replacement holds the conflicting brand `FOR UPDATE`; member role changes and
+removal conflict with membership SHARE. Reads use organization → brand → item
+SHARE, keeping the assignment revision and bounded history in one saved view.
+Assignment and history inserts happen in the same transaction, without body,
+approval, adaptation or queue writes. Membership/actor identities are audit
+values without foreign keys, so removal leaves an unavailable assignment for
+explicit recovery and rejoining cannot silently revive it.
+
 Better Auth permits owners to delete an organization. Its cascade locks the
 organization before brands and content. Consequently every API transaction
 that locks a child and later inserts another row with an organization FK must

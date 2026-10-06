@@ -39,6 +39,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // Editorial notes exercise their own fetch and paging in editorial-notes.test.
 // Keep these page tests focused on publishing and version actions.
 vi.mock("./editorial-notes", () => ({ EditorialNotes: () => null }));
+// Assignment owns its independent metadata requests in content-assignment.test.
+const { assignmentView } = vi.hoisted(() => ({ assignmentView: vi.fn() }));
+vi.mock("./content-assignment", () => ({
+  ContentAssignment: (props: { itemId: string; canAssign: boolean }) => {
+    assignmentView(props);
+    return null;
+  },
+}));
 vi.mock("./claim-evidence", () => ({ ClaimEvidence: () => null }));
 
 // Imported after the mock so this binding is the mocked export.
@@ -505,6 +513,7 @@ function resultsList(): HTMLElement {
 }
 
 beforeEach(() => {
+  assignmentView.mockReset();
   mockApi.mockReset();
   mockApiPage.mockReset();
   mockApiPage.mockResolvedValue({ rows: [], nextCursor: null });
@@ -522,6 +531,29 @@ beforeEach(() => {
     },
     isPending: false,
   } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+});
+
+describe("assignment permission wiring", () => {
+  it.each([
+    { roles: ["author", "editor"], expected: true },
+    { roles: ["author", " editor"], expected: false },
+  ])("unions current-user roles $roles without trimming names", async ({ roles, expected }) => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: {
+        id: "org-1",
+        name: "Workspace",
+        members: [
+          ...roles.map((memberRole) => ({ role: memberRole, userId: "test-user" })),
+          { role: "owner", user: { id: "another-user" } },
+        ],
+      },
+      isPending: false,
+    } as unknown as ReturnType<typeof authClient.useActiveOrganization>);
+    installBaseHandlers({ current: makeItem() }, []);
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    expect(screen.getByRole("textbox", { name: en.Publish.bodyLabel })).toBeVisible();
+    expect(assignmentView).toHaveBeenLastCalledWith({ itemId: "c1", canAssign: expected });
+  });
 });
 
 describe("channel composer", () => {

@@ -4,6 +4,32 @@ import { PgTable } from "drizzle-orm/pg-core";
 import { expect, it } from "vitest";
 import { WORKSPACE_EXPORT_OMISSIONS, WORKSPACE_EXPORT_TABLES } from "./export-policy";
 
+it("exports assignment revisions and audit without account email or content copies", () => {
+  const assignments = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "contentAssignments");
+  const history = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "contentAssignmentHistory");
+  expect(assignments?.table).toBe(schema.contentAssignments);
+  expect(history?.table).toBe(schema.contentAssignmentHistory);
+  expect(assignments?.fields).toContain("revision");
+  expect(history?.fields).toEqual([
+    "id",
+    "orgId",
+    "brandId",
+    "contentItemId",
+    "revision",
+    "previousMemberId",
+    "previousName",
+    "assigneeMemberId",
+    "assigneeName",
+    "actorUserId",
+    "actorName",
+    "createdAt",
+  ]);
+  for (const fields of [assignments?.fields, history?.fields]) {
+    expect(fields).not.toContain("email");
+    expect(fields).not.toContain("body");
+  }
+});
+
 it("exports minimal Telegram editorial evidence without identity or webhook secrets", () => {
   const audit = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "telegramDecisionAudit");
   expect(audit?.table).toBe(schema.telegramDecisionAudit);

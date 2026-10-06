@@ -211,6 +211,106 @@ beforeEach(() => {
   signedInSession();
 });
 
+describe("responsibility filters", () => {
+  it("requests Mine and Unassigned on the server and preserves the scope on later pages", async () => {
+    const calls: Call[] = [];
+    installHandlers(calls, () => []);
+    mockApiPage.mockImplementation(async (path) => {
+      const url = new URL(path, "http://localhost");
+      const scope = url.searchParams.get("assignment");
+      if (scope === "mine")
+        return url.searchParams.has("cursor")
+          ? { rows: [item("mine-2", "Second assigned post", "draft")], nextCursor: null }
+          : { rows: [item("mine-1", "First assigned post", "draft")], nextCursor: "next-mine" };
+      if (scope === "unassigned")
+        return { rows: [item("free", "Available post", "draft")], nextCursor: null };
+      return { rows: [item("all", "All post", "draft")], nextCursor: null };
+    });
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "All post" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterMine }));
+    await screen.findByRole("link", { name: "First assigned post" });
+    expect(screen.queryByRole("link", { name: "All post" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: en.Content.loadMore }));
+    await screen.findByRole("link", { name: "Second assigned post" });
+    expect(mockApiPage).toHaveBeenCalledWith(
+      expect.stringContaining("assignment=mine&cursor=next-mine"),
+      { cache: "no-store" },
+    );
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterUnassigned }));
+    await screen.findByRole("link", { name: "Available post" });
+    expect(screen.queryByRole("link", { name: "Second assigned post" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: en.Content.loadMore })).not.toBeInTheDocument();
+  });
+
+  it("drops a held old page after Mine → All → Mine instead of reviving its stale rows", async () => {
+    installHandlers([], () => []);
+    let finish!: (value: { rows: ContentItem[]; nextCursor: null }) => void;
+    let mineReads = 0;
+    mockApiPage.mockImplementation(async (path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.searchParams.get("assignment") !== "mine")
+        return { rows: [item("all", "All post", "draft")], nextCursor: null };
+      if (url.searchParams.has("cursor"))
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      mineReads += 1;
+      return {
+        rows: [item(`mine-${mineReads}`, `Mine read ${mineReads}`, "draft")],
+        nextCursor: mineReads === 1 ? "held" : null,
+      };
+    });
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "All post" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterMine }));
+    await screen.findByRole("link", { name: "Mine read 1" });
+    await user.click(screen.getByRole("button", { name: en.Content.loadMore }));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterAll }));
+    await screen.findByRole("link", { name: "All post" });
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterMine }));
+    await screen.findByRole("link", { name: "Mine read 2" });
+    await act(async () => {
+      finish({ rows: [item("old", "Stale held post", "draft")], nextCursor: null });
+    });
+    expect(screen.queryByRole("link", { name: "Stale held post" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Mine read 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Mine read 2" })).toBeVisible();
+  });
+
+  it("drops a failed later-page read after leaving its assignment filter", async () => {
+    installHandlers([], () => []);
+    let refuse!: (reason: Error) => void;
+    mockApiPage.mockImplementation(async (path) => {
+      const url = new URL(path, "http://localhost");
+      if (url.searchParams.get("assignment") !== "mine")
+        return { rows: [item("all", "All post", "draft")], nextCursor: null };
+      if (url.searchParams.has("cursor"))
+        return new Promise((_resolve, reject) => {
+          refuse = reject;
+        });
+      return { rows: [item("mine", "My assigned post", "draft")], nextCursor: "held" };
+    });
+    render(<ContentQueuePage />);
+    await screen.findByRole("link", { name: "All post" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterMine }));
+    await screen.findByRole("link", { name: "My assigned post" });
+    await user.click(screen.getByRole("button", { name: en.Content.loadMore }));
+    await waitFor(() => expect(refuse).toBeTypeOf("function"));
+    await user.click(screen.getByRole("tab", { name: en.Assignment.filterAll }));
+    await screen.findByRole("link", { name: "All post" });
+    await act(async () => {
+      refuse(new Error("old assignment read failed"));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "All post" })).toBeVisible();
+  });
+});
+
 describe("cached channel health in the queue", () => {
   it("links a failed check with scheduled posts to the channel's brand", async () => {
     installHandlers([], () => [], [
