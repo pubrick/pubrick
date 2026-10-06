@@ -66,6 +66,7 @@ export * from "./dto/editorial-notes.js";
 export * from "./dto/editorial-placeholders.js";
 export * from "./dto/editorial-plans.js";
 export * from "./dto/errors.js";
+export * from "./dto/inbox.js";
 export * from "./dto/knowledge.js";
 export * from "./dto/linkedin-connections.js";
 export * from "./dto/media.js";
