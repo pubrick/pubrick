@@ -5,6 +5,7 @@ import {
   publicDraftCreateResultSchema,
   publicDraftCreateSchema,
 } from "../../packages/shared/src/dto/public-write.js";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: the hosted runner owns a separate acceptance journey.
@@ -21,7 +22,7 @@ test("scoped key issuance, imported draft replay, human editing and revocation",
   await page.getByLabel("Name", { exact: true }).fill("Integration editor");
   await page.getByLabel("Email", { exact: true }).fill("integration@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-integration-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Integration workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);

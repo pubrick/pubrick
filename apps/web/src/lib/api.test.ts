@@ -248,6 +248,35 @@ describe("api", () => {
     expect((error as ApiError).noActiveOrg).toBe(false);
     expect((error as ApiError).message).toBe("You don't have access to this.");
   });
+
+  it("retains the batch authority recovery code through a real 403 response", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      jsonResponse(
+        403,
+        refusalBody(403, "batch_review_authority_changed", "Request authority changed"),
+      ),
+    );
+
+    const error = await api("/brands/brand/content/batch-review/confirm").catch(
+      (e) => e as ApiError,
+    );
+    const russian = createTranslator({
+      locale: "ru",
+      messages: ru as Record<string, unknown>,
+      namespace: "Errors",
+    }) as unknown as ErrorTranslator;
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(403);
+    expect((error as ApiError).noActiveOrg).toBe(false);
+    expect((error as ApiError).code).toBe("batch_review_authority_changed");
+    expect(errorMessage(error, "Something went wrong", english)).toBe(
+      en.Errors.batch_review_authority_changed,
+    );
+    expect(errorMessage(error, "Что-то пошло не так", russian)).toBe(
+      ru.Errors.batch_review_authority_changed,
+    );
+  });
 });
 
 describe("apiVoid", () => {

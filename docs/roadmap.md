@@ -1,6 +1,6 @@
 # Development roadmap
 
-Updated: 2026-10-06.
+Updated: 2026-10-07.
 
 The current execution priority is the owner-approved
 [competitive parity plan](plans/competitive-parity.md), with its
@@ -17,8 +17,15 @@ Competitive parity milestones 1 and 2 are implemented and locally accepted:
 safe saved-content review, weekly publication slots, retained channel editing
 and an atomic publication calendar. The combined built desktop/mobile journeys
 passed; see the [core workflow evidence](verification/competitive-parity-core.md).
-The next implementation milestone is international native destinations, starting
-with WordPress and LinkedIn and their connection/credential lifecycle.
+WordPress and personal LinkedIn native publishing and their credential lifecycle
+are also implemented and locally accepted. Team assignments, saved-version batch
+and mobile guest review, capability-based results/CSV and the supported public
+Telegram discussion Inbox form the next coherent release package. See the
+[native/team/results/inbox evidence](verification/competitive-parity-native-team-results.md)
+for exact limits, local gates and browser repairs. Native Instagram, Facebook
+Pages and Threads connections, approved public media and durable container
+readiness are the current implementation priority. Existing manual Instagram
+channels remain manual.
 
 ## Current position
 

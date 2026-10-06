@@ -112,6 +112,14 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  inbox_account_unavailable: "inbox_account_unavailable",
+  inbox_target_changed: "inbox_target_changed",
+  inbox_message_changed: "inbox_message_changed",
+  inbox_snapshot_changed: "inbox_snapshot_changed",
+  inbox_reply_unsettled: "inbox_reply_unsettled",
+  inbox_reply_inspection_required: "inbox_reply_inspection_required",
+  inbox_collection_busy: "inbox_collection_busy",
+
   public_authority_revoked: "public_authority_revoked",
   idempotency_conflict: "idempotency_conflict",
   public_result_gone: "public_result_gone",
@@ -154,6 +162,9 @@ const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
   content_image_not_found: "content_image_not_found",
   editorial_note_stale: "editorial_note_stale",
   assignment_changed: "assignment_changed",
+  batch_review_changed: "batch_review_changed",
+  batch_review_authority_changed: "batch_review_authority_changed",
+  batch_review_not_ready: "batch_review_not_ready",
   assignment_member_unavailable: "assignment_member_unavailable",
   publication_not_found: "publication_not_found",
   publication_comments_unavailable: "publication_comments_unavailable",
@@ -495,8 +506,12 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
       throw new ApiError(401, "You're signed out. Log in again to continue.", false, "signed_out");
     }
     if (res.status === 403) {
-      // Hosted admission refusals must retain their localized recovery message.
-      if (code && (HOSTED_ERROR_CODES as readonly string[]).includes(code)) {
+      // Keep the closed admission codes that have a specific recovery action.
+      if (
+        code &&
+        ((HOSTED_ERROR_CODES as readonly string[]).includes(code) ||
+          code === "batch_review_authority_changed")
+      ) {
         throw new ApiError(403, detail ?? "Workspace request refused", false, code);
       }
       // THE CODE, not the sentence. This branch decides whether the reader is

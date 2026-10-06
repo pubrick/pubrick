@@ -133,6 +133,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
   const tp = useTranslations("PostingSchedule");
   const tl = useTranslations("LinkedIn");
   const locale = useLocale();
+  const ti = useTranslations("Inbox");
   const router = useRouter();
   const { data: session } = authClient.useSession();
   const { data: organization } = authClient.useActiveOrganization();
@@ -637,6 +638,12 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
         <Link href={`/${locale}/brands/${id}/publications`} className="text-accent underline">
           {tb("publicationsLink")}
         </Link>
+        <Link
+          href={`/${locale}/brands/${id}/inbox`}
+          className="inline-flex min-h-11 items-center text-accent underline"
+        >
+          {ti("title")}
+        </Link>
         {canManageAccess && (
           <Link href={`/${locale}/brands/${id}/access`} className="text-accent underline">
             {tb("accessLink")}
@@ -854,6 +861,7 @@ export default function BrandPage({ params }: { params: Promise<{ id: string }> 
             return (
               <ListRow
                 key={c.id}
+                actionsBelow
                 title={channelLabel(c.platform, c.name)}
                 meta={
                   // Plain strings for the loading/ok cases — NOT wrapped in an

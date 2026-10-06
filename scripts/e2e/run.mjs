@@ -10,10 +10,12 @@ import {
   readBrowserSource,
   verifyBrowserSource,
 } from "./browser-provenance.mjs";
+import { journeySelection } from "./journey-selection.mjs";
 import { startNativeChannelFixture } from "./native-channel-fixture.mjs";
 
 // Never accept a target URL or inherited app secrets: this runner owns its stack.
 // Resolve before allocating any temporary files, processes or containers.
+const selectedJourneys = journeySelection(process.argv.slice(2));
 const source = readBrowserSource();
 const container = `pubrick-browser-${randomUUID()}`;
 const media = await mkdtemp(join(tmpdir(), "pubrick-browser-media-"));
@@ -109,9 +111,12 @@ async function runBrowserJourney() {
       "scripts/e2e/scoped-write-journey.spec.ts",
       "scripts/e2e/composer-calendar-journey.spec.ts",
       "scripts/e2e/native-connection-journey.spec.ts",
+      "scripts/e2e/inbox-journey.spec.ts",
       "scripts/e2e/publication-results-journey.spec.ts",
       "scripts/e2e/team-review-journey.spec.ts",
+      "scripts/e2e/batch-review-journey.spec.ts",
       "--config=scripts/e2e/playwright.config.ts",
+      ...(selectedJourneys ? ["--grep", selectedJourneys] : []),
     ],
     ".",
   );
@@ -220,7 +225,7 @@ try {
   fixture.assertComplete();
   verifyBrowserSource(source);
   console.info(
-    `Self-hosted acceptance passed: source ${source}; database ${BROWSER_POSTGRES_IMAGE}`,
+    `${selectedJourneys ? "Focused self-hosted" : "Self-hosted"} acceptance passed: source ${source}; database ${BROWSER_POSTGRES_IMAGE}${selectedJourneys ? `; journey filter ${JSON.stringify(selectedJourneys)}` : ""}`,
   );
 } catch (error) {
   console.error(error);

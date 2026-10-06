@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: hosted acceptance owns its separate runner.
@@ -16,7 +17,7 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
   await page.getByLabel("Name", { exact: true }).fill("Studio editor");
   await page.getByLabel("Email", { exact: true }).fill("review@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-review-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Review workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);
@@ -28,7 +29,7 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
   await page.getByRole("button", { name: "Create brand", exact: true }).click();
   const brand: { id: string } = await (await createdBrand).json();
   const channel = await page.request.post("/api/channels", {
-    data: { brandId: brand.id, platform: "vc_ru", name: "Studio journal", credentials: {} },
+    data: { brandId: brand.id, platform: "vc_ru", name: "Studio journal" },
   });
   expect(channel.ok()).toBeTruthy();
   await page.goto("/en/content/new");
@@ -80,7 +81,9 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
       guest.getByText("The channel story our client should review.", { exact: true }),
     ).toBeVisible();
     await guest.getByRole("button", { name: "Request changes", exact: true }).click();
-    await expect(guest.getByRole("alert")).toContainText("Tell the team what needs to change.");
+    await expect(
+      guest.getByRole("alert").filter({ hasText: "Tell the team what needs to change." }),
+    ).toBeVisible();
     await guest
       .getByLabel("Comment (optional when approving)", { exact: true })
       .fill("Make the channel ending more personal.");

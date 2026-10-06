@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { expect, test } from "@playwright/test";
 import type { ManualPlatformId } from "../../packages/shared/src/dto/channels.js";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: the separate hosted runner selects its own acceptance journey.
@@ -35,7 +36,7 @@ test("account, manual approval, verified channel, worker publication and UI tena
   await page.getByLabel("Name", { exact: true }).fill("Browser editor");
   await page.getByLabel("Email", { exact: true }).fill("editor@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-browser-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Browser workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);

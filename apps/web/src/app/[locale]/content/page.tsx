@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  CONTENT_BATCH_REVIEW_LIMIT,
   CONTENT_PAGE_SIZE,
   type ContentAssignmentFilter,
   type ContentAssignmentSummary,
   contentAssignmentFilterSchema,
+  hasOrganizationRole,
+  isPublishablePlatform,
   type PublishFailureReason,
   runDetailDtoSchema,
 } from "@pubrick/shared";
@@ -33,6 +36,7 @@ import {
   MAX_REFRESHED_LATER_PAGES,
 } from "@/lib/adaptations";
 import { ApiError, api, apiPage, type ErrorCode, errorMessage, type Page } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 import { isLinkableUrl } from "@/lib/external-url";
 import { type ContentOrigin, deriveOrigin } from "@/lib/origin";
 import { channelLabel as platformChannelLabel } from "@/lib/platform";
@@ -44,6 +48,7 @@ import {
   runFailureMessage,
   sourceHost,
 } from "@/lib/runs";
+import { BatchReview } from "./batch-review";
 
 /** The filter tabs, in lifecycle order — a picker, not a priority list. */
 const STATUSES: readonly ContentStatus[] = CONTENT_STATUSES;
@@ -123,6 +128,7 @@ type Adaptation = {
 
 type ContentItem = {
   id: string;
+  brandId?: string;
   title: string | null;
   status: ContentStatus;
   origin: ContentOrigin;
@@ -215,6 +221,25 @@ export default function ContentQueuePage() {
   const tr = useTranslations("Runs");
   const tq = useTranslations("ReviewQueue");
   const ta = useTranslations("Assignment");
+  const tb = useTranslations("BatchReview");
+  const { data: session } = authClient.useSession();
+  const { data: organization } = authClient.useActiveOrganization();
+  const canBatchReview = Boolean(
+    session?.user.id &&
+      organization?.members?.some(
+        (member) =>
+          (member.userId === session.user.id || member.user?.id === session.user.id) &&
+          hasOrganizationRole(member.role, ["owner", "admin", "member", "editor"]),
+      ),
+  );
+  const [batchIds, setBatchIds] = useState<string[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [reviewSelection, setReviewSelection] = useState<{
+    brandId: string;
+    itemIds: string[];
+  } | null>(null);
+  const [batchBrandName, setBatchBrandName] = useState<string | null>(null);
+  const [batchBrandFailed, setBatchBrandFailed] = useState(false);
   // The refusals' own namespace: `errorMessage` turns the api's `code` into one
   // of these, so what this screen shows for a 4xx is a sentence in the reader's
   // language rather than the English one the server wrote for a network tab.
@@ -528,6 +553,8 @@ export default function ContentQueuePage() {
     laterPagesRef.current = [];
     setLaterPages([]);
     setLaterCursor(null);
+    setBatchIds([]);
+    setBatchOpen(false);
     setStatus(next);
   }
 
@@ -540,10 +567,41 @@ export default function ContentQueuePage() {
     setLaterPages([]);
     setLaterCursor(null);
     setLaterPagesError(null);
+    setBatchIds([]);
+    setBatchOpen(false);
     setAssignment(parsed.data);
   }
 
   const items = loadedQueue([firstPage?.rows ?? [], ...laterPages.map((p) => p.rows)]);
+  const batchItems = batchIds.flatMap((id) => {
+    const item = items.find((row) => row.id === id);
+    return item?.brandId ? [{ id, brandId: item.brandId }] : [];
+  });
+  const batchBrandId = batchItems[0]?.brandId ?? null;
+  useEffect(() => {
+    let active = true;
+    setBatchBrandName(null);
+    setBatchBrandFailed(false);
+    if (batchBrandId)
+      void api<{ name: string }>(`/api/brands/${batchBrandId}`, { cache: "no-store" })
+        .then((brand) => {
+          if (active) setBatchBrandName(brand.name);
+        })
+        .catch(() => {
+          if (active) setBatchBrandFailed(true);
+        });
+    return () => {
+      active = false;
+    };
+  }, [batchBrandId]);
+  // Selection stays limited to the queue rows actually loaded in this view.
+  useEffect(() => {
+    setBatchIds((selected) =>
+      selected.every((id) => items.some((item) => item.id === id))
+        ? selected
+        : selected.filter((id) => items.some((item) => item.id === id)),
+    );
+  }, [items]);
   // While nothing beyond page 1 is loaded the next cursor is page 1's own —
   // which the poll keeps current. After that it is the last loaded page's, and
   // page 1's is deliberately ignored: it describes a boundary the reader has
@@ -811,6 +869,42 @@ export default function ContentQueuePage() {
         className={`scroll-mt-24 border-b border-border-soft py-3 last:border-b-0 ${selectedItemId === item.id ? "bg-bg-sunken" : ""}`}
       >
         <span className="flex flex-wrap items-center gap-2">
+          {canBatchReview &&
+            item.brandId &&
+            ["draft", "rejected"].includes(item.status) &&
+            item.adaptations.length > 0 &&
+            item.adaptations.every(
+              (adaptation) =>
+                adaptation.status === "pending" &&
+                adaptation.attemptCount === 0 &&
+                isPublishablePlatform(
+                  channels.find((channel) => channel.id === adaptation.channelId)?.platform ?? "",
+                ),
+            ) && (
+              <label className="inline-flex min-h-11 items-center gap-2 text-sm text-fg-secondary">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={batchIds.includes(item.id)}
+                  disabled={
+                    batchOpen ||
+                    (batchBrandId !== null && batchBrandId !== item.brandId) ||
+                    (!batchIds.includes(item.id) && batchIds.length >= CONTENT_BATCH_REVIEW_LIMIT)
+                  }
+                  aria-label={tb("select", { title: item.title || t("untitled") })}
+                  onChange={(event) =>
+                    setBatchIds((selected) =>
+                      event.target.checked
+                        ? [...selected, item.id]
+                        : selected.filter((id) => id !== item.id),
+                    )
+                  }
+                />
+                {batchBrandId !== null && batchBrandId !== item.brandId && (
+                  <span>{tb("otherBrand")}</span>
+                )}
+              </label>
+            )}
           <Link
             href={`/${locale}/content/${item.id}`}
             ref={(link) => {
@@ -1122,6 +1216,58 @@ export default function ContentQueuePage() {
           onChange={changeAssignment}
         />
       </div>
+
+      {canBatchReview && batchItems.length > 0 && batchBrandId && (
+        <Card className="mb-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="min-w-0 flex-1 text-sm text-fg-secondary">
+              {tb("selected", { count: batchItems.length, limit: CONTENT_BATCH_REVIEW_LIMIT })}
+            </p>
+            <Button
+              variant="ghost"
+              className="min-h-11"
+              disabled={batchOpen}
+              onClick={() => setBatchIds([])}
+            >
+              {tb("clear")}
+            </Button>
+            <Button
+              variant="secondary"
+              className="min-h-11"
+              onClick={() => {
+                setReviewSelection({
+                  brandId: batchBrandId,
+                  itemIds: batchItems.map((item) => item.id),
+                });
+                setBatchOpen(true);
+              }}
+            >
+              {tb("review")}
+            </Button>
+          </div>
+          <p className="mt-2 text-sm font-semibold text-fg">
+            {batchBrandName
+              ? tb("brand", { name: batchBrandName })
+              : tb(batchBrandFailed ? "brandUnavailable" : "brandLoading")}
+          </p>
+          <p className="mt-2 text-xs text-fg-secondary">{tb("loadedOnly")}</p>
+        </Card>
+      )}
+      {canBatchReview && reviewSelection && (
+        <BatchReview
+          open={batchOpen}
+          brandId={reviewSelection.brandId}
+          itemIds={reviewSelection.itemIds}
+          onClose={() => {
+            setBatchOpen(false);
+            setReviewSelection(null);
+          }}
+          onQueued={async () => {
+            setBatchIds([]);
+            await refreshContent();
+          }}
+        />
+      )}
 
       {initiallyLoading && (
         <p role="status" className="mb-4 text-sm text-fg-secondary">

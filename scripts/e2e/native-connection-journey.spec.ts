@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: hosted acceptance owns a separate runner.
@@ -15,7 +16,7 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   await page.getByLabel("Name", { exact: true }).fill("Native editor");
   await page.getByLabel("Email", { exact: true }).fill("native@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-native-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Native workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);
@@ -124,6 +125,15 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   ).toBeVisible();
   await expect(page.getByText("Not checked", { exact: true })).toBeVisible();
   expect(await readDelivery()).toEqual(original);
+  // Absence of page overflow alone missed an unreadably squeezed channel description.
+  const destination = page.getByText(`Destination: ${channel.connectionTarget}`, { exact: true });
+  expect((await destination.boundingBox())?.width).toBeGreaterThanOrEqual(250);
+  await expect(page.getByText("WordPress · Studio journal", { exact: true })).toBeVisible();
+  for (const name of ["Posting times", "Test connection", "Edit", "Remove"]) {
+    expect(
+      (await page.getByRole("button", { name, exact: true }).boundingBox())?.height,
+    ).toBeGreaterThanOrEqual(44);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );

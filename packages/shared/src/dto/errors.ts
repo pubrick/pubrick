@@ -108,6 +108,9 @@ export const API_ERROR_CODES = [
   "claim_correction_timed_out",
   "editorial_note_stale",
   "assignment_changed",
+  "batch_review_changed",
+  "batch_review_authority_changed",
+  "batch_review_not_ready",
   "assignment_member_unavailable",
   "draft_revision_stale",
   "draft_revision_incomplete",
@@ -568,6 +571,13 @@ export const API_ERROR_CODES = [
    * the full field-qualified array in `message`.
    */
   "invalid_request",
+  "inbox_account_unavailable",
+  "inbox_target_changed",
+  "inbox_message_changed",
+  "inbox_snapshot_changed",
+  "inbox_reply_unsettled",
+  "inbox_reply_inspection_required",
+  "inbox_collection_busy",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

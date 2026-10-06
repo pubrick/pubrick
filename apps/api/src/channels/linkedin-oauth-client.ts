@@ -105,17 +105,20 @@ function stateValue(value: string): string {
 
 /** LinkedIn's documented response can omit token_type, but its APIs explicitly use Bearer. */
 function normalizeLinkedInTokenResponse(text: string): string {
+  let body: unknown;
   try {
-    const body: unknown = JSON.parse(text);
-    if (
-      body !== null &&
-      typeof body === "object" &&
-      !Array.isArray(body) &&
-      !Object.hasOwn(body, "token_type")
-    )
-      return JSON.stringify({ ...body, token_type: "Bearer" });
+    body = JSON.parse(text);
   } catch {
     // The maintained OAuth response validator rejects malformed JSON below.
+    return text;
+  }
+  if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+    const expiry = (body as Record<string, unknown>).expires_in;
+    // Validate provider evidence before oauth4webapi's permissive parseFloat coercion.
+    if (typeof expiry !== "number" || !Number.isSafeInteger(expiry) || expiry <= 0)
+      throw new LinkedInOAuthClientError("unavailable");
+    if (!Object.hasOwn(body, "token_type"))
+      return JSON.stringify({ ...body, token_type: "Bearer" });
   }
   return text;
 }
