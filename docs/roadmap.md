@@ -1,8 +1,14 @@
 # Development roadmap
 
-Updated: 2026-10-02.
+Updated: 2026-10-06.
 
-This is the current execution plan. The original [product design](specs/0001-product-design.md)
+The current execution priority is the owner-approved
+[competitive parity plan](plans/competitive-parity.md), with its
+[acceptance specification](specs/0024-competitive-parity.md). It starts with
+safe everyday review, posting schedules, composer and publication calendar,
+then international native destinations, teamwork, results and supported inbox.
+Payments are deferred. The iterations below retain release history and longer
+term context. The original [product design](specs/0001-product-design.md)
 records the P0–P5 scope; [porting status](porting-status.md) describes today's
 capabilities and their exact limits. Neither a planned feature nor a manual
 platform handoff should be described as automatic delivery.
