@@ -212,7 +212,10 @@ test("retained channel edits, confirmed atomic swap and stale mobile calendar re
   expect((await read(secondId)).adaptations).toEqual(remoteSecond.adaptations);
   await page.getByRole("button", { name: "Reload", exact: true }).click();
   await expect(selectFirst).toBeEnabled();
-  await page.getByRole("link", { name: "First calendar post", exact: true }).first().click();
+  await page
+    .getByRole("link", { name: "First calendar post", exact: true })
+    .and(page.locator(`a[href$="#adaptation-${firstDelivery.id}"]`))
+    .click();
   await expect(page).toHaveURL(
     new RegExp(`/en/content/${firstId}#adaptation-${firstDelivery.id}$`),
   );
