@@ -29,7 +29,9 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   await page.goto(`/en/brands/${brand.id}`);
   await page.getByLabel("Platform", { exact: true }).selectOption("wordpress");
   await page.getByLabel("Channel name", { exact: true }).fill("Studio journal");
-  await page.getByLabel("Site URL", { exact: true }).fill("https://journal.browser.example/studio");
+  await page
+    .getByLabel("Site URL", { exact: true })
+    .fill("https://journal.browser.example.com/studio");
   await page.getByLabel("Username", { exact: true }).fill("editor");
   await page
     .getByLabel("Application password", { exact: true })
@@ -43,7 +45,7 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   const response = await createdChannel;
   expect(response.status()).toBe(201);
   const channel: { id: string; connectionTarget: string } = await response.json();
-  expect(channel.connectionTarget).toBe("https://journal.browser.example/studio/");
+  expect(channel.connectionTarget).toBe("https://journal.browser.example.com/studio/");
   expect(JSON.stringify(channel)).not.toContain("synthetic-original-password");
   await expect(
     page.getByText(`Destination: ${channel.connectionTarget}`, { exact: true }),
@@ -96,7 +98,7 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   }
   await dialog
     .getByLabel("Site URL", { exact: true })
-    .fill("https://different.browser.example/studio/");
+    .fill("https://different.browser.example.com/studio/");
   await dialog.getByLabel("Username", { exact: true }).fill("editor");
   await dialog
     .getByLabel("Application password", { exact: true })
