@@ -1114,7 +1114,9 @@ export default function SettingsPage() {
             <p className="text-sm text-fg-secondary">{organization?.name ?? t("workspaceNoOrg")}</p>
           )}
 
-          <WorkspaceSwitcher activeId={organization?.id ?? null} />
+          {/* A late active-workspace response must not reset an already chosen
+              destination. Keep the switcher unavailable until that query settles. */}
+          {!organizationPending && <WorkspaceSwitcher activeId={organization?.id ?? null} />}
 
           {organization && (
             <>

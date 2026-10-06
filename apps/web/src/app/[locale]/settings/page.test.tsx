@@ -254,6 +254,36 @@ function card(heading: string) {
   return within(element);
 }
 
+it("waits for the active workspace before allowing a destination to be chosen", async () => {
+  mockAuthClient.organization.list.mockResolvedValue({
+    data: [
+      { id: "org1", name: "Acme Media" },
+      { id: "org2", name: "Other studio" },
+    ],
+    error: null,
+  });
+  mockAuthClient.useActiveOrganization.mockReturnValue({
+    data: null,
+    isPending: true,
+    refetch: refetchOrganization,
+  });
+  const view = render(<SettingsPage />);
+  const workspace = card(en.SettingsPage.workspaceTitle);
+  expect(workspace.queryByRole("combobox")).not.toBeInTheDocument();
+  expect(mockAuthClient.organization.list).not.toHaveBeenCalled();
+
+  organizationIs();
+  view.rerender(<SettingsPage />);
+  const destination = await workspace.findByRole("combobox", {
+    name: en.SettingsPage.workspaceTitle,
+  });
+  expect(destination).toHaveValue("org1");
+  await userEvent.setup().selectOptions(destination, "org2");
+  expect(destination).toHaveValue("org2");
+  expect(workspace.getByRole("button", { name: en.SettingsPage.workspaceSwitch })).toBeEnabled();
+  expect(mockAuthClient.organization.setActive).not.toHaveBeenCalled();
+});
+
 describe("Settings — Appearance", () => {
   it('calls applyTheme("dark") and the choice persists via readThemePref', async () => {
     const applyThemeSpy = vi.spyOn(theme, "applyTheme");

@@ -29,7 +29,7 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
   await page.getByRole("button", { name: "Create brand", exact: true }).click();
   const brand: { id: string } = await (await createdBrand).json();
   const channel = await page.request.post("/api/channels", {
-    data: { brandId: brand.id, platform: "vc_ru", name: "Studio journal", credentials: {} },
+    data: { brandId: brand.id, platform: "vc_ru", name: "Studio journal" },
   });
   expect(channel.ok()).toBeTruthy();
   await page.goto("/en/content/new");
