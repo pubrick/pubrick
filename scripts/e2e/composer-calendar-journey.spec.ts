@@ -206,7 +206,7 @@ test("retained channel edits, confirmed atomic swap and stale mobile calendar re
   );
   await dialog.getByRole("button", { name: "Confirm", exact: true }).click();
   expect((await stale).status()).toBe(409);
-  await expect(page.getByRole("alert")).toContainText("Reload");
+  await expect(page.getByRole("alert").filter({ hasText: "Reload" })).toBeVisible();
   await expect(selectFirst).toBeDisabled();
   expect((await read(firstId)).adaptations).toEqual(remoteFirst.adaptations);
   expect((await read(secondId)).adaptations).toEqual(remoteSecond.adaptations);
