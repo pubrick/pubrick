@@ -5,6 +5,27 @@ import { renderAsync, screen, within } from "@/test/render";
 import en from "../../../../../../messages/en.json";
 import PublicationOperationsPage from "./page";
 
+const calendarTranslate = vi.hoisted(
+  () => (key: string) => (key === "queue" ? "Queue" : "Calendar"),
+);
+vi.mock("next-intl", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next-intl")>();
+  return {
+    ...actual,
+    useTranslations: (namespace?: string) => {
+      const translate = actual.useTranslations(
+        namespace === "PublicationCalendar" ? undefined : namespace,
+      );
+      return namespace === "PublicationCalendar" ? calendarTranslate : translate;
+    },
+  };
+});
+vi.mock("./publication-calendar", () => ({
+  PublicationCalendar: ({ brandId }: { brandId: string }) => (
+    <section aria-label="Calendar view">{brandId}</section>
+  ),
+}));
+
 const brandId = "7c5d37a7-fde5-4118-a5a1-2272a3e88e4a";
 const postId = "ddc835ad-6cbf-41a1-94d1-134948608aac";
 const channelId = "f3b28480-f9d1-4e86-b95a-201ac58582b8";
@@ -23,6 +44,31 @@ function response(body: unknown): Response {
 beforeEach(() => signedInSession());
 
 describe("publication operations inbox", () => {
+  it("preserves the scheduled queue by default and opens a separate calendar view", async () => {
+    const writes: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method && init.method !== "GET") writes.push(url);
+        if (url.endsWith(`/api/brands/${brandId}`)) return response({ name: "Acme" });
+        return response({ rows: [], nextCursor: null });
+      }),
+    );
+    await renderAsync(<PublicationOperationsPage params={Promise.resolve({ id: brandId })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("tab", { name: en.PublicationOperations.filter.scheduled }));
+    expect(screen.getByRole("tab", { name: "Queue" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText(en.PublicationOperations.empty.scheduled)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Calendar view" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Calendar" }));
+    expect(screen.getByRole("region", { name: "Calendar view" })).toHaveTextContent(brandId);
+    expect(screen.queryByText(en.PublicationOperations.empty.scheduled)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: en.PublicationOperations.filter.published }));
+    expect(await screen.findByText(en.PublicationOperations.empty.published)).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Calendar view" })).not.toBeInTheDocument();
+    expect(writes).toEqual([]);
+  });
   it("shows an unknown delivery as attention and links to its adaptation", async () => {
     const calls: string[] = [];
     vi.stubGlobal(

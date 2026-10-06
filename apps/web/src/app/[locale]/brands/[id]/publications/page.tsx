@@ -24,6 +24,7 @@ import { DELIVERY_BADGE_STATUS } from "@/lib/adaptations";
 import { ApiError, api, errorMessage } from "@/lib/api";
 import { isLinkableUrl } from "@/lib/external-url";
 import { platformName } from "@/lib/platform";
+import { PublicationCalendar } from "./publication-calendar";
 
 export default function PublicationOperationsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: brandId } = use(params);
@@ -32,8 +33,11 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
   const t = useTranslations("PublicationOperations");
   const tc = useTranslations("Content");
   const te = useTranslations("Errors");
+  const tcal = useTranslations("PublicationCalendar");
   const [brandName, setBrandName] = useState<string | null>(null);
   const [filter, setFilter] = useState<PublicationOperationFilter>("needs_attention");
+  const [view, setView] = useState<"queue" | "calendar">("queue");
+  const showQueue = filter !== "scheduled" || view === "queue";
   const [rows, setRows] = useState<PublicationOperationDto[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,11 +106,12 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
   );
 
   useEffect(() => {
+    if (!showQueue) return;
     void load(filter);
     return () => {
       ++version.current;
     };
-  }, [filter, load]);
+  }, [filter, load, showQueue]);
 
   useEffect(() => {
     void loadArchive();
@@ -125,6 +130,7 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
     if (!(PUBLICATION_OPERATION_FILTERS as readonly string[]).includes(value)) return;
     setRows([]);
     setCursor(null);
+    if (value !== "scheduled") setView("queue");
     setFilter(value as PublicationOperationFilter);
   }
 
@@ -165,136 +171,159 @@ export default function PublicationOperationsPage({ params }: { params: Promise<
         }))}
         value={filter}
         onChange={selectFilter}
-        className="mb-5"
+        className="mb-5 [&_button]:min-h-11"
       />
-      {error && (
-        <div role="alert" className="mb-5 text-sm text-danger">
-          {error}{" "}
-          <Button variant="ghost" size="sm" onClick={() => void load(filter)}>
-            {t("retry")}
-          </Button>
-        </div>
-      )}
-      {loading && rows.length === 0 ? <Skeleton lines={5} /> : null}
-      {!loading && !error && rows.length === 0 && (
-        <EmptyState
-          title={t(`empty.${filter}`)}
-          action={
-            <Link href={`/${locale}/content`} className="text-sm text-accent underline">
-              {t("openQueue")}
-            </Link>
-          }
+      {filter === "scheduled" && (
+        <Segmented
+          options={[
+            { value: "queue", label: tcal("queue") },
+            { value: "calendar", label: tcal("calendar") },
+          ]}
+          value={view}
+          onChange={(value) => {
+            if (value === "queue" || value === "calendar") setView(value);
+          }}
+          className="mb-5 [&_button]:min-h-11"
         />
       )}
-      {rows.length > 0 && (
-        <Card className="overflow-hidden p-0">
-          {rows.map((row) => (
-            <ListRow
-              key={row.id}
-              href={`/${locale}/content/${row.contentItemId}#adaptation-${row.id}`}
-              title={row.title || tc("untitled")}
-              meta={
-                <>
-                  {row.channelName} · {platformName(row.platform)}
-                  {explanation(row) && (
-                    <span className="block whitespace-normal">{explanation(row)}</span>
-                  )}
-                </>
-              }
-              trailing={
-                <StatusBadge status={DELIVERY_BADGE_STATUS[row.deliveryOutcome]}>
-                  {tc(`adaptationStatus.${row.deliveryOutcome}`)}
-                </StatusBadge>
+      {showQueue ? (
+        <>
+          {error && (
+            <div role="alert" className="mb-5 text-sm text-danger">
+              {error}{" "}
+              <Button variant="ghost" size="sm" onClick={() => void load(filter)}>
+                {t("retry")}
+              </Button>
+            </div>
+          )}
+          {loading && rows.length === 0 ? <Skeleton lines={5} /> : null}
+          {!loading && !error && rows.length === 0 && (
+            <EmptyState
+              title={t(`empty.${filter}`)}
+              action={
+                <Link href={`/${locale}/content`} className="text-sm text-accent underline">
+                  {t("openQueue")}
+                </Link>
               }
             />
-          ))}
-        </Card>
-      )}
-      {cursor && (
-        <div className="mt-5 text-center">
-          <Button variant="secondary" disabled={loading} onClick={() => void load(filter, cursor)}>
-            {loading ? t("loading") : t("loadMore")}
-          </Button>
-        </div>
-      )}
-      <section aria-labelledby="publication-archive-heading" className="mt-10">
-        <h2 id="publication-archive-heading" className="mb-2 text-lg font-semibold text-fg">
-          {t("archiveTitle")}
-        </h2>
-        <p className="mb-5 text-sm text-fg-secondary">{t("archiveIntro")}</p>
-        {archiveError && (
-          <div role="alert" className="mb-5 text-sm text-danger">
-            {archiveError}{" "}
-            <Button variant="ghost" size="sm" onClick={() => void loadArchive()}>
-              {t("retry")}
-            </Button>
-          </div>
-        )}
-        {archiveLoading && archivedRows.length === 0 ? <Skeleton lines={3} /> : null}
-        {!archiveLoading && !archiveError && archivedRows.length === 0 && (
-          <p className="text-sm text-fg-tertiary">{t("archiveEmpty")}</p>
-        )}
-        {archivedRows.length > 0 && (
-          <Card className="overflow-hidden p-0">
-            {archivedRows.map((row) => (
-              <ListRow
-                key={row.id}
-                title={`${row.channelName ?? t("archiveUnknownChannel")} · ${row.channelPlatform ? platformName(row.channelPlatform) : t("archiveUnknownPlatform")}`}
-                meta={
-                  <>
-                    {t("archiveRecordedAt", { date: date(row.createdAt) })}
-                    {row.assertedAt && (
-                      <span className="block whitespace-normal">
-                        {t("archiveAssertedAt", { date: date(row.assertedAt) })}
-                      </span>
-                    )}
-                    {row.externalUrl && (
-                      <span className="block whitespace-normal">
-                        {isLinkableUrl(row.externalUrl) ? (
-                          <a
-                            href={row.externalUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-accent underline"
-                          >
-                            {t("archiveOpenPublication")}
-                          </a>
-                        ) : (
-                          row.externalUrl
+          )}
+          {rows.length > 0 && (
+            <Card className="overflow-hidden p-0">
+              {rows.map((row) => (
+                <ListRow
+                  key={row.id}
+                  href={`/${locale}/content/${row.contentItemId}#adaptation-${row.id}`}
+                  title={row.title || tc("untitled")}
+                  meta={
+                    <>
+                      {row.channelName} · {platformName(row.platform)}
+                      {explanation(row) && (
+                        <span className="block whitespace-normal">{explanation(row)}</span>
+                      )}
+                    </>
+                  }
+                  trailing={
+                    <StatusBadge status={DELIVERY_BADGE_STATUS[row.deliveryOutcome]}>
+                      {tc(`adaptationStatus.${row.deliveryOutcome}`)}
+                    </StatusBadge>
+                  }
+                />
+              ))}
+            </Card>
+          )}
+          {cursor && (
+            <div className="mt-5 text-center">
+              <Button
+                variant="secondary"
+                disabled={loading}
+                onClick={() => void load(filter, cursor)}
+              >
+                {loading ? t("loading") : t("loadMore")}
+              </Button>
+            </div>
+          )}
+          <section aria-labelledby="publication-archive-heading" className="mt-10">
+            <h2 id="publication-archive-heading" className="mb-2 text-lg font-semibold text-fg">
+              {t("archiveTitle")}
+            </h2>
+            <p className="mb-5 text-sm text-fg-secondary">{t("archiveIntro")}</p>
+            {archiveError && (
+              <div role="alert" className="mb-5 text-sm text-danger">
+                {archiveError}{" "}
+                <Button variant="ghost" size="sm" onClick={() => void loadArchive()}>
+                  {t("retry")}
+                </Button>
+              </div>
+            )}
+            {archiveLoading && archivedRows.length === 0 ? <Skeleton lines={3} /> : null}
+            {!archiveLoading && !archiveError && archivedRows.length === 0 && (
+              <p className="text-sm text-fg-tertiary">{t("archiveEmpty")}</p>
+            )}
+            {archivedRows.length > 0 && (
+              <Card className="overflow-hidden p-0">
+                {archivedRows.map((row) => (
+                  <ListRow
+                    key={row.id}
+                    title={`${row.channelName ?? t("archiveUnknownChannel")} · ${row.channelPlatform ? platformName(row.channelPlatform) : t("archiveUnknownPlatform")}`}
+                    meta={
+                      <>
+                        {t("archiveRecordedAt", { date: date(row.createdAt) })}
+                        {row.assertedAt && (
+                          <span className="block whitespace-normal">
+                            {t("archiveAssertedAt", { date: date(row.assertedAt) })}
+                          </span>
                         )}
-                      </span>
-                    )}
-                  </>
-                }
-                trailing={
-                  <StatusBadge
-                    status={
-                      row.status === "published"
-                        ? "published"
-                        : row.status === "failed"
-                          ? "failed"
-                          : "review"
+                        {row.externalUrl && (
+                          <span className="block whitespace-normal">
+                            {isLinkableUrl(row.externalUrl) ? (
+                              <a
+                                href={row.externalUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-accent underline"
+                              >
+                                {t("archiveOpenPublication")}
+                              </a>
+                            ) : (
+                              row.externalUrl
+                            )}
+                          </span>
+                        )}
+                      </>
                     }
-                  >
-                    {t(`archiveStatus.${row.status}`)}
-                  </StatusBadge>
-                }
-              />
-            ))}
-          </Card>
-        )}
-        {archiveCursor && (
-          <div className="mt-5 text-center">
-            <Button
-              variant="secondary"
-              disabled={archiveLoading}
-              onClick={() => void loadArchive(archiveCursor)}
-            >
-              {archiveLoading ? t("loading") : t("loadMore")}
-            </Button>
-          </div>
-        )}
-      </section>
+                    trailing={
+                      <StatusBadge
+                        status={
+                          row.status === "published"
+                            ? "published"
+                            : row.status === "failed"
+                              ? "failed"
+                              : "review"
+                        }
+                      >
+                        {t(`archiveStatus.${row.status}`)}
+                      </StatusBadge>
+                    }
+                  />
+                ))}
+              </Card>
+            )}
+            {archiveCursor && (
+              <div className="mt-5 text-center">
+                <Button
+                  variant="secondary"
+                  disabled={archiveLoading}
+                  onClick={() => void loadArchive(archiveCursor)}
+                >
+                  {archiveLoading ? t("loading") : t("loadMore")}
+                </Button>
+              </div>
+            )}
+          </section>
+        </>
+      ) : (
+        <PublicationCalendar brandId={brandId} />
+      )}
     </AppShell>
   );
 }
