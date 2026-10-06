@@ -1704,7 +1704,7 @@
     "feed_item_exists": "Esta publicación ya está en el feed público. Quítala antes de añadir otra versión.",
     "adaptation_not_found": "El texto propio de este canal ya no existe: es posible que el canal se haya eliminado.",
     "version_not_found": "Esta versión guardada ya no está disponible. Actualiza el historial.",
-    "version_changed": "El texto guardado cambió desde que abriste el historial. Actualiza la página antes de restaurarlo.",
+    "version_changed": "El contenido guardado cambió en el servidor. Recarga y revisa la última versión.",
     "content_pinned_approved": "Una publicación aprobada no se puede editar. Recházala primero.",
     "content_pinned_published": "Esta publicación ya se ha publicado y no se puede editar.",
     "content_archived": "Esta publicación está archivada. Restáurala antes de hacer cambios.",
@@ -3173,5 +3173,35 @@
     "discardHint": "¿Descartar los cambios de horas sin guardar?",
     "discard": "Descartar",
     "keepEditing": "Seguir editando"
+  },
+  "Composer": {
+    "masterTitle": "Contenido principal",
+    "tabsLabel": "Versiones por canal",
+    "channelHint": "Cambia de canal para editar y previsualizar cada versión. Los cambios permanecen en el editor hasta que los guardes.",
+    "state": {
+      "saved": "Guardado",
+      "unsaved": "Cambios sin guardar. Guarda antes de aprobar.",
+      "conflict": "La versión guardada cambió en el servidor. Tus cambios se conservan aquí.",
+      "saving": "Guardando…"
+    },
+    "tabState": {
+      "saved": "Guardado",
+      "unsaved": "Sin guardar",
+      "conflict": "Cambió en el servidor",
+      "saving": "Guardando…"
+    },
+    "hiddenChanges": "{count, plural, one {# canal más tiene cambios sin guardar o un conflicto de versiones.} other {# canales más tienen cambios sin guardar o un conflicto de versiones.}}",
+    "reloadAction": "Recargar la versión guardada",
+    "reloadTitle": "¿Recargar la versión guardada?",
+    "reloadBody": "Esto sustituye el texto y los campos de este editor por la última versión guardada. Se conservan los cambios sin guardar de los demás editores.",
+    "keepEditing": "Seguir editando",
+    "reloadConfirm": "Descartar estos cambios y recargar",
+    "reloading": "Recargando…",
+    "textLimit": "Límite de texto: {limit} caracteres.",
+    "imageVideoSupport": "La publicación automática admite una imagen de portada o un vídeo.",
+    "imageSupport": "La publicación automática admite una imagen de portada.",
+    "textSupport": "La publicación automática de este canal admite solo texto.",
+    "manualMedia": "Publica este canal manualmente y adjunta los medios en el editor de destino.",
+    "unsupportedMedia": "Los medios adjuntos no se pueden publicar en este canal. Cambia los medios de la publicación antes de aprobarla."
   }
 }

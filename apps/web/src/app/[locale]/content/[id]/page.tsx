@@ -10,6 +10,7 @@ import type {
 } from "@pubrick/shared";
 import {
   CONTENT_REUSE_ELIGIBLE_STATUSES,
+  COVER_SUPPORTED_PLATFORMS,
   contentUpdateSchema,
   hasOrganizationRole,
   isManualPlatform,
@@ -70,6 +71,7 @@ import {
 } from "@/lib/platform";
 import { ClaimEvidence } from "./claim-evidence";
 import { ClientReviewLink } from "./client-review-link";
+import { type ComposerState, ComposerTabs, composerPanelId, composerTabId } from "./composer-tabs";
 import { CoverRegenerate } from "./cover-regenerate";
 import { DraftRevision } from "./draft-revision";
 import { EditorialNotes } from "./editorial-notes";
@@ -276,6 +278,19 @@ function toDatetimeLocalValue(date: Date): string {
   return local.toISOString().slice(0, 16);
 }
 
+/** Only an explicitly reviewed or successfully saved version advances this baseline. */
+function masterVersion(item: ContentItem, reviewedBody = item.body) {
+  return {
+    body: reviewedBody,
+    revision: item.body === reviewedBody ? item.bodyRevision : undefined,
+    richBody: item.body === reviewedBody ? (item.richBody ?? null) : null,
+  };
+}
+
+function isComposerConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.code === "version_changed";
+}
+
 export default function ContentItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const requestedIntentValue = useSearchParams().get("intent");
@@ -287,6 +302,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       ? requestedIntentValue
       : null;
   const t = useTranslations("Publish");
+  const composer = useTranslations("Composer");
   const tm = useTranslations("Media");
   const tc = useTranslations("Content");
   /**
@@ -338,13 +354,30 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const [richError, setRichError] = useState<string | null>(null);
   const [richResetNotice, setRichResetNotice] = useState(false);
   const [richEditorEpoch, setRichEditorEpoch] = useState(0);
-  const richBaseline = useRef<{ body: string; revision: number } | null>(null);
+  const masterBaseline = useRef<{
+    body: string;
+    revision?: number;
+    richBody: RichBody | null;
+  } | null>(null);
+  const [masterSaveConflict, setMasterSaveConflict] = useState(false);
+  const [adaptationSaveConflicts, setAdaptationSaveConflicts] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [selectedAdaptationId, setSelectedAdaptationId] = useState<string | null>(null);
+  const composerId = useId();
+  const [reloadComposerTarget, setReloadComposerTarget] = useState<
+    "master" | { adaptationId: string } | null
+  >(null);
+  const [reloadComposerBusy, setReloadComposerBusy] = useState(false);
+  const [reloadComposerError, setReloadComposerError] = useState<string | null>(null);
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
   const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   const [ctaDrafts, setCtaDrafts] = useState<Record<string, string>>({});
   const tagBaselines = useRef<Record<string, string[]>>({});
   const ctaBaselines = useRef<Record<string, string | null>>({});
   const bodyBaselines = useRef<Record<string, string>>({});
+  // Display text omits managed hashtag suffixes; the CAS expectation must not.
+  const rawBodyBaselines = useRef<Record<string, string | null>>({});
   const [readaptBusy, setReadaptBusy] = useState<string | null>(null);
   const [scheduledAt, setScheduledAt] = useState("");
   const [approvalConfirmation, setApprovalConfirmation] = useState<{
@@ -495,17 +528,37 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const brandId = item?.brandId ?? null;
   // The inbox can open a card before the async item read has rendered its anchor.
   // Scroll once after that card exists; polling must never jump the editor back.
+  const activeAdaptationId = item?.adaptations.some((a) => a.id === selectedAdaptationId)
+    ? selectedAdaptationId
+    : (item?.adaptations[0]?.id ?? null);
   const scrolledToAdaptation = useRef<string | null>(null);
+  const [adaptationHash, setAdaptationHash] = useState("");
   useEffect(() => {
-    if (!item || !window.location.hash.startsWith("#adaptation-")) return;
-    const anchor = window.location.hash.slice(1);
+    const readHash = () => setAdaptationHash(window.location.hash);
+    readHash();
+    window.addEventListener("hashchange", readHash);
+    return () => window.removeEventListener("hashchange", readHash);
+  }, []);
+  useEffect(() => {
+    if (!item || !adaptationHash.startsWith("#adaptation-")) return;
+    const anchor = adaptationHash.slice(1);
     if (scrolledToAdaptation.current === `${item.id}:${anchor}`) return;
-    if (!item.adaptations.some((adaptation) => `adaptation-${adaptation.id}` === anchor)) return;
+    const adaptation = item.adaptations.find((entry) => `adaptation-${entry.id}` === anchor);
+    if (!adaptation) return;
+    // A hidden panel cannot be a useful scroll destination. Select it first.
+    if (activeAdaptationId !== adaptation.id) {
+      setSelectedAdaptationId(adaptation.id);
+      return;
+    }
     const target = document.getElementById(anchor);
     if (!target) return;
     scrolledToAdaptation.current = `${item.id}:${anchor}`;
     target.scrollIntoView?.({ block: "start" });
-  }, [item]);
+    const focusedPanel = document.activeElement?.closest('[role="tabpanel"]');
+    if (focusedPanel?.hasAttribute("hidden")) {
+      target.closest<HTMLElement>('[role="tabpanel"]')?.focus({ preventScroll: true });
+    }
+  }, [item, adaptationHash, activeAdaptationId]);
   useEffect(() => {
     if (!brandId) return;
     let stale = false;
@@ -628,9 +681,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setRichError(null);
       setRichResetNotice(false);
       setRichEditorEpoch((epoch) => epoch + 1);
-      richBaseline.current = hasRichApiSupport(item)
-        ? { body: item.body, revision: item.bodyRevision as number }
-        : null;
+      masterBaseline.current = masterVersion(item);
+      setMasterSaveConflict(false);
+      setAdaptationSaveConflicts({});
+      setSelectedAdaptationId(
+        item.adaptations.find((a) => `#adaptation-${a.id}` === window.location.hash)?.id ?? null,
+      );
       setOverrideDrafts(
         Object.fromEntries(
           item.adaptations.map((a) => [
@@ -643,6 +699,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setCtaDrafts(Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta ?? ""])));
       tagBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.hashtags]));
       ctaBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.cta]));
+      rawBodyBaselines.current = Object.fromEntries(item.adaptations.map((a) => [a.id, a.body]));
       bodyBaselines.current = Object.fromEntries(
         item.adaptations.map((a) => [
           a.id,
@@ -677,6 +734,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       if (!(adaptation.id in tagBaselines.current)) {
         tagBaselines.current[adaptation.id] = adaptation.hashtags;
         ctaBaselines.current[adaptation.id] = adaptation.cta;
+        rawBodyBaselines.current[adaptation.id] = adaptation.body;
         bodyBaselines.current[adaptation.id] =
           adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
       }
@@ -732,6 +790,28 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const richDirty =
     richSupported &&
     (richError !== null || JSON.stringify(richDraft) !== JSON.stringify(item.richBody ?? null));
+  const masterConflict =
+    masterSaveConflict ||
+    (item !== null &&
+      seededFor.current === item.id &&
+      masterBaseline.current !== null &&
+      (masterBaseline.current.body !== item.body ||
+        (masterBaseline.current.revision !== undefined &&
+          item.bodyRevision !== undefined &&
+          masterBaseline.current.revision !== item.bodyRevision) ||
+        JSON.stringify(masterBaseline.current.richBody) !== JSON.stringify(item.richBody ?? null)));
+  const masterLocalDirty =
+    masterBaseline.current !== null &&
+    (bodyDraft !== masterBaseline.current.body ||
+      richError !== null ||
+      JSON.stringify(richDraft) !== JSON.stringify(masterBaseline.current.richBody));
+  const masterComposerState: ComposerState = bodySaveBusy
+    ? "saving"
+    : masterConflict
+      ? "conflict"
+      : masterLocalDirty
+        ? "unsaved"
+        : "saved";
   const proposal = item?.refineProposal ?? null;
   const refineBlockedReason =
     refineBusy !== null
@@ -740,7 +820,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         ? te("content_archived")
         : item !== null && item.origin !== "ai"
           ? te("refine_needs_ai_draft")
-          : draftMoved || richDirty
+          : draftMoved || richDirty || masterConflict
             ? t("refineUnsaved")
             : selection === null
               ? t("refineNoSelection")
@@ -876,7 +956,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }, [refineBusy]);
 
   async function saveBody() {
-    if (bodySaveBusy) return false;
+    if (bodySaveBusy || seededFor.current !== id || masterBaseline.current === null) return false;
+    const baseline = masterBaseline.current;
     setActionError(null);
     // An invalid TipTap update leaves the last valid document in state. Never
     // persist that older document as though it were the editor's visible text.
@@ -893,8 +974,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         const parsed = contentUpdateSchema.safeParse({
           body: bodyDraft,
           richBody: richDraft,
-          expectedBody: richBaseline.current?.body,
-          expectedBodyRevision: richBaseline.current?.revision,
+          expectedBody: baseline.body,
+          expectedBodyRevision: baseline.revision,
         });
         if (!parsed.success || !parsed.data.richBody) {
           setRichError(t("richEditor.invalid"));
@@ -911,17 +992,23 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             : current,
         );
         setRichResetNotice(false);
-        if (saved && hasRichApiSupport(saved)) {
-          richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
+        if (saved) {
+          masterBaseline.current = masterVersion(saved);
+          applyToItem(() => saved);
         }
       } else {
         const previousBody = item?.body;
         const saved = await api<ContentItem>(`/api/content/${id}`, {
           method: "PATCH",
-          body: JSON.stringify({ body: bodyDraft }),
+          body: JSON.stringify({
+            body: bodyDraft,
+            expectedBody: baseline.body,
+            expectedBodyRevision: baseline.revision,
+          }),
         });
-        if (saved && hasRichApiSupport(saved)) {
-          richBaseline.current = { body: saved.body, revision: saved.bodyRevision as number };
+        if (saved) {
+          masterBaseline.current = masterVersion(saved);
+          applyToItem(() => saved);
           setRichDraft((current) =>
             JSON.stringify(current) === JSON.stringify(richDraft)
               ? (saved.richBody ?? null)
@@ -935,10 +1022,15 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           );
         }
       }
+      setMasterSaveConflict(false);
       await reload();
       return true;
     } catch (err) {
       handleError(err);
+      if (isComposerConflict(err)) {
+        setMasterSaveConflict(true);
+        await reload();
+      }
       return false;
     } finally {
       setBodySaveBusy(false);
@@ -983,7 +1075,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   }
 
   async function saveOverride(adaptationId: string) {
-    if (overrideSaveBusy[adaptationId]) return false;
+    if (
+      overrideSaveBusy[adaptationId] ||
+      seededFor.current !== id ||
+      !(adaptationId in rawBodyBaselines.current)
+    )
+      return false;
+    const baselineBody = rawBodyBaselines.current[adaptationId];
     setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: true }));
     setActionError(null);
     const value = overrideDrafts[adaptationId] ?? "";
@@ -1011,6 +1109,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           ...(canSaveMetadataWithoutReplacingBody
             ? {}
             : {
+                expectedBody: baselineBody,
                 body:
                   value.trim() === ""
                     ? hashtags.length > 0 || cta.trim()
@@ -1022,33 +1121,106 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           ...(ctaChanged ? { cta, expectedCta: baselineCta } : {}),
         }),
       });
+      applyToItem((previous) =>
+        previous
+          ? {
+              ...previous,
+              adaptations: previous.adaptations.map((a) => (a.id === adaptationId ? persisted : a)),
+            }
+          : previous,
+      );
       await reload();
       const persistedText =
         persisted.body === null ? "" : stripHashtagSuffix(persisted.body, persisted.hashtags);
-      setOverrideDrafts((current) =>
-        (current[adaptationId] ?? "") === value
-          ? { ...current, [adaptationId]: persistedText }
-          : current,
-      );
-      setTagDrafts((current) =>
-        (current[adaptationId] ?? "") === tagValue
-          ? { ...current, [adaptationId]: persisted.hashtags.join(", ") }
-          : current,
-      );
-      setCtaDrafts((current) =>
-        (current[adaptationId] ?? "") === cta
-          ? { ...current, [adaptationId]: persisted.cta ?? "" }
-          : current,
-      );
-      bodyBaselines.current[adaptationId] = persistedText;
-      tagBaselines.current[adaptationId] = persisted.hashtags;
-      ctaBaselines.current[adaptationId] = persisted.cta;
+      // A metadata-only save must not import an unrelated teammate body edit.
+      // Advance only fields this request changed or whose original value survived.
+      const bodyAcknowledged =
+        !canSaveMetadataWithoutReplacingBody ||
+        persisted.body === baselineBody ||
+        (tagsChanged && persistedText === bodyBaselines.current[adaptationId]);
+      const tagsAcknowledged =
+        tagsChanged || JSON.stringify(persisted.hashtags) === JSON.stringify(baselineTags);
+      const ctaAcknowledged = ctaChanged || persisted.cta === baselineCta;
+      if (bodyAcknowledged) {
+        setOverrideDrafts((current) =>
+          (current[adaptationId] ?? "") === value
+            ? { ...current, [adaptationId]: persistedText }
+            : current,
+        );
+        rawBodyBaselines.current[adaptationId] = persisted.body;
+        bodyBaselines.current[adaptationId] = persistedText;
+      }
+      if (tagsAcknowledged) {
+        setTagDrafts((current) =>
+          (current[adaptationId] ?? "") === tagValue
+            ? { ...current, [adaptationId]: persisted.hashtags.join(", ") }
+            : current,
+        );
+        tagBaselines.current[adaptationId] = persisted.hashtags;
+      }
+      if (ctaAcknowledged) {
+        setCtaDrafts((current) =>
+          (current[adaptationId] ?? "") === cta
+            ? { ...current, [adaptationId]: persisted.cta ?? "" }
+            : current,
+        );
+        ctaBaselines.current[adaptationId] = persisted.cta;
+      }
+      setAdaptationSaveConflicts((current) => ({ ...current, [adaptationId]: false }));
       return true;
     } catch (err) {
       handleError(err);
+      if (isComposerConflict(err)) {
+        setAdaptationSaveConflicts((current) => ({ ...current, [adaptationId]: true }));
+        await reload();
+      }
       return false;
     } finally {
       setOverrideSaveBusy((current) => ({ ...current, [adaptationId]: false }));
+    }
+  }
+
+  async function reloadSavedComposerVersion() {
+    if (!reloadComposerTarget || reloadComposerBusy || approvalSaveBusy) return;
+    setReloadComposerBusy(true);
+    setActionError(null);
+    setReloadComposerError(null);
+    try {
+      const latest = await fetchItem();
+      if (reloadComposerTarget === "master") {
+        masterBaseline.current = masterVersion(latest);
+        setBodyDraft(latest.body);
+        setRichDraft(latest.richBody ?? null);
+        setRichMode(hasRichApiSupport(latest) && latest.richBody != null);
+        setRichError(null);
+        setRichResetNotice(false);
+        setRichEditorEpoch((epoch) => epoch + 1);
+        setMasterSaveConflict(false);
+        setSelection(null);
+      } else {
+        const adaptationId = reloadComposerTarget.adaptationId;
+        const saved = latest.adaptations.find((a) => a.id === adaptationId);
+        if (!saved) throw new ApiError(404, "Adaptation not found", false, "adaptation_not_found");
+        const displayBody =
+          saved.body === null ? "" : stripHashtagSuffix(saved.body, saved.hashtags);
+        rawBodyBaselines.current[adaptationId] = saved.body;
+        bodyBaselines.current[adaptationId] = displayBody;
+        tagBaselines.current[adaptationId] = saved.hashtags;
+        ctaBaselines.current[adaptationId] = saved.cta;
+        setOverrideDrafts((current) => ({ ...current, [adaptationId]: displayBody }));
+        setTagDrafts((current) => ({ ...current, [adaptationId]: saved.hashtags.join(", ") }));
+        setCtaDrafts((current) => ({ ...current, [adaptationId]: saved.cta ?? "" }));
+        setAdaptationSaveConflicts((current) => ({ ...current, [adaptationId]: false }));
+      }
+      applyToItem(() => latest);
+      // Resume a failed poll so its stale error also clears after recovery.
+      if (pollError !== null) await reload();
+      setReloadComposerTarget(null);
+    } catch (err) {
+      handleError(err);
+      setReloadComposerError(errorMessage(err, t("genericError"), te));
+    } finally {
+      setReloadComposerBusy(false);
     }
   }
 
@@ -1092,6 +1264,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       applyToItem(() => updated);
       const adaptation = updated.adaptations.find((a) => a.id === adaptationId);
       if (adaptation) {
+        rawBodyBaselines.current[adaptationId] = adaptation.body;
+        setAdaptationSaveConflicts((current) => ({ ...current, [adaptationId]: false }));
         bodyBaselines.current[adaptationId] =
           adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
         setOverrideDrafts((drafts) => ({
@@ -1645,9 +1819,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       setRichDraft(null);
       setRichMode(false);
       if (item?.richBody) setRichResetNotice(true);
-      if (hasRichApiSupport(merged)) {
-        richBaseline.current = { body: merged.body, revision: merged.bodyRevision as number };
-      }
+      masterBaseline.current = masterVersion(merged);
+      setMasterSaveConflict(false);
       setSelection(null);
     } catch (err) {
       await refineFailed(err);
@@ -1701,6 +1874,58 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     return ch ? platformChannelLabel(ch.platform, ch.name) : channelId;
   }
 
+  function adaptationComposerState(adaptation: Adaptation): ComposerState {
+    if (overrideSaveBusy[adaptation.id]) return "saving";
+    const baselineBody =
+      bodyBaselines.current[adaptation.id] ??
+      (adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags));
+    const baselineTags = tagBaselines.current[adaptation.id] ?? adaptation.hashtags;
+    const baselineCta =
+      adaptation.id in ctaBaselines.current ? ctaBaselines.current[adaptation.id] : adaptation.cta;
+    if (
+      adaptationSaveConflicts[adaptation.id] ||
+      (adaptation.id in rawBodyBaselines.current &&
+        (rawBodyBaselines.current[adaptation.id] !== adaptation.body ||
+          JSON.stringify(baselineTags) !== JSON.stringify(adaptation.hashtags) ||
+          baselineCta !== adaptation.cta))
+    )
+      return "conflict";
+    return (overrideDrafts[adaptation.id] ?? baselineBody) !== baselineBody ||
+      JSON.stringify(
+        normalizeHashtags((tagDrafts[adaptation.id] ?? baselineTags.join(", ")).split(",")),
+      ) !== JSON.stringify(baselineTags) ||
+      (ctaDrafts[adaptation.id] ?? baselineCta ?? "") !== (baselineCta ?? "")
+      ? "unsaved"
+      : "saved";
+  }
+
+  function composerStatus(state: ComposerState, target: "master" | { adaptationId: string }) {
+    return (
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p
+          role="status"
+          data-composer-state={state}
+          className={state === "conflict" ? "text-sm text-danger" : "text-sm text-fg-secondary"}
+        >
+          {composer(`state.${state}`)}
+        </p>
+        {(state === "unsaved" || state === "conflict") && (
+          <Button
+            variant="ghost"
+            className="min-h-11"
+            onClick={() => {
+              setReloadComposerError(null);
+              setReloadComposerTarget(target);
+            }}
+            disabled={approvalSaveBusy || reloadComposerBusy}
+          >
+            {composer("reloadAction")}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
   /**
    * The counter's denominator for one channel's override (provenance-lens design §6). An
    * unresolved channel — deleted, or `GET /api/channels` failed and `channels`
@@ -1733,7 +1958,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
     const unsaved =
       previewText !== (adaptation.body ?? currentItem.body) ||
       (ctaDrafts[adaptation.id] ?? adaptation.cta ?? "") !== (adaptation.cta ?? "");
-    const telegramCover = channel?.platform === "telegram" && currentItem.coverMediaId !== null;
+    const supportsCover =
+      channel !== undefined &&
+      (COVER_SUPPORTED_PLATFORMS as readonly string[]).includes(channel.platform);
+    const hasSupportedCover = supportsCover && currentItem.coverMediaId !== null;
+    const telegramCover = channel?.platform === "telegram" && hasSupportedCover;
     const supportedVideo =
       (channel?.platform === "telegram" || channel?.platform === "vk") &&
       currentItem.videoMediaId !== null;
@@ -1769,7 +1998,30 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             ? t("reviewPreviewPublishedNote")
             : t("reviewPreviewLocalNote")}
         </p>
-        {telegramCover && (
+        {channel && (
+          <p className="mb-3 text-xs text-fg-secondary">
+            {composer("textLimit", { limit })}{" "}
+            {isManualPlatform(channel.platform)
+              ? composer("manualMedia")
+              : composer(
+                  supportsCover
+                    ? ["telegram", "vk"].includes(channel.platform)
+                      ? "imageVideoSupport"
+                      : "imageSupport"
+                    : "textSupport",
+                )}
+          </p>
+        )}
+        {channel &&
+          !isManualPlatform(channel.platform) &&
+          ((currentItem.coverMediaId !== null && !supportsCover) ||
+            (currentItem.videoMediaId !== null && !["telegram", "vk"].includes(channel.platform)) ||
+            (currentItem.coverMediaId !== null && currentItem.videoMediaId !== null)) && (
+            <p role="alert" className="mb-3 text-sm text-danger">
+              {composer("unsupportedMedia")}
+            </p>
+          )}
+        {hasSupportedCover && (
           // Authenticated, tenant-scoped file endpoint shared with MediaLibrary.
           // biome-ignore lint/performance/noImgElement: this endpoint requires the signed-in session
           <img
@@ -1981,13 +2233,19 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         adaptation.body === null ? "" : stripHashtagSuffix(adaptation.body, adaptation.hashtags);
       const baselineBody = bodyBaselines.current[adaptation.id] ?? savedBody;
       const baselineTags = tagBaselines.current[adaptation.id] ?? adaptation.hashtags;
-      const baselineCta = ctaBaselines.current[adaptation.id] ?? adaptation.cta ?? "";
+      const baselineCta =
+        (adaptation.id in ctaBaselines.current
+          ? ctaBaselines.current[adaptation.id]
+          : adaptation.cta) ?? "";
       const body = overrideDrafts[adaptation.id] ?? baselineBody;
       const tags = JSON.stringify(
         normalizeHashtags((tagDrafts[adaptation.id] ?? baselineTags.join(", ")).split(",")),
       );
       const cta = ctaDrafts[adaptation.id] ?? baselineCta;
       return (
+        adaptationSaveConflicts[adaptation.id] ||
+        (adaptation.id in rawBodyBaselines.current &&
+          rawBodyBaselines.current[adaptation.id] !== adaptation.body) ||
         body !== baselineBody ||
         body !== savedBody ||
         tags !== JSON.stringify(baselineTags) ||
@@ -2002,6 +2260,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
   const approvalEditsPending =
     draftMoved ||
     richDirty ||
+    masterConflict ||
     dirtyAdaptationIds.length > 0 ||
     (item.imagesRevision != null && inlineImagesRevision !== item.imagesRevision) ||
     inlineImagesPending ||
@@ -2009,7 +2268,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
 
   async function saveReviewChanges() {
     if (approvalSaveBusy) return;
-    if ((draftMoved || richDirty) && !(await saveBody())) return;
+    if ((draftMoved || richDirty || masterConflict) && !(await saveBody())) return;
     for (const adaptationId of dirtyAdaptationIds) {
       if (!(await saveOverride(adaptationId))) return;
     }
@@ -2201,10 +2460,11 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
         {canManageDraft &&
           (CONTENT_REUSE_ELIGIBLE_STATUSES as readonly string[]).includes(item.status) && (
             <ReuseSourceAction
-              dirty={draftMoved || richDirty || dirtyAdaptationIds.length > 0}
+              dirty={draftMoved || richDirty || masterConflict || dirtyAdaptationIds.length > 0}
               busy={bodySaveBusy || Object.values(overrideSaveBusy).some(Boolean)}
               save={async () => {
-                if ((draftMoved || richDirty) && !(await saveBody())) return false;
+                if ((draftMoved || richDirty || masterConflict) && !(await saveBody()))
+                  return false;
                 for (const adaptationId of dirtyAdaptationIds) {
                   if (!(await saveOverride(adaptationId))) return false;
                 }
@@ -2244,6 +2504,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           </p>
         )}
         <div ref={editorRef}>
+          <h2 className="mb-2 text-lg font-semibold text-fg">{composer("masterTitle")}</h2>
+          {composerStatus(masterComposerState, "master")}
           {/*
             ONE control, in the card's header, always mounted — never a toolbar
             that appears out of a selection. A control that materialises where
@@ -2327,7 +2589,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               key={`${item.id}-${richEditorEpoch}`}
               initialDocument={richDraft}
               onChange={updateRichDraft}
-              readOnly={isArchived}
+              readOnly={isArchived || (reloadComposerBusy && reloadComposerTarget === "master")}
             />
           )}
           {richError && (
@@ -2353,7 +2615,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 }
               }}
               readOnly={richMode}
-              disabled={isArchived}
+              disabled={isArchived || (reloadComposerBusy && reloadComposerTarget === "master")}
               onSelectionChange={setSelection}
               aiVersions={item.aiVersionBodies.item}
               dimmed={lens}
@@ -2366,7 +2628,13 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             <Button
               variant="secondary"
               onClick={saveBody}
-              disabled={isArchived || bodySaveBusy || (richSupported && richError !== null)}
+              className="min-h-11"
+              disabled={
+                isArchived ||
+                bodySaveBusy ||
+                reloadComposerBusy ||
+                (richSupported && richError !== null)
+              }
             >
               {t("saveBody")}
             </Button>
@@ -2385,12 +2653,20 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               setRichError(null);
               setRichResetNotice(false);
               setRichEditorEpoch((epoch) => epoch + 1);
-              if (revision !== undefined) richBaseline.current = { body: item.body, revision };
+              if (masterBaseline.current) {
+                masterBaseline.current = {
+                  ...masterBaseline.current,
+                  revision,
+                  richBody: document,
+                };
+              }
             }}
             onRestored={async (body) => {
               setBodyDraft(body);
-              if (richBaseline.current) richBaseline.current.body = body;
-              await reload();
+              const latest = await fetchItem();
+              masterBaseline.current = masterVersion(latest, body);
+              setMasterSaveConflict(false);
+              applyToItem(() => latest);
             }}
           />
         </div>
@@ -2427,9 +2703,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           if (item.richBody) setRichResetNotice(true);
           await reload();
           const latest = await fetchItem();
-          if (hasRichApiSupport(latest)) {
-            richBaseline.current = { body: latest.body, revision: latest.bodyRevision as number };
-          }
+          masterBaseline.current = masterVersion(latest, updatedBody);
+          setMasterSaveConflict(false);
         }}
       />
 
@@ -2543,9 +2818,45 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
       )}
 
       <h2 className="mb-3 text-lg font-semibold text-fg">{t("overridesTitle")}</h2>
+      <p className="mb-3 text-sm text-fg-secondary">{composer("channelHint")}</p>
+      <ComposerTabs
+        idPrefix={composerId}
+        label={composer("tabsLabel")}
+        selected={activeAdaptationId}
+        onSelect={setSelectedAdaptationId}
+        tabs={item.adaptations.map((a) => ({
+          id: a.id,
+          label: channelLabel(a.channelId),
+          state: adaptationComposerState(a),
+          stateLabel: composer(`tabState.${adaptationComposerState(a)}`),
+        }))}
+      />
+      {item.adaptations.some(
+        (a) =>
+          a.id !== activeAdaptationId &&
+          ["unsaved", "conflict"].includes(adaptationComposerState(a)),
+      ) && (
+        <p role="status" className="mb-3 text-sm text-fg-secondary">
+          {composer("hiddenChanges", {
+            count: item.adaptations.filter(
+              (a) =>
+                a.id !== activeAdaptationId &&
+                ["unsaved", "conflict"].includes(adaptationComposerState(a)),
+            ).length,
+          })}
+        </p>
+      )}
       <div className="mb-6 flex flex-col gap-3">
         {item.adaptations.map((a) => (
-          <Card key={a.id}>
+          <Card
+            key={a.id}
+            id={composerPanelId(composerId, a.id)}
+            role="tabpanel"
+            aria-labelledby={composerTabId(composerId, a.id)}
+            hidden={activeAdaptationId !== a.id}
+            tabIndex={0}
+            className="focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
             <span id={`adaptation-${a.id}`} className="block scroll-mt-24" />
             <div className="mb-3 flex items-center gap-2">
               <strong className="text-sm font-semibold text-fg">{channelLabel(a.channelId)}</strong>
@@ -2553,6 +2864,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 {tc(`adaptationStatus.${a.deliveryOutcome}`)}
               </StatusBadge>
             </div>
+            {composerStatus(adaptationComposerState(a), { adaptationId: a.id })}
             <DimmedTextarea
               /*
                * Named for a screen reader, which the placeholder above it was
@@ -2565,7 +2877,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
               aria-label={t("overrideLabel", { channel: channelLabel(a.channelId) })}
               value={overrideDrafts[a.id] ?? ""}
               onChange={(value) => setOverrideDrafts({ ...overrideDrafts, [a.id]: value })}
-              disabled={isArchived}
+              disabled={
+                isArchived ||
+                (reloadComposerBusy &&
+                  typeof reloadComposerTarget === "object" &&
+                  reloadComposerTarget?.adaptationId === a.id)
+              }
               /*
                * This adaptation's OWN `ai` versions. Not the item's, and not
                * every adaptation's joined together: a human who wrote the same
@@ -2628,7 +2945,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 variant="secondary"
                 size="sm"
                 onClick={() => saveOverride(a.id)}
-                disabled={isArchived || overrideSaveBusy[a.id]}
+                className="min-h-11"
+                disabled={isArchived || overrideSaveBusy[a.id] || reloadComposerBusy}
               >
                 {t("saveOverride")}
               </Button>
@@ -2636,6 +2954,7 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                 variant="secondary"
                 size="sm"
                 onClick={() => proposeReadapt(a.id)}
+                className="min-h-11"
                 disabled={
                   readaptBusy !== null ||
                   draftMoved ||
@@ -2715,54 +3034,58 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
                   </section>
                 );
               })}
-            <VersionHistory
-              itemId={id}
-              adaptationId={a.id}
-              currentBody={a.body}
-              currentHashtags={a.hashtags}
-              currentCta={a.cta}
-              unsavedMetadata={
-                (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
-                (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
-              }
-              draftBody={
-                (overrideDrafts[a.id] ?? "").trim() === "" &&
-                normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length === 0
-                  ? null
-                  : withHashtags(
-                      (overrideDrafts[a.id] ?? "").trim() === ""
-                        ? bodyDraft
-                        : (overrideDrafts[a.id] ?? ""),
-                      normalizeHashtags((tagDrafts[a.id] ?? "").split(",")),
-                    )
-              }
-              editable={canEditChannel(item, a)}
-              onRestored={async () => {
-                const updated = await api<ContentItem>(`/api/content/${id}`);
-                const restored = updated.adaptations.find((row) => row.id === a.id);
-                if (restored) {
-                  bodyBaselines.current[a.id] =
-                    restored.body === null
-                      ? ""
-                      : stripHashtagSuffix(restored.body, restored.hashtags);
-                  tagBaselines.current[a.id] = restored.hashtags;
-                  ctaBaselines.current[a.id] = restored.cta;
+            {activeAdaptationId === a.id && (
+              <VersionHistory
+                itemId={id}
+                adaptationId={a.id}
+                currentBody={a.body}
+                currentHashtags={a.hashtags}
+                currentCta={a.cta}
+                unsavedMetadata={
+                  (tagDrafts[a.id] ?? "") !== a.hashtags.join(", ") ||
+                  (ctaDrafts[a.id] ?? "") !== (a.cta ?? "")
                 }
-                setOverrideDrafts((current) => ({
-                  ...current,
-                  [a.id]:
-                    restored?.body === null || !restored
-                      ? ""
-                      : stripHashtagSuffix(restored.body, restored.hashtags),
-                }));
-                setTagDrafts((current) => ({
-                  ...current,
-                  [a.id]: restored?.hashtags.join(", ") ?? "",
-                }));
-                setCtaDrafts((current) => ({ ...current, [a.id]: restored?.cta ?? "" }));
-                await reload();
-              }}
-            />
+                draftBody={
+                  (overrideDrafts[a.id] ?? "").trim() === "" &&
+                  normalizeHashtags((tagDrafts[a.id] ?? "").split(",")).length === 0
+                    ? null
+                    : withHashtags(
+                        (overrideDrafts[a.id] ?? "").trim() === ""
+                          ? bodyDraft
+                          : (overrideDrafts[a.id] ?? ""),
+                        normalizeHashtags((tagDrafts[a.id] ?? "").split(",")),
+                      )
+                }
+                editable={canEditChannel(item, a)}
+                onRestored={async () => {
+                  const updated = await api<ContentItem>(`/api/content/${id}`);
+                  const restored = updated.adaptations.find((row) => row.id === a.id);
+                  if (restored) {
+                    rawBodyBaselines.current[a.id] = restored.body;
+                    setAdaptationSaveConflicts((current) => ({ ...current, [a.id]: false }));
+                    bodyBaselines.current[a.id] =
+                      restored.body === null
+                        ? ""
+                        : stripHashtagSuffix(restored.body, restored.hashtags);
+                    tagBaselines.current[a.id] = restored.hashtags;
+                    ctaBaselines.current[a.id] = restored.cta;
+                  }
+                  setOverrideDrafts((current) => ({
+                    ...current,
+                    [a.id]:
+                      restored?.body === null || !restored
+                        ? ""
+                        : stripHashtagSuffix(restored.body, restored.hashtags),
+                  }));
+                  setTagDrafts((current) => ({
+                    ...current,
+                    [a.id]: restored?.hashtags.join(", ") ?? "",
+                  }));
+                  setCtaDrafts((current) => ({ ...current, [a.id]: restored?.cta ?? "" }));
+                  await reload();
+                }}
+              />
+            )}
           </Card>
         ))}
       </div>
@@ -2798,9 +3121,8 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             }
             await reload();
             const latest = await fetchItem();
-            if (hasRichApiSupport(latest)) {
-              richBaseline.current = { body: latest.body, revision: latest.bodyRevision as number };
-            }
+            masterBaseline.current = masterVersion(latest, updatedBody);
+            setMasterSaveConflict(false);
           }}
         />
       )}
@@ -2992,6 +3314,39 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
           <p className="mt-3 text-sm text-fg-secondary">{tr("reuseDeleteDisclosure")}</p>
         </Modal>
       )}
+
+      <Modal
+        open={reloadComposerTarget !== null}
+        onClose={() => {
+          if (!reloadComposerBusy) setReloadComposerTarget(null);
+        }}
+        title={composer("reloadTitle")}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setReloadComposerTarget(null)}
+              disabled={reloadComposerBusy}
+            >
+              {composer("keepEditing")}
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void reloadSavedComposerVersion()}
+              disabled={reloadComposerBusy || approvalSaveBusy}
+            >
+              {composer(reloadComposerBusy ? "reloading" : "reloadConfirm")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-fg-secondary">{composer("reloadBody")}</p>
+        {reloadComposerError && (
+          <p role="alert" className="mt-3 text-sm text-danger">
+            {reloadComposerError}
+          </p>
+        )}
+      </Modal>
 
       <Modal
         open={approvalConfirmation !== null}

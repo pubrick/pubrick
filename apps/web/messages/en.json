@@ -1704,7 +1704,7 @@
     "feed_item_exists": "This post is already in the public feed. Remove it before adding another version.",
     "adaptation_not_found": "This channel's own text no longer exists — the channel may have been deleted.",
     "version_not_found": "This saved version is no longer available. Reload the history.",
-    "version_changed": "The saved text changed since you opened its history. Reload before restoring.",
+    "version_changed": "Saved content changed on the server. Reload and review the latest version.",
     "content_pinned_approved": "An approved post cannot be edited. Reject it first.",
     "content_pinned_published": "This post has already been published and can no longer be edited.",
     "content_archived": "This post is archived. Restore it before making changes.",
@@ -3173,5 +3173,35 @@
     "discardHint": "Discard your unsaved posting times?",
     "discard": "Discard",
     "keepEditing": "Keep editing"
+  },
+  "Composer": {
+    "masterTitle": "Master content",
+    "tabsLabel": "Channel versions",
+    "channelHint": "Switch channels to edit and preview each version. Changes stay in the editor until you save them.",
+    "state": {
+      "saved": "Saved",
+      "unsaved": "Unsaved changes. Save before approval.",
+      "conflict": "The saved version changed on the server. Your edits are kept here.",
+      "saving": "Saving…"
+    },
+    "tabState": {
+      "saved": "Saved",
+      "unsaved": "Unsaved",
+      "conflict": "Changed on server",
+      "saving": "Saving…"
+    },
+    "hiddenChanges": "{count, plural, one {# other channel has unsaved changes or a version conflict.} other {# other channels have unsaved changes or a version conflict.}}",
+    "reloadAction": "Reload saved version",
+    "reloadTitle": "Reload the saved version?",
+    "reloadBody": "This replaces the text and fields in this editor with the latest saved version. Unsaved changes in other editors are kept.",
+    "keepEditing": "Keep editing",
+    "reloadConfirm": "Discard these edits and reload",
+    "reloading": "Reloading…",
+    "textLimit": "Text limit: {limit} characters.",
+    "imageVideoSupport": "Automatic publishing supports one cover image or one video.",
+    "imageSupport": "Automatic publishing supports one cover image.",
+    "textSupport": "Automatic publishing supports text only for this channel.",
+    "manualMedia": "Publish this channel manually and attach media in the destination editor.",
+    "unsupportedMedia": "The attached media cannot be published to this channel. Change the post’s media before approving."
   }
 }
