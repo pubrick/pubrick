@@ -1,6 +1,7 @@
 import password from "@inquirer/password";
-import { Long, MemoryStorage } from "@mtcute/core";
-import { TelegramClient } from "@mtcute/node";
+import { Long } from "@mtcute/core";
+import type { TelegramClient } from "@mtcute/node";
+import { createClient } from "./client.js";
 
 export type { Credentials as TelegramLoginCredentials } from "./login.js";
 export { beginTelegramLogin, submitTelegramCode, submitTelegramPassword } from "./login.js";
@@ -138,10 +139,6 @@ export async function readPrivateChannel(
     clearTimeout(timer);
     await client.destroy().catch(() => undefined);
   }
-}
-
-function createClient(credentials: Credentials): TelegramClient {
-  return new TelegramClient({ ...credentials, storage: new MemoryStorage() });
 }
 
 /** Interactive, terminal-only user sign-in (phone, OTP and optional 2FA). */
@@ -440,3 +437,5 @@ async function collectReplies(
   });
   return { status: "available", comments };
 }
+
+export * from "./discussion.js";

@@ -562,6 +562,13 @@ export const API_ERROR_CODES = [
    * the full field-qualified array in `message`.
    */
   "invalid_request",
+  "inbox_account_unavailable",
+  "inbox_target_changed",
+  "inbox_message_changed",
+  "inbox_snapshot_changed",
+  "inbox_reply_unsettled",
+  "inbox_reply_inspection_required",
+  "inbox_collection_busy",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

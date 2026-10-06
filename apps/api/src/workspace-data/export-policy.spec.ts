@@ -225,3 +225,23 @@ it("exports reuse audit and erased lineage without storing duplicate source mate
   for (const forbidden of ["body", "title", "material", "sourceDigest", "request", "result"])
     expect(forbidden in audit).toBe(false);
 });
+
+it("exports normalized inbox data and reply evidence without private sender proofs", () => {
+  for (const key of [
+    "inboxConversations",
+    "inboxMessages",
+    "inboxActivities",
+    "inboxReplies",
+  ] as const) {
+    const policy = WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === key);
+    expect(policy?.table).toBe(schema[key]);
+    expect(policy?.fields).toContain("orgId");
+    expect(policy?.fields).not.toContain("accountGeneration");
+    expect(policy?.fields).not.toContain("senderPreviewId");
+  }
+  expect(WORKSPACE_EXPORT_TABLES.find((entry) => entry.key === "inboxReplies")?.fields).toContain(
+    "externalMessageId",
+  );
+  expect(WORKSPACE_EXPORT_OMISSIONS.inboxSenderPreviews).toBeDefined();
+  expect(WORKSPACE_EXPORT_OMISSIONS.inboxCollectionClaims).toBeDefined();
+});

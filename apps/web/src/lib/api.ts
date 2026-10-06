@@ -112,6 +112,14 @@ export class ApiError extends Error {
  * COMPILE error, not a key path rendered at a user in four languages.
  */
 const ERROR_MESSAGE_KEYS: Record<ErrorCode, string> = {
+  inbox_account_unavailable: "inbox_account_unavailable",
+  inbox_target_changed: "inbox_target_changed",
+  inbox_message_changed: "inbox_message_changed",
+  inbox_snapshot_changed: "inbox_snapshot_changed",
+  inbox_reply_unsettled: "inbox_reply_unsettled",
+  inbox_reply_inspection_required: "inbox_reply_inspection_required",
+  inbox_collection_busy: "inbox_collection_busy",
+
   public_authority_revoked: "public_authority_revoked",
   idempotency_conflict: "idempotency_conflict",
   public_result_gone: "public_result_gone",
