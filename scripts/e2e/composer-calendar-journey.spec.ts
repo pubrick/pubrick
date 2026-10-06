@@ -131,10 +131,10 @@ test("retained channel edits, confirmed atomic swap and stale mobile calendar re
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/en/brands/${brand.id}/publications`);
-  await page.getByRole("button", { name: "Scheduled", exact: true }).click();
-  await page.getByRole("button", { name: "Calendar", exact: true }).click();
+  await page.getByRole("tab", { name: "Scheduled", exact: true }).click();
+  await page.getByRole("tab", { name: "Calendar", exact: true }).click();
   await page.getByLabel("Date", { exact: true }).fill(firstTime.slice(0, 10));
-  await page.getByRole("button", { name: "Day", exact: true }).click();
+  await page.getByRole("tab", { name: "Day", exact: true }).click();
   const selectFirst = page.getByRole("checkbox", {
     name: "Select First calendar post for Calendar one",
     exact: true,
