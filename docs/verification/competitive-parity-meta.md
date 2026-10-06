@@ -64,6 +64,37 @@ These are successive full and affected local gates, not a claim that a single
 unchanged full run had no failures. Every reported failure was investigated;
 the final affected checks retain the original assertions and cost limits.
 
+## Built browser acceptance
+
+The owned self-hosted journey passed on source
+`c6b00b5981771e1d2947e28d6ad95c50f78a2e79`: **2 scenarios passed in 21 seconds**.
+The runner rebuilt production Next.js, API and worker, migrated a fresh pinned
+PostgreSQL image, ran the scenarios and removed its processes, media and database.
+The later verification-record commit changes documentation only.
+
+- The mandatory core journey creates an account/workspace, reviews and approves
+  saved content, checks a real worker receipt through the owned Telegram
+  transport fixture, then switches tenants in the UI.
+- The Meta journey checks all three unconfigured native choices without token
+  fields, preserves real manual Instagram creation, strips callback parameters
+  and refuses replay. Two synthetic same-name Facebook Page choices require an
+  explicit selection; the actual API then returns the exact unconfigured-app
+  refusal. This UI step does not claim live OAuth or intent-ownership proof.
+- A guarded synthetic interrupted preparation in the owned database is opened
+  through the actual compiled API and signed-in browser. Cancel changes nothing;
+  acknowledged Discard sends the exact attempt/hash expectation, preserves the
+  container and history, creates no jobs or receipts, and survives reload.
+- At 390 px, screenshots of configuration, Page choice and the discard dialog
+  were inspected. No horizontal overflow occurred; choice/acknowledgment targets
+  meet the 44 px contract. The return link has its own line. The first browser
+  run exposed an ambiguous error selector matching Next.js's route announcer;
+  it was scoped to the application main region and both scenarios passed again.
+
+Local replay command: `node scripts/e2e/run.mjs --grep 'native Meta'`.
+The runner always includes the core provider-boundary scenario. Its synthetic
+provider sends are not public publication. The affected callback UI's eleven
+tests also passed after the final spacing correction.
+
 ## External acceptance prerequisites
 
 Approved provider applications and eligible accounts, a reachable canonical
