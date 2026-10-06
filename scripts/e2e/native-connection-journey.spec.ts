@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: hosted acceptance owns a separate runner.
@@ -15,7 +16,7 @@ test("WordPress destination and credential rotation preserve a future reviewed d
   await page.getByLabel("Name", { exact: true }).fill("Native editor");
   await page.getByLabel("Email", { exact: true }).fill("native@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-native-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Native workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);

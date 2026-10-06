@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: hosted acceptance owns a separate runner.
@@ -14,7 +15,7 @@ test("human publication receipt appears in mobile results and a complete CSV", a
   await page.getByLabel("Name", { exact: true }).fill("Results editor");
   await page.getByLabel("Email", { exact: true }).fill("results@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-results-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Results workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);
@@ -66,7 +67,7 @@ test("human publication receipt appears in mobile results and a complete CSV", a
   const results = page.getByRole("region", { name: "Publication results", exact: true });
   await expect(results.getByText('A reviewed "creative" article', { exact: true })).toBeVisible();
   await expect(results.getByText("Confirmed by a person", { exact: true })).toBeVisible();
-  const channelFilter = results.getByLabel("Channel", { exact: true });
+  const channelFilter = results.getByRole("combobox", { name: "Channel", exact: true });
   await expect(channelFilter).toBeEnabled();
   await channelFilter.selectOption(channel.id);
   await expect(results.getByText('A reviewed "creative" article', { exact: true })).toBeVisible();

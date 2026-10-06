@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: the hosted runner owns a separate journey.
@@ -27,7 +28,7 @@ test("retained channel edits, confirmed atomic swap and stale mobile calendar re
   await page.getByLabel("Name", { exact: true }).fill("Calendar editor");
   await page.getByLabel("Email", { exact: true }).fill("calendar@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-calendar-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Calendar workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);

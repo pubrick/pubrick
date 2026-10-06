@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { submitSignup } from "./signup";
 
 test.skip(
   // biome-ignore lint/suspicious/noUndeclaredEnvVars: hosted acceptance owns its separate runner.
@@ -16,7 +17,7 @@ test("responsibility preserves composer edits and a mobile guest reviews only sa
   await page.getByLabel("Name", { exact: true }).fill("Studio editor");
   await page.getByLabel("Email", { exact: true }).fill("review@browser.example");
   await page.getByLabel("Password", { exact: true }).fill("Disposable-review-password-123!");
-  await page.getByRole("button", { name: "Sign up", exact: true }).click();
+  await submitSignup(page);
   await page.getByLabel("Organization name").fill("Review workspace");
   await page.getByRole("button", { name: "Create organization", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/brands$/);
