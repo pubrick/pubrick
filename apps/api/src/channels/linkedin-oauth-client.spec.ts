@@ -335,7 +335,7 @@ describe("LinkedIn code, nonce and identity validation", () => {
     expect(refreshable.credentials).not.toHaveProperty("refreshExpiresAt");
   });
 
-  it.each([undefined, 0, -1, 0.5, Number.MAX_SAFE_INTEGER])(
+  it.each([undefined, 0, -1, 0.5, Number.MAX_SAFE_INTEGER, "3600junk", "3600", null, true])(
     "refuses an unusable access token expiry before userinfo: %s",
     async (expires_in) => {
       mockGuardedFetch.mockResolvedValueOnce(answer(tokens({ expires_in })));
