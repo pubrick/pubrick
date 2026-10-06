@@ -8,20 +8,58 @@ import {
   Post,
   Put,
   Query,
+  Res,
   UseGuards,
 } from "@nestjs/common";
-import { analyticsDaysSchema, publicationCommentCollectionUpdateSchema } from "@pubrick/shared";
+import {
+  analyticsDaysSchema,
+  type PublicationResultsQuery,
+  publicationCommentCollectionUpdateSchema,
+  publicationResultsQuerySchema,
+} from "@pubrick/shared";
+import type { Response } from "express";
 import { ActiveOrgGuard } from "../org/active-org.guard";
 import { BrandScope } from "../org/brand-scope.decorator";
 import { OrgId } from "../org/org-id.decorator";
 import { ZodValidationPipe } from "../validation.pipe";
 import { AnalyticsRepository } from "./analytics.repository";
+import { PublicationResultsRepository } from "./publication-results.repository";
 
 @Controller("analytics")
 @UseGuards(ActiveOrgGuard)
 @BrandScope({ kind: "brand", source: "param" })
 export class AnalyticsController {
-  constructor(private readonly analytics: AnalyticsRepository) {}
+  constructor(
+    private readonly analytics: AnalyticsRepository,
+    private readonly results: PublicationResultsRepository,
+  ) {}
+
+  @Get("brands/:brandId/results")
+  resultsPage(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(publicationResultsQuerySchema)) query: PublicationResultsQuery,
+  ) {
+    return this.results.list(orgId, brandId, query);
+  }
+
+  @Get("brands/:brandId/results.csv")
+  async exportResults(
+    @OrgId() orgId: string,
+    @Param("brandId", ParseUUIDPipe) brandId: string,
+    @Query(new ZodValidationPipe(publicationResultsQuerySchema)) query: PublicationResultsQuery,
+    @Res() response: Response,
+  ) {
+    const csv = await this.results.export(orgId, brandId, query);
+    response.setHeader("Content-Type", "text/csv; charset=utf-8");
+    response.setHeader(
+      "Content-Disposition",
+      'attachment; filename="pubrick-publication-results.csv"',
+    );
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(csv);
+  }
 
   @Get("brands/:brandId/overview")
   overview(

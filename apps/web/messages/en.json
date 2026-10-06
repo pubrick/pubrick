@@ -3332,5 +3332,31 @@
     "callbackPending": "Verifying your LinkedIn account and publishing permission…",
     "callbackRecovery": "This authorization cannot be reused. Open your brand and start a new connection or reconnect the existing channel.",
     "backToBrands": "Open brands"
+  },
+  "Results": {
+    "title": "Publication results",
+    "intro": "Compare confirmed publication receipts using the latest available counters.",
+    "channel": "Channel",
+    "allChannels": "All channels, including archived receipts",
+    "export": "Export CSV",
+    "exporting": "Exporting…",
+    "loadError": "Could not load publication results. Try again.",
+    "channelsError": "Could not load the channel filter. Try again.",
+    "window": "Receipt period: {from} to {to} UTC. The end is excluded.",
+    "comparison": "Current and previous publication cohorts",
+    "metric": "Measure",
+    "current": "Current period",
+    "previous": "Previous period",
+    "coverage": "Observed for {count} posts",
+    "comparisonHint": "Previous period: {from} to {to} UTC. These are the latest counters for posts published in each period, not audience growth during those dates.",
+    "receiptCoverage": "{asserted} receipts confirmed by a person; {stale} observations older than 24 hours.",
+    "exportLimit": "Narrow the period or select a channel to export at most {count} publications.",
+    "archived": "Removed channel",
+    "channelSummary": "{published} published · {measured} with observations",
+    "metricsAvailable": "VK counters can be collected for this channel.",
+    "metricsUnsupported": "Automatic counter collection is unavailable for this connection. Existing observations remain visible.",
+    "humanReceipt": "Confirmed by a person",
+    "more": "Load more",
+    "loading": "Loading…"
   }
 }

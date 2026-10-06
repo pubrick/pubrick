@@ -15,6 +15,7 @@ import ru from "../../messages/ru.json";
 import {
   ApiError,
   api,
+  apiBlob,
   apiPage,
   apiVoid,
   type ErrorTranslator,
@@ -22,6 +23,32 @@ import {
   TRANSPORT_ERROR_CODES,
 } from "./api";
 import { onUnauthorized } from "./unauthorized";
+
+describe("authenticated downloads", () => {
+  it("returns the real response blob through the shared request boundary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("publication_id,views\npost,0\n", { status: 200 })),
+    );
+    const blob = await apiBlob("/api/analytics/brands/brand/results.csv");
+    expect(await blob.text()).toBe("publication_id,views\npost,0\n");
+  });
+  it("preserves a coded refusal instead of downloading an error body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(refusalBody(400, "invalid_request", "Narrow this export")), {
+          status: 400,
+        }),
+      ),
+    );
+    const error = await apiBlob("/api/analytics/brands/brand/results.csv").catch(
+      (cause: unknown) => cause,
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("invalid_request");
+  });
+});
 
 /**
  * The real `Errors` translator, built from the shipped English file.

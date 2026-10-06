@@ -3332,5 +3332,31 @@
     "callbackPending": "Verificando sua conta do LinkedIn e a permissão de publicação…",
     "callbackRecovery": "Esta autorização não pode ser reutilizada. Abra sua marca e inicie uma nova conexão ou reconecte o canal existente.",
     "backToBrands": "Abrir marcas"
+  },
+  "Results": {
+    "title": "Resultados das publicações",
+    "intro": "Compare registos de publicações confirmadas com os últimos contadores disponíveis.",
+    "channel": "Canal",
+    "allChannels": "Todos os canais, incluindo registos arquivados",
+    "export": "Exportar CSV",
+    "exporting": "A exportar…",
+    "loadError": "Não foi possível carregar os resultados. Tente novamente.",
+    "channelsError": "Não foi possível carregar o filtro de canais. Tente novamente.",
+    "window": "Período de registo: de {from} a {to} UTC. O fim não está incluído.",
+    "comparison": "Grupos de publicações do período atual e anterior",
+    "metric": "Indicador",
+    "current": "Período atual",
+    "previous": "Período anterior",
+    "coverage": "Dados de {count} publicações",
+    "comparisonHint": "Período anterior: de {from} a {to} UTC. São os últimos contadores das publicações de cada período, não o crescimento da audiência nessas datas.",
+    "receiptCoverage": "{asserted} registos confirmados por uma pessoa; {stale} observações com mais de 24 horas.",
+    "exportLimit": "Reduza o período ou escolha um canal para exportar no máximo {count} publicações.",
+    "archived": "Canal removido",
+    "channelSummary": "{published} publicadas · {measured} com observações",
+    "metricsAvailable": "É possível recolher contadores do VK para este canal.",
+    "metricsUnsupported": "Esta ligação não permite recolha automática de contadores. As observações existentes continuam visíveis.",
+    "humanReceipt": "Confirmada por uma pessoa",
+    "more": "Carregar mais",
+    "loading": "A carregar…"
   }
 }

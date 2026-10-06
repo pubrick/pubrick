@@ -527,6 +527,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Downloads retain the same authenticated, localized refusal contract as JSON calls. */
+export async function apiBlob(path: string, init?: RequestInit): Promise<Blob> {
+  return (await request(path, init)).blob();
+}
+
 /**
  * ONE PAGE OF A LIST, AND WHERE THE NEXT ONE STARTS.
  *

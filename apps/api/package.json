@@ -24,6 +24,7 @@
     "@thallesp/nestjs-better-auth": "^2.7.0",
     "@tiptap/static-renderer": "^3.31.3",
     "better-auth": "^1.7.1",
+    "csv-stringify": "6.8.3",
     "drizzle-orm": "^0.45.2",
     "feed": "^5.2.1",
     "file-type": "21.3.4",

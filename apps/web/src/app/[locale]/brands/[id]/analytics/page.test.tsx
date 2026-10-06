@@ -1,3 +1,4 @@
+import { type AnalyticsDto, publicationResultsPageSchema } from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { authClient } from "@/lib/auth-client";
@@ -19,13 +20,62 @@ const TG_ID = "15e678e4-dbd6-4166-996b-9cf9b0cdbf1d";
 const timestamp = "2026-09-23T12:00:00.000Z";
 
 function response(body: unknown): Response {
+  const current =
+    typeof body === "object" && body !== null && "posts" in body
+      ? resultsFixture(body as AnalyticsDto)
+      : body;
   return {
     ok: true,
     status: 200,
     statusText: "",
-    text: async () => JSON.stringify(body),
-    json: async () => body,
+    text: async () => JSON.stringify(current),
+    json: async () => current,
   } as Response;
+}
+
+/** Existing comment fixtures now use the complete publication-results response contract. */
+function resultsFixture(body: AnalyticsDto) {
+  const summary = {
+    publishedCount: body.publishedCount,
+    assertedCount: 0,
+    measuredCount: body.measuredCount,
+    staleCount: 0,
+    totals: body.totals,
+    observedCounts: Object.fromEntries(
+      ["views", "likes", "comments", "shares"].map((key) => [
+        key,
+        body.posts.filter(
+          (post) => post.metrics.status === "available" && post.metrics[key as "views"] !== null,
+        ).length,
+      ]),
+    ),
+  };
+  const previous = {
+    ...summary,
+    publishedCount: 0,
+    measuredCount: 0,
+    totals: { views: null, likes: null, comments: null, shares: null },
+    observedCounts: { views: 0, likes: 0, comments: 0, shares: 0 },
+  };
+  return publicationResultsPageSchema.parse({
+    from: "2026-09-01T00:00:00.000Z",
+    to: "2026-10-01T00:00:00.000Z",
+    summary,
+    previous: {
+      from: "2026-08-02T00:00:00.000Z",
+      to: "2026-09-01T00:00:00.000Z",
+      summary: previous,
+    },
+    channels: [],
+    rows: body.posts.map(({ publishedAt, ...post }) => ({
+      ...post,
+      recordedAt: publishedAt,
+      channelId: post.id,
+      archived: false,
+      assertedAt: null,
+    })),
+    nextCursor: null,
+  });
 }
 
 function refusal(status: number, code: string): Response {
@@ -95,6 +145,47 @@ describe("brand publication results", () => {
       data: { id: "test-org", members: [{ userId: "test-user", role: "member" }] },
       isPending: false,
     } as never);
+  });
+
+  it.each([
+    {
+      label: "all current-user memberships",
+      members: [
+        { userId: "test-user", role: "author" },
+        { user: { id: "test-user" }, role: "member" },
+      ],
+      allowed: true,
+    },
+    {
+      label: "padded and foreign roles",
+      members: [
+        { userId: "test-user", role: "author, member" },
+        { userId: "another-user", role: "owner" },
+      ],
+      allowed: false,
+    },
+  ])("uses exact role semantics for $label", async ({ members, allowed }) => {
+    vi.mocked(authClient.useActiveOrganization).mockReturnValue({
+      data: { id: "test-org", members },
+      isPending: false,
+    } as never);
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/api/channels?")) return response([]);
+      if (url.includes("/api/brands/")) return response({ id: BRAND_ID, name: "Acme" });
+      if (url.includes("/results?"))
+        return response({
+          ...telegramResults(),
+          posts: telegramResults().posts.map((post) =>
+            post.platform === "vk" ? { ...post, canRefresh: true } : post,
+          ),
+        });
+      return response({});
+    });
+    await renderAsync(<BrandAnalyticsPage params={Promise.resolve({ id: BRAND_ID })} />);
+    expect(await screen.findByText("VK story")).toBeVisible();
+    if (allowed) expect(screen.getByRole("button", { name: en.Analytics.refresh })).toBeVisible();
+    else expect(screen.queryByRole("button", { name: en.Analytics.refresh })).toBeNull();
   });
 
   it.each(["author", "editor"])(
@@ -311,7 +402,7 @@ describe("brand publication results", () => {
       5,
     );
     expect(
-      calls.filter((call) => call === `GET /api/analytics/brands/${BRAND_ID}?days=30`),
+      calls.filter((call) => call.startsWith(`GET /api/analytics/brands/${BRAND_ID}/results?`)),
     ).toHaveLength(1);
   });
 
@@ -731,11 +822,13 @@ it("keeps the selected period when older analytics finish later", async () => {
     vi.fn(async (input) => {
       const url = String(input);
       if (url === `/api/brands/${BRAND_ID}`) return response({ id: BRAND_ID, name: "Brand" });
-      if (url === `/api/analytics/brands/${BRAND_ID}?days=30`)
+      const query = new URL(url, "https://pubrick.example").searchParams;
+      const span = Date.parse(query.get("to") ?? "") - Date.parse(query.get("from") ?? "");
+      if (url.startsWith(`/api/analytics/brands/${BRAND_ID}/results?`) && span === 30 * 86_400_000)
         return new Promise<Response>((resolve) => {
           oldResolve = resolve;
         });
-      if (url === `/api/analytics/brands/${BRAND_ID}?days=7`)
+      if (url.startsWith(`/api/analytics/brands/${BRAND_ID}/results?`) && span === 7 * 86_400_000)
         return response({
           ...telegramResults(),
           days: 7,

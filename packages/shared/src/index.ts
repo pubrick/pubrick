@@ -90,6 +90,7 @@ export {
 export * from "./dto/public-publications.js";
 export * from "./dto/public-write.js";
 export * from "./dto/publication-operations.js";
+export * from "./dto/publication-results.js";
 export * from "./dto/role-templates.js";
 export * from "./dto/runs.js";
 export * from "./dto/search-credentials.js";

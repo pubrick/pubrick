@@ -109,6 +109,7 @@ async function runBrowserJourney() {
       "scripts/e2e/scoped-write-journey.spec.ts",
       "scripts/e2e/composer-calendar-journey.spec.ts",
       "scripts/e2e/native-connection-journey.spec.ts",
+      "scripts/e2e/publication-results-journey.spec.ts",
       "--config=scripts/e2e/playwright.config.ts",
     ],
     ".",

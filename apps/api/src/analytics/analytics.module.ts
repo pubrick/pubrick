@@ -4,10 +4,11 @@ import { ChannelsModule } from "../channels/channels.module";
 import { CommentAnalysisCaller } from "../sources/comment-analysis.caller";
 import { AnalyticsController } from "./analytics.controller";
 import { AnalyticsRepository } from "./analytics.repository";
+import { PublicationResultsRepository } from "./publication-results.repository";
 
 @Module({
   imports: [AiCredentialsModule, ChannelsModule],
   controllers: [AnalyticsController],
-  providers: [AnalyticsRepository, CommentAnalysisCaller],
+  providers: [AnalyticsRepository, PublicationResultsRepository, CommentAnalysisCaller],
 })
 export class AnalyticsModule {}
