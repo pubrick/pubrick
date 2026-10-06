@@ -113,6 +113,7 @@ async function runBrowserJourney() {
       "scripts/e2e/native-connection-journey.spec.ts",
       "scripts/e2e/publication-results-journey.spec.ts",
       "scripts/e2e/team-review-journey.spec.ts",
+      "scripts/e2e/batch-review-journey.spec.ts",
       "--config=scripts/e2e/playwright.config.ts",
       ...(selectedJourneys ? ["--grep", selectedJourneys] : []),
     ],
