@@ -42,6 +42,14 @@ defines GET container status with `id,status,error_message`. Follow that
 request contract rather than the collection's contradictory publish-POST prose.
 Use these sources as protocol references; do not copy their sample code.
 
+The [current Threads token-inspection guide](https://developers.facebook.com/documentation/threads/troubleshooting/debug-access-token)
+(updated August 18, 2026) requires an app token or a Threads tester's token for
+`debug_token`; an ordinary connected user's token is not sufficient. Use the
+server-owned `TH|<APP_ID>|<APP_SECRET>` app token to inspect the separately saved
+user token. The app can inspect only its own tokens. Require actual `type: USER`,
+`is_valid: true`, identity, scopes and expiry; no undocumented `app_id` response
+field or tester-only self-inspection is a production publishing proof.
+
 The developer site was unavailable to the research tool, but its current pages
 were subsequently read in the browser on 2026-10-06. The [Instagram publishing
 guide](https://developers.facebook.com/documentation/instagram-platform/content-publishing)
@@ -75,6 +83,17 @@ requires a Page token, the `CREATE_CONTENT` task and `pages_manage_posts`,
 contract is narrower than the multi-operation Pages guide. Graph examples use
 `v26.0`; do not apply that version to Threads. Provider app configuration and
 live receipts remain external acceptance checks.
+
+The [Page discovery guide](https://developers.facebook.com/documentation/pages-api/getting-started)
+and [User accounts reference](https://developers.facebook.com/docs/graph-api/reference/user/accounts)
+provide the fresh task proof: use the retained User token to read `/me/accounts`
+with `id,tasks`, and require the exact selected Page's `CREATE_CONTENT` task.
+Store that User token encrypted beside the separately selected Page token.
+Bound pagination, reject ambiguous or truncated discovery, and reconstruct
+cursor requests on the fixed official host/path rather than following a
+token-bearing `paging.next` URL. Token inspection uses server-owned app
+credentials. Neither a Page identity read nor saved task/scope strings proves
+the current publishing grant.
 
 ## Approved media access
 
@@ -120,6 +139,15 @@ retry-chain admission and unresolved-send claims cannot serve as readiness
 resumes: they currently increment attempts or classify old in-flight requests
 as uncertain sends. Add a separate stage/resume contract and make recovery
 sweeps and dead-letter handling distinguish preparation from final intent.
+
+An inconclusive initial read before any staged attempt is admitted ends as a
+visible known-not-sent failure, with explicit user retry. It must not exhaust
+the ordinary queue while leaving the adaptation queued without a checkpoint.
+Admission and this terminal write bind the exact saved decision, text, target,
+credential generation and encrypted bag to the current active pg-boss job
+incarnation (ID, queue, retry count, start and expiry). Read DB wall time after
+lock waits; a cancelled job or newer human decision always wins over a late
+read-only provider response.
 A lease with a fencing token
 protects the checkpoint; an expired worker cannot send after another worker
 takes over. Recheck the delivery, reviewed inputs, destination, credential

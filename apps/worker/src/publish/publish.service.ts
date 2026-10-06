@@ -5,10 +5,13 @@ import { schema } from "@pubrick/db";
 import {
   AcceptedPublicationError,
   BLUESKY_REQUEST_TIMEOUT_MS,
+  FACEBOOK_PAGE_MAX_REQUESTS,
   getPublisher,
+  getStagedPublisher,
   LINKEDIN_REQUEST_TIMEOUT_MS,
   MASTODON_REQUEST_TIMEOUT_MS,
   MAX_REQUEST_TIMEOUT_MS,
+  META_REQUEST_TIMEOUT_MS,
   PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
@@ -23,11 +26,13 @@ import {
 import {
   isManualPlatform,
   isUnreadableCiphertext,
+  type MetaPublicationJob,
   PUBLISH_QUEUE_OPTIONS,
   type PublishFailureReason,
   type PublishJob,
   UNREADABLE_CREDENTIALS_MESSAGE,
 } from "@pubrick/shared";
+import type { PgBoss } from "pg-boss";
 import { env, linkedinApplication } from "../env";
 import {
   type AttemptFence,
@@ -37,6 +42,12 @@ import {
   PublishRepository,
   type SendClaim,
 } from "./publish.repository";
+import type {
+  StagedExecution,
+  StagedPreflightFence,
+  StagedReceiptRecorder,
+} from "./staged-publication.contract";
+import { StagedPublicationService } from "./staged-publication.service";
 
 export type { PublishJob } from "@pubrick/shared";
 
@@ -123,6 +134,10 @@ export const PUBLISH_STOP_TIMEOUT_MS =
     WORDPRESS_REQUEST_TIMEOUT_MS * 2,
     // LinkedIn: application token introspection, personal identity, then Posts create.
     LINKEDIN_REQUEST_TIMEOUT_MS * 3,
+    // Facebook Page: two token inspectors, identity, up to three accounts reads, create.
+    META_REQUEST_TIMEOUT_MS * FACEBOOK_PAGE_MAX_REQUESTS,
+    // Staged Meta: readiness, two publishing-access reads, then the final request.
+    META_REQUEST_TIMEOUT_MS * 4,
   ) +
   PUBLISH_RECORD_BUDGET_MS +
   10_000;
@@ -226,12 +241,17 @@ export class PublishService {
     /** Backoff unit between markPublished retries; 0 in tests for determinism. */
     @Optional()
     private readonly markPublishedRetryDelayMs: number = DEFAULT_MARK_PUBLISHED_RETRY_DELAY_MS,
+    @Optional() private readonly staged?: StagedPublicationService,
   ) {}
 
-  async handle(job: PublishJob): Promise<void> {
+  async handle(job: PublishJob, boss?: PgBoss, execution?: StagedExecution): Promise<void> {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation || adaptation.status === "published" || isManualPlatform(adaptation.platform))
       return;
+    if (this.staged && boss && getStagedPublisher(adaptation.platform)) {
+      await this.staged.start(job.orgId, job.adaptationId, boss, this.stagedRecorder(), execution);
+      return;
+    }
 
     // Defense in depth against a delivered rejection. The api cancels the
     // pg-boss job when an approved item is rejected, but a job that was
@@ -826,6 +846,8 @@ export class PublishService {
     const adaptation = await this.repo.load(job.orgId, job.adaptationId);
     if (!adaptation) return;
     if (adaptation.status !== "publishing") return;
+    // Staged recovery distinguishes nonpublic preparation from durable final intent.
+    if (this.staged && getStagedPublisher(adaptation.platform)) return;
 
     await this.safeMarkFailed(
       job.orgId,
@@ -868,6 +890,49 @@ export class PublishService {
     await this.sweepAbandonedAdaptations();
     await this.sweepStranded();
     await this.sweepOrphanedClaims();
+  }
+
+  async handleStaged(
+    job: MetaPublicationJob,
+    boss: PgBoss,
+    execution?: StagedExecution,
+  ): Promise<void> {
+    await this.staged?.resume(job.orgId, job, boss, this.stagedRecorder(), execution);
+  }
+
+  async recoverStaged(orgId: string, boss: PgBoss): Promise<void> {
+    await this.staged?.recover(orgId, boss, this.stagedRecorder());
+  }
+
+  private stagedRecorder(): StagedReceiptRecorder {
+    return {
+      published: (orgId, adaptationId, result, claim) =>
+        this.recordPublished(orgId, adaptationId, result, claim),
+      accepted: (orgId, adaptationId, detail, fence, result, claim) =>
+        this.recordAcceptedPublication(orgId, adaptationId, detail, fence, result, claim),
+      unknown: (orgId, adaptationId, detail, fence, claim) =>
+        this.recordUnknownOutcome(orgId, adaptationId, detail, fence, claim),
+      failed: (
+        orgId,
+        adaptationId,
+        detail,
+        fence,
+        claim,
+        reason = "rejected_before_send",
+        preflight,
+      ) =>
+        this.safeMarkFailed(
+          orgId,
+          adaptationId,
+          detail,
+          reason,
+          fence,
+          "failed",
+          claim,
+          undefined,
+          preflight,
+        ),
+    };
   }
 
   /**
@@ -976,7 +1041,7 @@ export class PublishService {
     partial?: PartialTelegramDelivery,
   ): Promise<void> {
     const reason =
-      "DELIVERY OUTCOME UNKNOWN: the post was sent to the platform but the outcome could not be " +
+      "DELIVERY OUTCOME UNKNOWN: a publication request may have reached the platform but its outcome could not be " +
       `confirmed (${detail}). A copy may already be live — check the channel before re-approving, ` +
       "because re-approving will send again.";
     this.logger.error(`${reason} orgId=${orgId} adaptationId=${adaptationId}`);
@@ -1171,10 +1236,11 @@ export class PublishService {
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
     partial?: PartialTelegramDelivery,
+    preflight?: StagedPreflightFence,
   ): Promise<void> {
     try {
       if (
-        !(await (partial
+        !(await (preflight
           ? this.repo.markFailed(
               orgId,
               adaptationId,
@@ -1184,16 +1250,28 @@ export class PublishService {
               outcome,
               claim,
               partial,
+              preflight,
             )
-          : this.repo.markFailed(
-              orgId,
-              adaptationId,
-              reason,
-              failureReason,
-              fence,
-              outcome,
-              claim,
-            )))
+          : partial
+            ? this.repo.markFailed(
+                orgId,
+                adaptationId,
+                reason,
+                failureReason,
+                fence,
+                outcome,
+                claim,
+                partial,
+              )
+            : this.repo.markFailed(
+                orgId,
+                adaptationId,
+                reason,
+                failureReason,
+                fence,
+                outcome,
+                claim,
+              )))
       ) {
         // Not an error, and emphatically not something to retry or force: the
         // row moved out from under this attempt, which only the api does and

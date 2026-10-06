@@ -18,6 +18,8 @@ import { db } from "../db";
 import { env } from "../env";
 import { enqueueNotification } from "../notifications/notifications.outbox";
 import { holdOrganization, holdOrganizations } from "../organization-lock";
+import type { StagedPreflightFence } from "./staged-publication.contract";
+import { holdStagedPreflight } from "./staged-publication.repository";
 
 export type LoadedAdaptation = {
   id: string;
@@ -378,12 +380,17 @@ const PGBOSS_SCHEMA = "pgboss";
  * because the two callers name it differently: the outer statement by column,
  * the locking sub-select by its alias `a.id`.
  */
-function noLiveJobFor(adaptationId: SQLWrapper) {
+function noLiveJobFor(adaptationId: SQLWrapper, orgId: SQLWrapper = schema.adaptations.orgId) {
   return sql`not exists (
       select 1
         from ${sql.raw(PGBOSS_SCHEMA)}.job j
        where j.state < 'completed'::${sql.raw(PGBOSS_SCHEMA)}.job_state
          and j.data->>'adaptationId' = ${adaptationId}::text
+    ) and not exists (
+      select 1 from meta_publication_stages stage
+      where stage.adaptation_id = ${adaptationId}
+        and stage.org_id = ${orgId}
+        and stage.phase in ('preparation_intent', 'waiting', 'final_intent')
     )`;
 }
 
@@ -1377,9 +1384,15 @@ export class PublishRepository {
     outcome: "failed" | "unknown" = "failed",
     claim?: SendClaim,
     partial?: PartialTelegramDelivery,
+    preflight?: StagedPreflightFence,
   ): Promise<boolean> {
     return db.transaction(async (tx) => {
       if (!(await holdOrganization(tx, orgId))) return false;
+      if (
+        preflight &&
+        !(await holdStagedPreflight(tx, orgId, preflight.delivery, preflight.execution, true))
+      )
+        return false;
       const rows = await tx
         .update(schema.adaptations)
         .set({
@@ -1658,7 +1671,7 @@ export class PublishRepository {
                )})
                  and a.status = 'publishing'
                  and a.updated_at < now() - make_interval(secs => ${PUBLISH_ABANDONED_AFTER_SECONDS})
-                 and ${noLiveJobFor(sql`a.id`)}
+                 and ${noLiveJobFor(sql`a.id`, sql`a.org_id`)}
                order by a.id
                  for update of a
             )`,
@@ -1851,7 +1864,7 @@ export class PublishRepository {
                   or (a.status = 'queued'
                        and a.updated_at < now() - make_interval(secs => ${seconds}))
                  )
-                 and ${noLiveJobFor(sql`a.id`)}
+                 and ${noLiveJobFor(sql`a.id`, sql`a.org_id`)}
                order by a.id
                  for update of a
             )`,

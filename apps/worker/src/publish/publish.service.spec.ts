@@ -4,8 +4,10 @@ import path from "node:path";
 import { schema } from "@pubrick/db";
 import {
   BLUESKY_REQUEST_TIMEOUT_MS,
+  FACEBOOK_PAGE_MAX_REQUESTS,
   LINKEDIN_REQUEST_TIMEOUT_MS,
   MASTODON_REQUEST_TIMEOUT_MS,
+  META_REQUEST_TIMEOUT_MS,
   PartialTelegramPublishError,
   PermanentPublishError,
   PlatformRejectionError,
@@ -18,6 +20,8 @@ import {
 } from "@pubrick/integrations";
 import {
   MANUAL_PLATFORM_IDS,
+  META_PUBLICATION_LEASE_MS,
+  META_PUBLICATION_QUEUE_OPTIONS,
   PUBLISH_QUEUE_OPTIONS,
   UNREADABLE_CREDENTIALS_MESSAGE,
   UnreadableCiphertextError,
@@ -36,6 +40,7 @@ import {
   PUBLISH_STOP_TIMEOUT_MS,
   PublishService,
 } from "./publish.service";
+import type { StagedReceiptRecorder } from "./staged-publication.contract";
 
 /**
  * The same shape the real telegram adapter exposes: the service validates
@@ -105,6 +110,137 @@ function fixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PublishService.handle", () => {
+  it.each(["threads", "instagram_native"])(
+    "routes %s to same-attempt preparation without ordinary send admission",
+    async (platform) => {
+      const { repo } = fixture({ platform });
+      const lookup = vi.fn();
+      const staged = { start: vi.fn().mockResolvedValue(undefined) };
+      const boss = {} as never;
+      const execution = {
+        jobId: "fixture-job",
+        queue: "fixture-publish",
+        startedOn: new Date(),
+        retryCount: 1,
+      };
+      const service = new PublishService(
+        repo as never,
+        lookup,
+        "https://api.telegram.org",
+        0,
+        staged as never,
+      );
+      await service.handle({ adaptationId: "a1", orgId: "o1" }, boss, execution);
+      expect(staged.start).toHaveBeenCalledWith(
+        "o1",
+        "a1",
+        boss,
+        {
+          published: expect.any(Function),
+          accepted: expect.any(Function),
+          unknown: expect.any(Function),
+          failed: expect.any(Function),
+        },
+        execution,
+      );
+      expect(lookup).not.toHaveBeenCalled();
+      expect(repo.markPublishing).not.toHaveBeenCalled();
+      expect(repo.claimSend).not.toHaveBeenCalled();
+    },
+  );
+  it("dispatches a staged readiness job and recovery through the existing receipt recorder", async () => {
+    const { repo } = fixture({ platform: "threads" });
+    const staged = {
+      resume: vi.fn().mockResolvedValue(undefined),
+      recover: vi.fn().mockResolvedValue(undefined),
+    };
+    const boss = {} as never;
+    const service = new PublishService(
+      repo as never,
+      () => undefined,
+      "https://api.telegram.org",
+      0,
+      staged as never,
+    );
+    const job = { orgId: "o1", adaptationId: "a1", stageId: "stage1" };
+    const execution = {
+      jobId: "fixture-job",
+      queue: "fixture-stages",
+      startedOn: new Date(),
+      retryCount: 0,
+    };
+    await service.handleStaged(job, boss, execution);
+    await service.recoverStaged("o1", boss);
+    expect(staged.resume).toHaveBeenCalledWith(
+      "o1",
+      job,
+      boss,
+      expect.objectContaining({ unknown: expect.any(Function) }),
+      execution,
+    );
+    expect(staged.recover).toHaveBeenCalledWith(
+      "o1",
+      boss,
+      expect.objectContaining({ failed: expect.any(Function) }),
+    );
+    expect(repo.markPublishing).not.toHaveBeenCalled();
+  });
+  it("passes the initial read's full fence to real terminal recording", async () => {
+    const { repo } = fixture({ platform: "threads" });
+    const execution = {
+      jobId: "fixture-job",
+      queue: "fixture-publish",
+      startedOn: new Date(),
+      retryCount: 0,
+    };
+    // This tier proves the bridge preserves the opaque snapshot. PostgreSQL
+    // cases validate every field against the actual saved decision and job.
+    const preflight = {
+      delivery: { decisionVersion: "exact-server-revision" } as never,
+      execution,
+    };
+    const staged = {
+      start: vi.fn(
+        async (
+          orgId: string,
+          adaptationId: string,
+          _boss: unknown,
+          recorder: StagedReceiptRecorder,
+        ) => {
+          await recorder.failed(
+            orgId,
+            adaptationId,
+            "Initial check did not finish",
+            { status: "queued", attemptCount: 0 },
+            undefined,
+            undefined,
+            preflight,
+          );
+        },
+      ),
+    };
+    const service = new PublishService(
+      repo as never,
+      () => undefined,
+      "https://api.telegram.org",
+      0,
+      staged as never,
+    );
+    await service.handle({ orgId: "o1", adaptationId: "a1" }, {} as never, execution);
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      "o1",
+      "a1",
+      "Initial check did not finish",
+      "rejected_before_send",
+      { status: "queued", attemptCount: 0 },
+      "failed",
+      undefined,
+      undefined,
+      preflight,
+    );
+    expect(repo.markPublishing).not.toHaveBeenCalled();
+    expect(repo.claimSend).not.toHaveBeenCalled();
+  });
   it.each(MANUAL_PLATFORM_IDS)(
     "never sends a manual %s adaptation, even if a stale job exists",
     async (platform) => {
@@ -766,6 +902,15 @@ describe("PublishService.handle", () => {
     expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
       LINKEDIN_REQUEST_TIMEOUT_MS * 3 + PUBLISH_RECORD_BUDGET_MS,
     );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      META_REQUEST_TIMEOUT_MS * FACEBOOK_PAGE_MAX_REQUESTS + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(PUBLISH_STOP_TIMEOUT_MS).toBeGreaterThan(
+      META_REQUEST_TIMEOUT_MS * 4 + PUBLISH_RECORD_BUDGET_MS,
+    );
+    expect(META_PUBLICATION_QUEUE_OPTIONS.expireInSeconds * 1000).toBeGreaterThan(
+      META_PUBLICATION_LEASE_MS + META_REQUEST_TIMEOUT_MS + PUBLISH_RECORD_BUDGET_MS + 10_000,
+    );
   });
 
   /**
@@ -1086,6 +1231,18 @@ describe("PublishService.handle", () => {
 });
 
 describe("PublishService.markExhausted", () => {
+  it("leaves preparation-versus-final classification to staged recovery", async () => {
+    const { repo } = fixture({ platform: "threads", status: "publishing", attemptCount: 1 });
+    const service = new PublishService(
+      repo as never,
+      () => undefined,
+      "https://api.telegram.org",
+      0,
+      {} as never,
+    );
+    await service.markExhausted({ orgId: "o1", adaptationId: "a1" });
+    expect(repo.markFailed).not.toHaveBeenCalled();
+  });
   it("marks the adaptation failed with a retries-exhausted reason", async () => {
     const { repo } = fixture({ status: "publishing" });
     const service = new PublishService(repo as never, () => undefined, "https://api");

@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { schema } from "@pubrick/db";
-import { getPublisher } from "@pubrick/integrations";
+import { getPublisher, getStagedPublisher } from "@pubrick/integrations";
 import { CHANNEL_HEALTH_TTL_MS, decryptJson, isUnreadableCiphertext } from "@pubrick/shared";
 import { and, asc, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../db";
@@ -38,7 +38,7 @@ export class ChannelHealthService {
     for (const candidate of candidates) {
       const ciphertext = candidate.credentialsEncrypted;
       if (ciphertext === null) continue;
-      const publisher = getPublisher(candidate.platform);
+      const publisher = getPublisher(candidate.platform) ?? getStagedPublisher(candidate.platform);
       let ok: boolean | null = publisher ? null : false;
       if (publisher) {
         let credentials: Record<string, string> | null = null;
