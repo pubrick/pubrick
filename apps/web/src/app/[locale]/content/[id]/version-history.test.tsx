@@ -1,8 +1,13 @@
-import { type ContentVersionDto, contentVersionRestoreSchema } from "@pubrick/shared";
+import {
+  type ContentVersionDto,
+  contentVersionRestoreSchema,
+  type RichBody,
+} from "@pubrick/shared";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api, apiPage } from "@/lib/api";
 import { render, screen, waitFor } from "@/test/render";
+import ru from "../../../../../messages/ru.json";
 import { VersionHistory } from "./version-history";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -47,7 +52,7 @@ describe("VersionHistory", () => {
       rows: [{ ...version, body: "Current text.", richBody }],
       nextCursor: null,
     });
-    mockApi.mockResolvedValue({ bodyRevision: 5 });
+    mockApi.mockResolvedValue({ body: "Current text.", richBody, bodyRevision: 5 });
     const onRestored = vi.fn().mockResolvedValue(undefined);
     const onRichRestored = vi.fn();
     const user = userEvent.setup();
@@ -74,6 +79,68 @@ describe("VersionHistory", () => {
     expect(onRichRestored).toHaveBeenCalledWith(richBody, 5);
     expect(onRestored).toHaveBeenCalledWith("Current text.");
   });
+
+  it.each(["atomic acknowledgement", "different legacy formatting", "missing legacy document"])(
+    "preserves the preview baseline with %s",
+    async (responseKind) => {
+      const selectedDocument: RichBody = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: version.body, marks: [{ type: "bold" }] }],
+          },
+        ],
+      };
+      const laterDocument: RichBody = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: version.body, marks: [{ type: "italic" }] }],
+          },
+        ],
+      };
+      mockApiPage.mockResolvedValue({
+        rows: [{ ...version, richBody: selectedDocument }],
+        nextCursor: null,
+      });
+      mockApi.mockResolvedValue(
+        responseKind === "atomic acknowledgement"
+          ? {
+              body: version.body,
+              richBody: laterDocument,
+              bodyRevision: 8,
+              restoredMaster: { body: version.body, richBody: selectedDocument, bodyRevision: 5 },
+            }
+          : responseKind === "different legacy formatting"
+            ? { body: version.body, richBody: laterDocument, bodyRevision: 8 }
+            : { bodyRevision: 8 },
+      );
+      const onRestored = vi.fn().mockResolvedValue(undefined);
+      const onRichRestored = vi.fn();
+      render(
+        <VersionHistory
+          itemId="22222222-2222-4222-8222-222222222222"
+          currentBody="Current text."
+          draftBody="Current text."
+          currentBodyRevision={4}
+          editable
+          onRestored={onRestored}
+          onRichRestored={onRichRestored}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getByText("Version history"));
+      await user.click(await screen.findByRole("button", { name: "Preview" }));
+      await user.click(screen.getByRole("button", { name: "Restore this text" }));
+      expect(onRichRestored).toHaveBeenCalledWith(
+        selectedDocument,
+        responseKind === "atomic acknowledgement" ? 5 : undefined,
+      );
+      expect(onRestored).toHaveBeenCalledWith(version.body);
+    },
+  );
 
   it("loads on disclosure and restores a preview only after confirmation", async () => {
     const user = userEvent.setup();
@@ -187,7 +254,7 @@ describe("VersionHistory", () => {
     await user.click(screen.getByText("История версий"));
     await user.click(await screen.findByRole("button", { name: "Посмотреть" }));
     await user.click(screen.getByRole("button", { name: "Восстановить текст" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Сохранённый текст изменился");
+    expect(await screen.findByRole("alert")).toHaveTextContent(ru.Errors.version_changed);
     expect(onRestored).not.toHaveBeenCalled();
   });
 });

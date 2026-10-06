@@ -2663,8 +2663,12 @@ export default function ContentItemPage({ params }: { params: Promise<{ id: stri
             }}
             onRestored={async (body) => {
               setBodyDraft(body);
+              // The POST acknowledged this text and onRichRestored's exact
+              // revision/document. A later GET can already contain a teammate edit.
+              if (masterBaseline.current) {
+                masterBaseline.current = { ...masterBaseline.current, body };
+              }
               const latest = await fetchItem();
-              masterBaseline.current = masterVersion(latest, body);
               setMasterSaveConflict(false);
               applyToItem(() => latest);
             }}

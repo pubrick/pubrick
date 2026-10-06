@@ -2573,6 +2573,101 @@ describe("buttons disabled when published (Step 5)", () => {
 });
 
 describe("restoring saved text", () => {
+  it("pins the acknowledged restore revision when a later read reveals a same-text formatting change", async () => {
+    const restoredRich: RichBody = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Earlier text.", marks: [{ type: "bold" }] }],
+        },
+      ],
+    };
+    const laterRich: RichBody = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Earlier text.", marks: [{ type: "italic" }] }],
+        },
+      ],
+    };
+    const served = {
+      current: makeItem({ body: "Current text.", bodyRevision: 1, richBody: null }),
+    };
+    const acknowledged = makeItem({
+      body: "Earlier text.",
+      bodyRevision: 2,
+      richBody: restoredRich,
+    });
+    const later = makeItem({ body: "Earlier text.", bodyRevision: 3, richBody: laterRich });
+    const calls: Call[] = [];
+    let resolveRead!: (value: ContentItem) => void;
+    let restored = false;
+    let deferredReadTaken = false;
+    installBaseHandlers(served, calls, (path, method) => {
+      if (method === "POST" && path.endsWith("/restore")) {
+        restored = true;
+        return {
+          ...acknowledged,
+          restoredMaster: {
+            body: acknowledged.body,
+            richBody: restoredRich,
+            bodyRevision: 2,
+          },
+        };
+      }
+      if (method === "GET" && path === "/api/content/c1" && restored) {
+        if (deferredReadTaken) return later;
+        deferredReadTaken = true;
+        return new Promise((resolve) => {
+          resolveRead = resolve;
+        });
+      }
+      if (method === "PATCH" && path === "/api/content/c1")
+        throw new ApiError(409, "Synthetic later formatting revision", false, "version_changed");
+      return undefined;
+    });
+    mockApiPage.mockResolvedValue({
+      rows: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          adaptationId: null,
+          body: acknowledged.body,
+          richBody: restoredRich,
+          hashtags: [],
+          cta: null,
+          origin: "human",
+          createdAt: "2026-09-01T10:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await renderAsync(<ContentItemPage params={Promise.resolve({ id: "c1" })} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByText(en.Publish.versionHistory));
+    await user.click(await screen.findByRole("button", { name: en.Publish.versionPreview }));
+    await user.click(screen.getByRole("button", { name: en.Publish.versionRestore }));
+    await waitFor(() => expect(resolveRead).toBeTypeOf("function"));
+    await act(async () => resolveRead(later));
+    const master = document.getElementById("review-draft") as HTMLElement;
+    await waitFor(() => expect(within(master).getByText(en.Composer.state.conflict)).toBeVisible());
+    expect(
+      screen.getByRole("textbox", { name: en.Publish.richEditor.label }).querySelector("strong"),
+    ).toHaveTextContent(acknowledged.body);
+    expect(screen.getByRole("button", { name: en.Publish.approveNow })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: en.Publish.saveBody }));
+    const write = calls.find((call) => call.method === "PATCH");
+    expect(write?.body && JSON.parse(write.body)).toEqual({
+      body: acknowledged.body,
+      richBody: restoredRich,
+      expectedBody: acknowledged.body,
+      expectedBodyRevision: 2,
+    });
+    expect(calls.some((call) => call.path.endsWith("/approve"))).toBe(false);
+  });
+
   it("updates the editor draft and re-reads the saved item after restore", async () => {
     const served = { current: makeItem({ body: "Current text." }) };
     const calls: Call[] = [];

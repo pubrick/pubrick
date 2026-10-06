@@ -111,25 +111,38 @@ export function VersionHistory({
     setRestoring(true);
     setError(null);
     try {
-      const restored = await api<{ bodyRevision?: number }>(
-        `/api/content/${itemId}/versions/${selected.id}/restore`,
-        {
-          method: "POST",
-          body: JSON.stringify(
-            contentVersionRestoreSchema.parse({
-              expectedBody: currentBody,
-              ...(!adaptationId && currentBodyRevision !== undefined
-                ? { expectedBodyRevision: currentBodyRevision }
-                : {}),
-              ...(adaptationId
-                ? { expectedHashtags: currentHashtags, expectedCta: currentCta }
-                : {}),
-            }),
-          ),
-        },
-      );
-      if (!adaptationId) onRichRestored?.(selected.richBody ?? null, restored?.bodyRevision);
-      await onRestored(selected.body);
+      const restored = await api<{
+        body?: string | null;
+        richBody?: RichBody | null;
+        bodyRevision?: number;
+        restoredMaster?: { body: string; richBody: RichBody | null; bodyRevision: number };
+      }>(`/api/content/${itemId}/versions/${selected.id}/restore`, {
+        method: "POST",
+        body: JSON.stringify(
+          contentVersionRestoreSchema.parse({
+            expectedBody: currentBody,
+            ...(!adaptationId && currentBodyRevision !== undefined
+              ? { expectedBodyRevision: currentBodyRevision }
+              : {}),
+            ...(adaptationId ? { expectedHashtags: currentHashtags, expectedCta: currentCta } : {}),
+          }),
+        ),
+      });
+      const acknowledgement = !adaptationId ? restored?.restoredMaster : undefined;
+      if (!adaptationId) {
+        const selectedDocument = selected.richBody ?? null;
+        // Legacy responses are a later read. Reuse their revision only when
+        // they describe the exact text/document shown in this preview.
+        const legacyMatches =
+          restored?.body === selected.body &&
+          restored.richBody !== undefined &&
+          JSON.stringify(restored.richBody) === JSON.stringify(selectedDocument);
+        onRichRestored?.(
+          acknowledgement ? acknowledgement.richBody : selectedDocument,
+          acknowledgement?.bodyRevision ?? (legacyMatches ? restored?.bodyRevision : undefined),
+        );
+      }
+      await onRestored(acknowledgement?.body ?? selected.body);
       setSelected(null);
       setNotice(t("versionRestored"));
       setLoading(true);
