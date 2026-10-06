@@ -22,6 +22,8 @@ and some older document prefixes are shared.
 | [0011](0011-recurring-editorial-plans.md) | Weekly editorial plans | Finite weekly generation, preview, paid enablement, dispatch and occurrence evidence | recurring plan design; feature release tracked in the roadmap |
 | [0012](0012-evergreen-draft-reuse.md) | Evergreen draft reuse | Manually confirmed saved-master generation, lineage, replay and source erasure | local integration and built-browser acceptance complete; main release pending |
 | [0013](0013-telegram-draft-decisions.md) | Telegram draft decisions | Verified identity, private draft rejection, snapshot checks and callback replay | proposed design; reviewed findings closed, implementation gates remain |
+| [0024](0024-competitive-parity.md) | Competitive parity | Core review and composer, safe posting queues, publication calendar, native destinations, team workflows and supported results/inbox | competitive parity design; implementation tracked in Beads and the roadmap |
+| [0025](0025-native-publication-lifecycle.md) | Native publication lifecycle | Connection identity, explicit permissions, accepted nonpublic receipts, LinkedIn and self-hosted WordPress | proposed native lifecycle; availability requires implementation and acceptance evidence |
 
 ## Additional historical design files
 
