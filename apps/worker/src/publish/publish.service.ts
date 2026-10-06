@@ -591,7 +591,14 @@ export class PublishService {
       }
       result = await publisher.publish(
         parsed.data,
-        { text, ...(image ? { image } : {}), ...(video ? { video } : {}) },
+        {
+          text,
+          ...(adaptation.itemTitle !== null && adaptation.itemTitle !== undefined
+            ? { title: adaptation.itemTitle }
+            : {}),
+          ...(image ? { image } : {}),
+          ...(video ? { video } : {}),
+        },
         {
           baseUrl,
           ...(adaptation.platform === "telegram" && text.length > 4096 && !video

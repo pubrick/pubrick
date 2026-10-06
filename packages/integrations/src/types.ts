@@ -19,6 +19,8 @@ import type { z } from "zod";
  */
 export interface PublishInput {
   text: string;
+  /** Exact saved, reviewed content title; absent when the content has no title. */
+  title?: string;
   disableLinkPreview?: boolean;
   /** Normalized JPEG bytes. Only adapters that implement image delivery may accept it. */
   image?: { bytes: Uint8Array; mimeType: "image/jpeg" };

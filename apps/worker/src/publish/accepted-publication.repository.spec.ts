@@ -173,6 +173,16 @@ describe.skipIf(!url)("accepted publication receipt durability", () => {
   const record = (f: Fixture, claim: SendClaim) =>
     repo.markAcceptedPublication(f.orgId, f.adaptationId, reason, fence, receipt, claim);
 
+  it("loads the exact saved content title for publication", async () => {
+    const f = await fixture();
+    const title = 'Reviewed — <title> & "special"';
+    await db
+      .update(schema.contentItems)
+      .set({ title })
+      .where(and(eq(schema.contentItems.orgId, f.orgId), eq(schema.contentItems.id, f.itemId)));
+    expect((await repo.load(f.orgId, f.adaptationId))?.itemTitle).toBe(title);
+  });
+
   it("resolves the exact claim to unknown with its remote ID/link and makes replay a no-op", async () => {
     const f = await fixture();
     const claim = await claimed(f);

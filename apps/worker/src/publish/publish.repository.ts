@@ -26,6 +26,7 @@ export type LoadedAdaptation = {
   status: AdaptationStatus;
   body: string | null;
   itemBody: string;
+  itemTitle: string | null;
   itemBrandId: string;
   channelBrandId: string;
   coverMediaId: string | null;
@@ -586,6 +587,7 @@ export class PublishRepository {
         status: schema.adaptations.status,
         body: schema.adaptations.body,
         itemBody: schema.contentItems.body,
+        itemTitle: schema.contentItems.title,
         itemBrandId: schema.contentItems.brandId,
         channelBrandId: schema.channels.brandId,
         coverMediaId: schema.contentItems.coverMediaId,
