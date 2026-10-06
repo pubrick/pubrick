@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import type { INestApplication } from "@nestjs/common";
 import { Test } from "@nestjs/testing";
 import { schema } from "@pubrick/db";
-import { contentDetailDtoSchema } from "@pubrick/shared";
-import { asc, eq } from "drizzle-orm";
+import { contentDetailDtoSchema, type RichBody } from "@pubrick/shared";
+import { and, asc, eq } from "drizzle-orm";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const url = process.env.TEST_DATABASE_URL;
 
@@ -105,6 +105,62 @@ describe.skipIf(!url)("saved-body compare-and-swap", () => {
     if (!adaptation) throw new Error("Fixture must have an adaptation");
     return adaptation.id;
   }
+
+  it("acknowledges the restored revision before a teammate changes formatting during the response read", async () => {
+    const item = await content();
+    const path = `/api/content/${item.id}`;
+    const rich = (mark: "bold" | "italic"): RichBody => ({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: item.body, marks: [{ type: mark }] }],
+        },
+      ],
+    });
+    const bold = rich("bold");
+    const italic = rich("italic");
+    await agent
+      .patch(path)
+      .send({ body: item.body, richBody: bold, expectedBody: item.body, expectedBodyRevision: 0 })
+      .expect(200);
+    const versions = await agent.get(`${path}/versions`).expect(200);
+    const version = versions.body.find((row: { richBody: unknown }) => row.richBody !== null);
+    if (!version) throw new Error("Missing rich version");
+    await agent.patch(path).send({ body: "After restore source." }).expect(200);
+    const { ContentRepository } = await import("./content.repository");
+    const repository = app.get(ContentRepository);
+    const originalGet = repository.get.bind(repository);
+    const read = vi.spyOn(repository, "get").mockImplementationOnce(async (orgId, id) => {
+      // This read starts after the restore transaction commits. Write the
+      // teammate's formatting now, without changing the restored text bytes.
+      await db
+        .update(schema.contentItems)
+        .set({ richBody: italic })
+        .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, id)));
+      return originalGet(orgId, id);
+    });
+    try {
+      const restored = await agent
+        .post(`${path}/versions/${version.id}/restore`)
+        .send({ expectedBody: "After restore source.", expectedBodyRevision: 2 })
+        .expect(200);
+      expect(read).toHaveBeenCalledOnce();
+      expect(restored.body).toMatchObject({ body: item.body, richBody: italic, bodyRevision: 4 });
+      expect(restored.body.restoredMaster).toEqual({
+        body: item.body,
+        richBody: bold,
+        bodyRevision: 3,
+      });
+      await agent
+        .patch(path)
+        .send({ body: item.body, richBody: bold, expectedBody: item.body, expectedBodyRevision: 3 })
+        .expect(409);
+      expect((await agent.get(path).expect(200)).body.richBody).toEqual(italic);
+    } finally {
+      read.mockRestore();
+    }
+  });
 
   it("refuses a plain master replacement with only the expected text stale", async () => {
     const item = await content();

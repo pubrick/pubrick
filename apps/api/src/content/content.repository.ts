@@ -1944,7 +1944,7 @@ export class ContentRepository {
     data: ContentVersionRestore,
     userId: string,
   ) {
-    await db.transaction(async (tx) => {
+    const restoredMaster = await db.transaction(async (tx) => {
       await holdOrganization(tx, orgId);
       const [version] = await tx
         .select({
@@ -2104,9 +2104,22 @@ export class ContentRepository {
             createdBy: userId,
           });
         }
+        const [saved] = await tx
+          .select({
+            body: schema.contentItems.body,
+            richBody: schema.contentItems.richBody,
+            bodyRevision: schema.contentItems.bodyRevision,
+          })
+          .from(schema.contentItems)
+          .where(and(eq(schema.contentItems.orgId, orgId), eq(schema.contentItems.id, itemId)));
+        if (!saved) throw notFound("content_not_found", "Post not found");
+        return { ...saved, richBody: validStoredRichBody(saved.richBody, saved.body) };
       }
     });
-    return this.get(orgId, itemId);
+    // The full read can already include another editor's committed change.
+    // Keep the restored text's acknowledgement from the transaction that wrote it.
+    const latest = await this.get(orgId, itemId);
+    return restoredMaster ? { ...latest, restoredMaster } : latest;
   }
 
   /**
