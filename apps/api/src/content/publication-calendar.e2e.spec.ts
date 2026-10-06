@@ -185,6 +185,22 @@ describe.skipIf(!url)("atomic publication calendar moves", () => {
     }
     expect(await snapshots(f)).toEqual(before);
   });
+  it("refuses a stale expected time even when the delivery attempt still matches", async () => {
+    const f = await fixture();
+    await schedule(f, future(1));
+    await schedule(f, future(2));
+    const before = await snapshots(f);
+    const [a, b] = before.rows;
+    if (!a || !b) throw new Error("Missing rows");
+    const response = await f.agent
+      .post(path(f))
+      .send({
+        moves: [move(a, future(3)), { ...move(b, future(4)), expectedScheduledAt: future(5) }],
+      })
+      .expect(409);
+    expect(response.body.code).toBe("schedule_changed");
+    expect(await snapshots(f)).toEqual(before);
+  });
   it("rolls back the whole set for a stale member", async () => {
     const f = await fixture();
     await schedule(f, future(1));
